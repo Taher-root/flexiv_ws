@@ -1,64 +1,52 @@
+#!/usr/bin/env python3
+"""Mapping: hardware + EKF + SLAM Toolbox.
+
+Usage:
+  ros2 launch flexiv_amr_bringup mapping.launch.py
+  ros2 launch flexiv_amr_bringup mapping.launch.py use_robokit:=true
+  ros2 launch flexiv_amr_bringup mapping.launch.py use_rviz:=false
+"""
+
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.substitutions import FindPackageShare
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.actions import Node
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
+
+
+def _include(package, launch_file, launch_arguments=None):
+    return IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([FindPackageShare(package), "launch", launch_file])
+        ),
+        launch_arguments=(launch_arguments or {}).items(),
+    )
+
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument(
-            'use_rviz',
-            default_value='true',
-            description='Launch RViz for visualization'
-        ),
+        DeclareLaunchArgument("use_robokit", default_value="false",
+                              description="Use the Robokit chassis velocity controller"),
+        DeclareLaunchArgument("use_rviz", default_value="true",
+                              description="Launch RViz2"),
 
-        # Launch hardware (driver + sensors + URDF)
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                PathJoinSubstitution([
-                    FindPackageShare('flexiv_amr_bringup'),
-                    'launch',
-                    'hardware_test.launch.py'
-                ])
-            )
-        ),
+        # Hardware layer: URDF/TF + chassis + sensors
+        _include("flexiv_amr_bringup", "hardware_test.launch.py",
+                 {"use_robokit": LaunchConfiguration("use_robokit")}),
 
-        # Launch EKF (sensor fusion)
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                PathJoinSubstitution([
-                    FindPackageShare('flexiv_amr_nav2'),
-                    'launch',
-                    'ekf.launch.py'
-                ])
-            )
-        ),
+        # Sensor fusion (publishes odom -> base_link)
+        _include("flexiv_amr_nav2", "ekf.launch.py"),
 
-        # Launch SLAM Toolbox (mapping)
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                PathJoinSubstitution([
-                    FindPackageShare('flexiv_amr_nav2'),
-                    'launch',
-                    'slam.launch.py'
-                ])
-            )
-        ),
+        # SLAM Toolbox (mapping from /scan/merged)
+        _include("flexiv_amr_nav2", "slam.launch.py"),
 
-        # Launch RViz (optional)
         Node(
-            package='rviz2',
-            executable='rviz2',
-            name='rviz2',
-            output='screen',
-            arguments=['-d', PathJoinSubstitution([
-                FindPackageShare('flexiv_amr_bringup'),
-                'rviz',
-                'mapping.rviz'
-            ])],
-            condition=IfCondition(LaunchConfiguration('use_rviz'))
+            package="rviz2",
+            executable="rviz2",
+            name="rviz2",
+            output="screen",
+            condition=IfCondition(LaunchConfiguration("use_rviz")),
         ),
     ])
-

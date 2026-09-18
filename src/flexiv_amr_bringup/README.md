@@ -1,210 +1,99 @@
-# Flexiv AMR Bringup
+# flexiv_amr_bringup
 
-Master launch files for Flexiv AICO2 AMR with ROS 2 navigation.
+Top-level launch files for the Flexiv AICO2 (dual Rizon arms on a Seer/Robokit AMR).
 
-## Launch Files
+## Structure
 
-### 1. Hardware Test
-Test hardware without navigation:
-```bash
-ros2 launch flexiv_amr_bringup hardware_test.launch.py
+Launch files compose upward — each layer includes the one below it rather than
+restating its nodes, so a node's parameters are defined in exactly one place.
+
+```
+full_system.launch.py            arms + hardware + EKF + (SLAM | RTAB-Map | Nav2)
+├─ arms.launch.py                both Rizon lifecycle drivers, waist, merger
+└─ hardware_test.launch.py       URDF/TF + chassis + sensors
+   ├─ display.launch.py          (flexiv_amr_description)  robot_state_publisher
+   ├─ amr_driver.launch.py       (flexiv_amr_driver)       chassis + odom + status
+   └─ sensors.launch.py          (flexiv_amr_sensors)      LiDARs, IMU, camera(s),
+                                                          depth→scan, scan merger
+
+mapping.launch.py                hardware_test + ekf + slam [+ RViz]
+navigation.launch.py             hardware_test + ekf + localization + Nav2 [+ RViz]
+arms_with_navigation.launch.py   arms + mapping_robokit
+
+mapping_robokit.launch.py        alias: mapping.launch.py use_robokit:=true
 ```
 
-**What it launches:**
-- AMR driver (velocity control, odometry, status monitoring)
-- RealSense camera (RGB-D + IMU)
-- Visual odometry
-- Depth-to-laserscan conversion
-- Robot state publisher (URDF)
+Subsystem launches live in their own packages (`flexiv_amr_nav2` for
+`ekf`/`slam`/`localization`/`navigation`/`rtabmap_mapping`), and are reused here.
 
-**Use this to:**
-- Verify AMR connection
-- Test camera
-- Check sensor data flow
+## Common commands
 
----
-
-### 2. Mapping Mode
-Create a map of the environment:
 ```bash
+# Hardware only — verify chassis, sensors and TF, no mapping/navigation
+ros2 launch flexiv_amr_bringup hardware_test.launch.py
+
+# Mapping (slam_toolbox). Drive around, then save:
+#   ros2 run nav2_map_server map_saver_cli -f <path>/my_map
 ros2 launch flexiv_amr_bringup mapping.launch.py
-```
+ros2 launch flexiv_amr_bringup mapping.launch.py use_robokit:=true use_rviz:=false
 
-**What it launches:**
-- Everything from hardware_test
-- EKF sensor fusion
-- SLAM Toolbox (mapping)
-- RViz (optional)
-
-**Workflow:**
-1. Launch mapping mode
-2. Drive robot around using teleop or joystick
-3. SLAM builds map in real-time
-4. Save map when complete:
-   ```bash
-   ros2 run nav2_map_server map_saver_cli -f ~/flexiv_ws/maps/my_map
-   ```
-
----
-
-### 3. Navigation Mode
-Autonomous navigation with saved map:
-```bash
+# Navigation against a saved map (set the initial pose in RViz first)
 ros2 launch flexiv_amr_bringup navigation.launch.py map:=/path/to/map.yaml
+
+# Everything: arms + chassis + sensors + mapping
+ros2 launch flexiv_amr_bringup full_system.launch.py
+
+# Full system variants
+ros2 launch flexiv_amr_bringup full_system.launch.py use_slam:=false use_rtabmap:=true
+ros2 launch flexiv_amr_bringup full_system.launch.py use_slam:=false use_nav:=true map:=/path/to/map.yaml
+ros2 launch flexiv_amr_bringup full_system.launch.py mock_arms:=true
+ros2 launch flexiv_amr_bringup full_system.launch.py use_camera:=false use_visual_odom:=false
+
+# Arms only
+ros2 launch flexiv_amr_bringup arms.launch.py
+ros2 launch flexiv_amr_bringup arms.launch.py mock_hardware:=true
 ```
 
-**What it launches:**
-- Everything from hardware_test
-- EKF sensor fusion
-- AMCL localization (with map)
-- NAV2 stack (path planning, obstacle avoidance)
-- RViz (optional)
+## Arguments
 
-**Workflow:**
-1. Launch navigation mode with your map
-2. Set initial pose in RViz (2D Pose Estimate)
-3. Set navigation goal in RViz (Nav2 Goal)
-4. Robot navigates autonomously
+| Argument | Files | Default | Meaning |
+|---|---|---|---|
+| `use_robokit` | hardware_test, mapping, navigation | `false` | Robokit TCP velocity controller instead of the plain one |
+| `use_camera` | hardware_test, full_system | `true` | RealSense camera(s) + depth-to-laserscan |
+| `use_top_camera` | hardware_test, sensors | `false` | Also bring up the head-mounted D456 (adds `/scan/top`) |
+| `use_visual_odom` | hardware_test, full_system | `true` | RTAB-Map RGBD visual odometry |
+| `laserscan_topics` | hardware_test, sensors | nav+avoid+depth | Scans merged into `/scan/merged` |
+| `merger_delay` | hardware_test, sensors | `0.0` | Delay before starting the scan merger |
+| `mock_arms` | full_system, arms_with_navigation | `false` | Run the arm drivers without flexivrdk |
+| `enable_waist_driver` | full_system, arms, arms_with_navigation | `false` | Publish real `AGV_Jiont1/2` (see `aico2_waist_driver/README.md`) |
+| `use_slam` / `use_rtabmap` / `use_nav` | full_system | `true`/`false`/`false` | Which mapping or navigation stack to start |
+| `use_rviz` | most | varies | Launch RViz2 |
 
----
+`full_system.launch.py` turns the top camera on with the rest of the cameras and
+adds `/scan/top` to the merged scan; it also owns the staged start-up delays
+(scan merger at 3 s, EKF at 4 s, SLAM at 8 s, RTAB-Map at 15 s, AMCL at 10 s,
+Nav2 at 20 s), since those exist only when the whole system starts at once.
 
-## Parameters
+## Known gaps
 
-### Hardware Test
-```bash
-# No parameters needed
-ros2 launch flexiv_amr_bringup hardware_test.launch.py
-```
-
-### Mapping
-```bash
-# Disable RViz (for headless operation)
-ros2 launch flexiv_amr_bringup mapping.launch.py use_rviz:=false
-```
-
-### Navigation
-```bash
-# Use custom map
-ros2 launch flexiv_amr_bringup navigation.launch.py \
-  map:=/path/to/custom_map.yaml
-
-# Disable RViz
-ros2 launch flexiv_amr_bringup navigation.launch.py \
-  use_rviz:=false
-
-# Both
-ros2 launch flexiv_amr_bringup navigation.launch.py \
-  map:=/path/to/custom_map.yaml \
-  use_rviz:=false
-```
-
----
-
-## Teleoperation
-
-Control robot manually during mapping:
-
-```bash
-# Keyboard teleop
-ros2 run teleop_twist_keyboard teleop_twist_keyboard
-
-# Joystick teleop (if you have a gamepad)
-ros2 launch teleop_twist_joy teleop-launch.py
-```
-
----
+- **No map yaml is checked in.** `maps/supermarket.pgm` exists in
+  `flexiv_amr_nav2` but its `supermarket.yaml` (resolution, origin,
+  occupancy thresholds) does not, so navigation modes need `map:=` pointing at
+  a real map until it is restored.
+- **No RViz configs are checked in.** RViz launches with its default view;
+  the older `mapping.rviz` / `navigation.rviz` referenced by earlier versions
+  of these launch files were never committed.
 
 ## Troubleshooting
 
-### AMR not connecting
-- Check network: `ping 192.168.1.110`
-- Verify Flexiv library: `python3 -c 'import flexivamr'`
-- Check driver logs: `ros2 topic echo /amr/status`
-
-### Camera not working
-- Check USB connection: `lsusb | grep Intel`
-- Test camera: `ros2 launch realsense2_camera rs_launch.py`
-- Check topics: `ros2 topic list | grep camera`
-
-### Visual odometry failing
-- Ensure good lighting
-- Check for textured environment (not blank walls)
-- Verify camera topics: `ros2 topic hz /camera/color/image_raw`
-
-### Navigation not working
-- Verify map is loaded: `ros2 topic echo /map -n 1`
-- Check localization: `ros2 topic echo /amcl_pose`
-- Verify costmaps: `ros2 topic list | grep costmap`
-
----
-
-## System Architecture
-
-```
-Hardware Layer:
-  ├─ Flexiv AMR (192.168.1.110)
-  └─ RealSense D456 (USB)
-
-Driver Layer:
-  ├─ velocity_controller (cmd_vel → AMR API)
-  ├─ odometry_publisher (dead reckoning)
-  └─ status_monitor (battery, emergency, blocked)
-
-Sensor Layer:
-  ├─ RealSense driver (RGB-D + IMU)
-  ├─ Visual odometry (rtabmap)
-  └─ Depth-to-laserscan (fake 2D scan)
-
-Localization Layer:
-  ├─ EKF (fuses: dead reckoning + visual odom + IMU)
-  ├─ SLAM Toolbox (mapping mode)
-  └─ AMCL (navigation mode)
-
-Navigation Layer:
-  └─ NAV2 (planning + control + recovery)
-```
-
----
-
-## Dependencies
-
-See `~/flexiv_ws/DEPENDENCIES.md` for complete list.
-
-Quick install:
 ```bash
-cd ~/flexiv_ws
-./install_dependencies.sh
-```
-```
-
-Save (Ctrl+X, Y, Enter)
-
----
-
-## **Step 6: Update CMakeLists.txt**
-
-```bash
-nano CMakeLists.txt
+ping 192.168.1.110                  # AMR chassis reachable
+ros2 topic echo /amr/status          # chassis driver alive
+lsusb | grep Intel                   # cameras enumerated
+ros2 topic hz /camera/camera/color/image_raw
+ros2 topic echo /map --once          # map loaded (navigation mode)
+ros2 topic echo /amcl_pose           # localization converged
+ros2 lifecycle get /left_arm/left_arm_driver
 ```
 
-Add before `ament_package()`:
-
-```cmake
-install(DIRECTORY
-  launch
-  config
-  rviz
-  DESTINATION share/${PROJECT_NAME}
-)
-```
-
-Save (Ctrl+X, Y, Enter)
-
----
-
-## **Step 7: Build**
-
-```bash
-cd ~/flexiv_ws
-colcon build --packages-select flexiv_amr_bringup
-source install/setup.bash
+Visual odometry needs texture and light — it degrades badly on blank walls.

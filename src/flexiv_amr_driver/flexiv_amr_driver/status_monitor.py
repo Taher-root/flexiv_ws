@@ -2,7 +2,8 @@ import rclpy
 from rclpy.node import Node
 from flexiv_amr_msgs.msg import AMRStatus, BlockedStatus, EmergencyStatus
 
-# Continuously polls the Flexiv AMR for status information and publishes it to ROS topics. Acts as a "health monitor" that other nodes can subscribe to.
+# Continuously polls the Flexiv AMR for status information and publishes it to
+# ROS topics. Acts as a "health monitor" that other nodes can subscribe to.
 
 class StatusMonitor(Node):
     def __init__(self):

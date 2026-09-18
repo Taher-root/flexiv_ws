@@ -1,37 +1,37 @@
-"""
-full_system.launch.py - Complete AICO2 launch (arms + sensors + navigation)
+#!/usr/bin/env python3
+"""Complete AICO2 system: arms + chassis + sensors + mapping or navigation.
 
-Brings up (in order):
-  1. Robot State Publisher (URDF -> TF frames)
-  2. Arm Drivers (lifecycle nodes) + Joint State Merger
-  3. AMR Chassis Driver (velocity control + wheel encoder odometry)
-  4. Seer Sensor Nodes (LiDARs + chassis IMU)
-  5. RealSense Camera + depth-to-laser + visual odometry
-  6. Laser Scan Merger (ira_laser_tools: /scan/nav + /scan/avoid + /scan/depth -> /scan/merged)
-  7. EKF (sensor fusion: wheel odom + visual odom + camera IMU + chassis IMU)
-  8. SLAM Toolbox (mapping from /scan/merged)
+Composed from the per-subsystem launch files rather than restating them:
+
+  arms.launch.py            (flexiv_amr_bringup)  both Rizon arms, waist, merger
+  hardware_test.launch.py   (flexiv_amr_bringup)  URDF/TF + chassis + sensors
+    display.launch.py       (flexiv_amr_description)
+    amr_driver.launch.py    (flexiv_amr_driver)
+    sensors.launch.py       (flexiv_amr_sensors)
+  ekf.launch.py             (flexiv_amr_nav2)     sensor fusion
+  slam.launch.py            (flexiv_amr_nav2)     SLAM Toolbox      [use_slam]
+  rtabmap_mapping.launch.py (flexiv_amr_nav2)     RTAB-Map SLAM     [use_rtabmap]
+  localization.launch.py    (nav2_bringup)        AMCL + map_server [use_nav]
+  navigation.launch.py      (flexiv_amr_nav2)     Nav2 stack        [use_nav]
+
+The staged start delays live here, because they are a property of bringing the
+whole system up at once, not of the subsystems themselves.
 
 Usage:
-  # Full system with real arms (mapping mode - slam_toolbox)
+  # Mapping with slam_toolbox (default)
   ros2 launch flexiv_amr_bringup full_system.launch.py
 
   # Mapping with RTAB-Map
   ros2 launch flexiv_amr_bringup full_system.launch.py use_slam:=false use_rtabmap:=true
 
-  # Navigation mode (load saved map + AMCL + Nav2)
+  # Navigation against a saved map
   ros2 launch flexiv_amr_bringup full_system.launch.py use_slam:=false use_nav:=true
+  ros2 launch flexiv_amr_bringup full_system.launch.py use_slam:=false \
+      use_nav:=true map:=/path/to/map.yaml
 
-  # Navigation with custom map
-  ros2 launch flexiv_amr_bringup full_system.launch.py use_slam:=false use_nav:=true map:=/path/to/map.yaml
-
-  # Mock arms (no hardware connection)
+  # Mock arms (no robot connection) / no camera
   ros2 launch flexiv_amr_bringup full_system.launch.py mock_arms:=true
-
-  # No camera (LiDARs only)
   ros2 launch flexiv_amr_bringup full_system.launch.py use_camera:=false use_visual_odom:=false
-
-  # No SLAM (just sensors + EKF)
-  ros2 launch flexiv_amr_bringup full_system.launch.py use_slam:=false
 """
 
 from launch import LaunchDescription
@@ -39,570 +39,164 @@ from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
     TimerAction,
-    EmitEvent,
 )
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
-from launch_ros.substitutions import FindPackageShare
-from launch_ros.actions import Node, LifecycleNode
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.parameter_descriptions import ParameterValue
-from launch_ros.events.lifecycle import ChangeState
-from launch.events import matches_action
-from lifecycle_msgs.msg import Transition
-from ament_index_python.packages import get_package_share_directory
-import os
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
+
+# Scans merged into /scan/merged once the head camera is in play.
+LASERSCAN_TOPICS = "/scan/nav /scan/avoid /scan/depth /scan/top"
+
+# Staged start-up, seconds after launch.
+MERGER_DELAY = 3.0    # TF tree + scan sources up
+EKF_DELAY = 4.0       # odom + IMU sources publishing
+SLAM_DELAY = 8.0      # arms + EKF + merged scan settled
+RTABMAP_DELAY = 15.0  # both cameras enumerated on USB and streaming
+AMCL_DELAY = 10.0
+NAV2_DELAY = 20.0     # map_server + AMCL active, /map and map->odom TF up
 
 
-LEFT_JOINTS = [f"Left_joint{i}" for i in range(1, 8)]
-RIGHT_JOINTS = [f"Right_joint{i}" for i in range(1, 8)]
-
-
-def _lifecycle_timers(driver, configure_sec: float, activate_sec: float):
-    """Create timer actions to configure then activate a lifecycle node."""
-    return [
-        TimerAction(
-            period=configure_sec,
-            actions=[
-                EmitEvent(
-                    event=ChangeState(
-                        lifecycle_node_matcher=matches_action(driver),
-                        transition_id=Transition.TRANSITION_CONFIGURE,
-                    )
-                )
-            ],
+def _include(package, launch_file, launch_arguments=None, condition=None):
+    return IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([FindPackageShare(package), "launch", launch_file])
         ),
-        TimerAction(
-            period=activate_sec,
-            actions=[
-                EmitEvent(
-                    event=ChangeState(
-                        lifecycle_node_matcher=matches_action(driver),
-                        transition_id=Transition.TRANSITION_ACTIVATE,
-                    )
-                )
-            ],
-        ),
-    ]
+        launch_arguments=(launch_arguments or {}).items(),
+        condition=condition,
+    )
 
 
 def generate_launch_description():
-    # === Configs ===
-    pkg_description = get_package_share_directory('flexiv_amr_description')
-    pkg_nav2 = get_package_share_directory('flexiv_amr_nav2')
-    pkg_driver = get_package_share_directory('flexiv_amr_driver')
+    use_camera = LaunchConfiguration("use_camera")
+    use_visual_odom = LaunchConfiguration("use_visual_odom")
+    use_slam = LaunchConfiguration("use_slam")
+    use_rtabmap = LaunchConfiguration("use_rtabmap")
+    use_nav = LaunchConfiguration("use_nav")
+    use_rviz = LaunchConfiguration("use_rviz")
+    map_file = LaunchConfiguration("map")
+    mock_arms = LaunchConfiguration("mock_arms")
 
-    urdf_file = os.path.join(pkg_description, 'urdf', 'AICO2-Rizon4.urdf')
-    with open(urdf_file, 'r') as f:
-        robot_description_content = f.read()
-    robot_description = ParameterValue(robot_description_content, value_type=str)
-
-    ekf_config = os.path.join(pkg_nav2, 'config', 'ekf.yaml')
-    amr_params = os.path.join(pkg_driver, 'config', 'amr_params_robokit.yaml')
-
-    left_pkg = FindPackageShare("aico2_left_arm_driver")
-    right_pkg = FindPackageShare("aico2_right_arm_driver")
-    waist_pkg = FindPackageShare("aico2_waist_driver")
-
-    # === Launch Arguments ===
-    use_camera = LaunchConfiguration('use_camera')
-    use_visual_odom = LaunchConfiguration('use_visual_odom')
-    use_slam = LaunchConfiguration('use_slam')
-    use_rtabmap = LaunchConfiguration('use_rtabmap')
-    use_nav = LaunchConfiguration('use_nav')
-    map_file = LaunchConfiguration('map')
-    use_rviz = LaunchConfiguration('use_rviz')
-    mock_arms = LaunchConfiguration('mock_arms')
-    enable_waist_driver = LaunchConfiguration('enable_waist_driver')
-
-    # === Arm Lifecycle Nodes ===
-    left_driver = LifecycleNode(
-        package="aico2_left_arm_driver",
-        executable="left_arm_driver",
-        name="left_arm_driver",
-        namespace="left_arm",
-        output="screen",
-        parameters=[
-            PathJoinSubstitution([left_pkg, "config", "left_arm_hardware.yaml"]),
-            {
-                "robot_sn": "Rizon4-063352",
-                "auto_enable": True,
-                "mock_hardware": mock_arms,
-                "joint_names": LEFT_JOINTS,
-                "tcp_frame_id": "Left_flange",
-            },
-        ],
-    )
-
-    right_driver = LifecycleNode(
-        package="aico2_right_arm_driver",
-        executable="right_arm_driver",
-        name="right_arm_driver",
-        namespace="right_arm",
-        output="screen",
-        parameters=[
-            PathJoinSubstitution([right_pkg, "config", "right_arm_hardware.yaml"]),
-            {
-                "robot_sn": "Rizon4R-062077",
-                "auto_enable": True,
-                "mock_hardware": mock_arms,
-                "joint_names": RIGHT_JOINTS,
-                "tcp_frame_id": "Right_flange",
-            },
-        ],
-    )
-
-    # Waist axes (AGV_Jiont1/2): reads q[0:2] off the left arm's RDK stream via
-    # its own session, independent of the arm drivers (joint_state_architecture.md
-    # sec 3/4.2). Off by default: while joint_state_merger is still running and
-    # also publishing /joint_states with the waist at 0.0, enabling this races
-    # last-writer-wins on those two joints (sec 8, step 3 — intentional during
-    # verification, not the steady-state setup).
-    waist_driver = LifecycleNode(
-        package="aico2_waist_driver",
-        executable="waist_driver",
-        name="waist_driver",
-        output="screen",
-        condition=IfCondition(enable_waist_driver),
-        parameters=[
-            PathJoinSubstitution([waist_pkg, "config", "waist_driver.yaml"]),
-            {"mock_hardware": mock_arms},
-        ],
+    nav2_params = PathJoinSubstitution(
+        [FindPackageShare("flexiv_amr_nav2"), "config", "nav2_params.yaml"]
     )
 
     return LaunchDescription([
         # --- Arguments ---
-        DeclareLaunchArgument('use_camera', default_value='true',
-                             description='Launch RealSense + depth-to-laser'),
-        DeclareLaunchArgument('use_visual_odom', default_value='true',
-                             description='Launch RTAB-Map visual odometry'),
-        DeclareLaunchArgument('use_slam', default_value='true',
-                             description='Launch SLAM Toolbox for mapping'),
-        DeclareLaunchArgument('use_rtabmap', default_value='false',
-                             description='Launch RTAB-Map instead of slam_toolbox'),
-        DeclareLaunchArgument('use_nav', default_value='false',
-                             description='Launch Nav2 (AMCL + map_server + navigation stack)'),
-        DeclareLaunchArgument('map', default_value=os.path.join(
-                             pkg_nav2, 'maps', 'supermarket.yaml'),
-                             description='Path to map yaml for navigation mode'),
-        DeclareLaunchArgument('use_rviz', default_value='false',
-                             description='Launch RViz2'),
-        DeclareLaunchArgument('mock_arms', default_value='false',
-                             description='Use mock hardware for arms (no real robot connection)'),
-        DeclareLaunchArgument('enable_waist_driver', default_value='false',
-                             description='Launch aico2_waist_driver publishing real '
-                                          'AGV_Jiont1/2 to /joint_states (races '
-                                          'joint_state_merger\'s zeros; see its README)'),
+        DeclareLaunchArgument("use_camera", default_value="true",
+                              description="Launch both RealSense cameras + depth-to-laserscan"),
+        DeclareLaunchArgument("use_visual_odom", default_value="true",
+                              description="Launch RTAB-Map visual odometry"),
+        DeclareLaunchArgument("use_slam", default_value="true",
+                              description="Launch SLAM Toolbox for mapping"),
+        DeclareLaunchArgument("use_rtabmap", default_value="false",
+                              description="Launch RTAB-Map instead of slam_toolbox"),
+        DeclareLaunchArgument("use_nav", default_value="false",
+                              description="Launch Nav2 (AMCL + map_server + navigation stack)"),
+        DeclareLaunchArgument("map",
+                              default_value=PathJoinSubstitution([
+                                  FindPackageShare("flexiv_amr_nav2"),
+                                  "maps", "supermarket.yaml",
+                              ]),
+                              description="Map yaml for navigation mode"),
+        DeclareLaunchArgument("use_rviz", default_value="false",
+                              description="Launch RViz2"),
+        DeclareLaunchArgument("mock_arms", default_value="false",
+                              description="Use mock hardware for the arms "
+                                          "(no real robot connection)"),
+        DeclareLaunchArgument("enable_waist_driver", default_value="false",
+                              description="Publish real AGV_Jiont1/2 from the RDK "
+                                          "stream (races joint_state_merger's zeros; "
+                                          "see aico2_waist_driver/README.md)"),
 
         # ============================================================
-        # 1. ROBOT STATE PUBLISHER (TF tree from URDF)
+        # Arms: both Rizon lifecycle drivers, optional waist, merger
         # ============================================================
-        Node(
-            package='robot_state_publisher',
-            executable='robot_state_publisher',
-            name='robot_state_publisher',
-            output='screen',
-            parameters=[{
-                'robot_description': robot_description,
-                'publish_frequency': 50.0,
-            }]
+        _include("flexiv_amr_bringup", "arms.launch.py", {
+            "mock_hardware": mock_arms,
+            "enable_waist_driver": LaunchConfiguration("enable_waist_driver"),
+        }),
+
+        # ============================================================
+        # Hardware: URDF/TF + chassis (Robokit) + chassis sensors +
+        # both cameras + depth-to-laserscan + scan merger
+        # ============================================================
+        _include("flexiv_amr_bringup", "hardware_test.launch.py", {
+            "use_robokit": "true",
+            "use_camera": use_camera,
+            "use_top_camera": use_camera,
+            "use_visual_odom": use_visual_odom,
+            "laserscan_topics": LASERSCAN_TOPICS,
+            "merger_delay": str(MERGER_DELAY),
+        }),
+
+        # ============================================================
+        # Sensor fusion
+        # ============================================================
+        TimerAction(
+            period=EKF_DELAY,
+            actions=[_include("flexiv_amr_nav2", "ekf.launch.py")],
         ),
 
         # ============================================================
-        # 2. ARM DRIVERS (lifecycle) + JOINT STATE MERGER
+        # Mapping: SLAM Toolbox, or RTAB-Map
         # ============================================================
-        left_driver,
-        right_driver,
-        waist_driver,
-
-        # Configure arms at 1s, activate at 3s (left) and 4s (right)
-        *_lifecycle_timers(left_driver, 1.0, 3.0),
-        *_lifecycle_timers(right_driver, 1.0, 4.0),
-        # Waist configures/activates after the left arm it reads from (no
-        # hard dependency — its own RDK session is independent — just
-        # avoiding a burst of simultaneous connects).
-        *_lifecycle_timers(waist_driver, 3.5, 5.0),
-
-        # Merge /left_arm/joint_states + /right_arm/joint_states -> /joint_states
-        # (includes waist joints AGV_Jiont1/2 at 0.0)
-        Node(
-            package='flexiv_amr_driver',
-            executable='joint_state_merger',
-            name='joint_state_merger',
-            output='screen',
-            parameters=[{
-                'left_arm_topic': '/left_arm/joint_states',
-                'right_arm_topic': '/right_arm/joint_states',
-                'rate_hz': 50.0,
-            }],
-        ),
-
-        # ============================================================
-        # 3. AMR CHASSIS DRIVER (velocity control + wheel encoder odometry)
-        # ============================================================
-        Node(
-            package='flexiv_amr_driver',
-            executable='robokit_velocity_controller',
-            name='robokit_velocity_controller',
-            output='screen',
-            parameters=[amr_params]
-        ),
-
-        Node(
-            package='flexiv_amr_driver',
-            executable='odometry_publisher',
-            name='odometry_publisher',
-            output='screen',
-            parameters=[{
-                'amr_ip': '192.168.1.110',
-                'amr_port': 19204,
-                'poll_rate': 50.0,
-                'base_frame': 'base_link',
-                'odom_frame': 'odom',
-                'publish_tf': False,
-            }]
-        ),
-
-        Node(
-            package='flexiv_amr_driver',
-            executable='status_monitor',
-            name='status_monitor',
-            output='screen',
-            parameters=[amr_params]
-        ),
-
-        # ============================================================
-        # 4. SEER CHASSIS SENSORS (LiDARs + IMU via TCP API)
-        # ============================================================
-        Node(
-            package='flexiv_amr_driver',
-            executable='seer_lidar_publisher',
-            name='seer_lidar_publisher',
-            output='screen',
-            parameters=[{
-                'amr_ip': '192.168.1.110',
-                'amr_port': 19204,
-                'poll_rate': 10.0,
-            }]
-        ),
-
-        Node(
-            package='flexiv_amr_driver',
-            executable='seer_imu_publisher',
-            name='seer_imu_publisher',
-            output='screen',
-            parameters=[{
-                'amr_ip': '192.168.1.110',
-                'amr_port': 19204,
-                'poll_rate': 50.0,
-            }]
-        ),
-
-        # ============================================================
-        # 5. REALSENSE CAMERA + DEPTH-TO-LASER + VISUAL ODOM
-        # ============================================================
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                PathJoinSubstitution([
-                    FindPackageShare('realsense2_camera'),
-                    'launch',
-                    'rs_launch.py'
-                ])
-            ),
-            launch_arguments={
-                'serial_no': '_333422304124',
-                'initial_reset': 'false',
-                'enable_gyro': 'true',
-                'enable_accel': 'true',
-                'unite_imu_method': '1',
-            }.items(),
-            condition=IfCondition(use_camera)
-        ),
-
-        # Depth to laserscan -> /scan/depth
-        Node(
-            package='depthimage_to_laserscan',
-            executable='depthimage_to_laserscan_node',
-            name='depthimage_to_laserscan',
-            remappings=[
-                ('depth', '/camera/camera/depth/image_rect_raw'),
-                ('depth_camera_info', '/camera/camera/depth/camera_info'),
-                ('scan', '/scan/depth')
+        TimerAction(
+            period=SLAM_DELAY,
+            actions=[
+                _include("flexiv_amr_nav2", "slam.launch.py",
+                         condition=IfCondition(use_slam)),
             ],
-            parameters=[{
-                'output_frame': 'camera_depth_frame',
-                'scan_height': 10,
-                'range_min': 0.3,
-                'range_max': 10.0,
-            }],
-            condition=IfCondition(use_camera)
         ),
-
-        # ===== TOP D456 CAMERA (head-mounted, forward-facing) =====
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                PathJoinSubstitution([
-                    FindPackageShare('realsense2_camera'),
-                    'launch',
-                    'rs_launch.py'
-                ])
-            ),
-            launch_arguments={
-                'camera_name': 'camera_top',
-                'camera_namespace': 'camera_top',
-                'serial_no': '_324422301136',
-                'base_frame_id': 'camera_top_link',
-                'publish_tf': 'false',
-                'initial_reset': 'false',
-                # 'enable_gyro': 'false',
-                # 'enable_accel': 'false',
-                'enable_gyro': 'true',
-                'enable_accel': 'true',
-                'unite_imu_method': '1',
-                'enable_depth': 'true',
-                'enable_color': 'true',
-                'pointcloud.enable': 'true',
-                'depth_module.enable_auto_exposure': 'true',
-            }.items(),
-            condition=IfCondition(use_camera)
-        ),
-
-        # Depth to laserscan from top camera -> /scan/top
-        Node(
-            package='depthimage_to_laserscan',
-            executable='depthimage_to_laserscan_node',
-            name='depthimage_to_laserscan_top',
-            remappings=[
-                ('depth', '/camera_top/camera_top/depth/image_rect_raw'),
-                ('depth_camera_info', '/camera_top/camera_top/depth/camera_info'),
-                ('scan', '/scan/top')
+        TimerAction(
+            period=RTABMAP_DELAY,
+            actions=[
+                _include("flexiv_amr_nav2", "rtabmap_mapping.launch.py",
+                         condition=IfCondition(use_rtabmap)),
             ],
-            parameters=[{
-                'output_frame': 'camera_top_link',
-                'scan_height': 10,
-                'range_min': 0.4,
-                'range_max': 10.0,
-            }],
-            condition=IfCondition(use_camera)
         ),
 
-        # Visual odometry (RTAB-Map RGBD)
-        Node(
-            package='rtabmap_odom',
-            executable='rgbd_odometry',
-            name='rgbd_odometry',
-            output='screen',
-            parameters=[{
-                'frame_id': 'base_link',
-                'odom_frame_id': 'odom_visual',
-                'publish_tf': False,
-                'wait_for_transform': 0.2,
-                'Odom/Strategy': '0',
-                'Odom/ResetCountdown': '1',
-                'OdomF2M/MaxSize': '1000',
-                'Vis/CorNNType': '1',
-                'Vis/MaxFeatures': '500',
-                'Vis/MinInliers': '15',
-            }],
-            remappings=[
-                ('rgb/image', '/camera/camera/color/image_raw'),
-                ('rgb/camera_info', '/camera/camera/color/camera_info'),
-                ('depth/image', '/camera/camera/depth/image_rect_raw'),
-                ('odom', '/camera/odom')
+        # ============================================================
+        # Navigation. nav2_bringup's own localization_launch.py is used
+        # for AMCL + map_server, but its bringup_launch.py is not: the
+        # Jazzy version pulls in route_server and docking_server, which
+        # we do not need and which block lifecycle activation.
+        # ============================================================
+        TimerAction(
+            period=AMCL_DELAY,
+            actions=[
+                _include("nav2_bringup", "localization_launch.py", {
+                    "map": map_file,
+                    "use_sim_time": "false",
+                    "params_file": nav2_params,
+                    "autostart": "true",
+                    "use_composition": "False",
+                }, condition=IfCondition(PythonExpression(
+                    ["'", use_nav, "' == 'true' and '", use_rtabmap, "' != 'true'"]
+                ))),
             ],
-            condition=IfCondition(use_visual_odom)
         ),
-
-        # Visual odometry from TOP camera (RTAB-Map RGBD)
-        Node(
-            package='rtabmap_odom',
-            executable='rgbd_odometry',
-            name='rgbd_odometry_top',
-            output='screen',
-            parameters=[{
-                'frame_id': 'camera_top_link',
-                'odom_frame_id': 'odom_visual_top',
-                'publish_tf': False,
-                'wait_for_transform': 0.2,
-                'Odom/Strategy': '0',
-                'Odom/ResetCountdown': '1',
-                'OdomF2M/MaxSize': '1000',
-                'Vis/CorNNType': '1',
-                'Vis/MaxFeatures': '500',
-                'Vis/MinInliers': '15',
-            }],
-            remappings=[
-                ('rgb/image', '/camera_top/camera_top/color/image_raw'),
-                ('rgb/camera_info', '/camera_top/camera_top/color/camera_info'),
-                ('depth/image', '/camera_top/camera_top/depth/image_rect_raw'),
-                ('odom', '/camera_top/odom')
+        TimerAction(
+            period=NAV2_DELAY,
+            actions=[
+                _include("flexiv_amr_nav2", "navigation.launch.py", {
+                    "use_sim_time": "false",
+                    "params_file": nav2_params,
+                    "autostart": "true",
+                }, condition=IfCondition(use_nav)),
             ],
-            condition=IfCondition(use_visual_odom)
         ),
 
-        # ============================================================
-        # 6. LASER SCAN MERGER (ira_laser_tools)
-        #    Waits 3s for TF tree + scans to be available
-        # ============================================================
-        TimerAction(
-            period=3.0,
-            actions=[
-                Node(
-                    package='ira_laser_tools',
-                    executable='laserscan_multi_merger',
-                    name='laserscan_multi_merger',
-                    output='screen',
-                    parameters=[{
-                        'destination_frame': 'base_link',
-                        'scan_destination_topic': '/scan/merged',
-                        'laserscan_topics': '/scan/nav /scan/avoid /scan/depth /scan/top',
-                        'angle_min': -3.14159,
-                        'angle_max': 3.14159,
-                        'range_min': 0.05,
-                        'range_max': 50.0,
-                    }]
-                ),
-            ]
-        ),
-
-        # ============================================================
-        # 7. EKF (sensor fusion)
-        #    Waits 4s for odom + IMU sources to start publishing
-        # ============================================================
-        TimerAction(
-            period=4.0,
-            actions=[
-                Node(
-                    package='robot_localization',
-                    executable='ekf_node',
-                    name='ekf_filter_node',
-                    output='screen',
-                    parameters=[ekf_config],
-                    remappings=[
-                        ('odometry/filtered', '/odometry/filtered')
-                    ]
-                ),
-            ]
-        ),
-
-        # ============================================================
-        # 8. SLAM TOOLBOX (mapping)
-        #    Waits 8s for arms + EKF + merged scan to stabilize
-        # ============================================================
-        TimerAction(
-            period=8.0,
-            actions=[
-                IncludeLaunchDescription(
-                    PythonLaunchDescriptionSource(
-                        PathJoinSubstitution([
-                            FindPackageShare('slam_toolbox'),
-                            'launch',
-                            'online_async_launch.py'
-                        ])
-                    ),
-                    launch_arguments={
-                        'slam_params_file': PathJoinSubstitution([
-                            FindPackageShare('flexiv_amr_nav2'),
-                            'config',
-                            'slam_toolbox.yaml'
-                        ]),
-                        'use_sim_time': 'false'
-                    }.items(),
-                    condition=IfCondition(use_slam)
-                ),
-            ]
-        ),
-
-        # ============================================================
-        # 8b. RTAB-Map SLAM (alternative to slam_toolbox)
-        #     Waits 15s for cameras to fully enumerate on USB and
-        #     start publishing stable image streams. RTAB-Map needs
-        #     synchronized RGB + Depth + Odom + Scan - if any topic
-        #     is missing at startup the sync will never fire.
-        # ============================================================
-        TimerAction(
-            period=15.0,
-            actions=[
-                IncludeLaunchDescription(
-                    PythonLaunchDescriptionSource(
-                        PathJoinSubstitution([
-                            FindPackageShare('flexiv_amr_nav2'),
-                            'launch',
-                            'rtabmap_mapping.launch.py'
-                        ])
-                    ),
-                    condition=IfCondition(use_rtabmap)
-                ),
-            ]
-        ),
-
-        # ============================================================
-        # 9. NAVIGATION (AMCL + map_server + Nav2 stack)
-        #    Loads saved map, localizes with AMCL, plans + executes paths
-        #    Use: use_slam:=false use_nav:=true
-        #    Set initial pose in RViz with "2D Pose Estimate" button
-        #
-        #    NOTE: We use our own localization + navigation launches
-        #    instead of nav2_bringup/bringup_launch.py because the
-        #    Jazzy version includes route_server and docking_server
-        #    which we don't need and block lifecycle activation.
-        # ============================================================
-        # 9a. Localization (AMCL + map_server)
-        TimerAction(
-            period=10.0,
-            actions=[
-                IncludeLaunchDescription(
-                    PythonLaunchDescriptionSource(
-                        PathJoinSubstitution([
-                            FindPackageShare('nav2_bringup'),
-                            'launch',
-                            'localization_launch.py'
-                        ])
-                    ),
-                    launch_arguments={
-                        'map': map_file,
-                        'use_sim_time': 'false',
-                        'params_file': os.path.join(pkg_nav2, 'config', 'nav2_params.yaml'),
-                        'autostart': 'true',
-                        'use_composition': 'False',
-                    }.items(),
-                    condition=IfCondition(PythonExpression(["'", use_nav, "' == 'true' and '", use_rtabmap, "' != 'true'"]))
-                ),
-            ]
-        ),
-
-        # 9b. Navigation stack (our custom launch without route_server/docking_server)
-        #     Delay 20s to ensure map_server + AMCL are fully active and
-        #     publishing /map + map->odom TF before costmaps try to subscribe
-        TimerAction(
-            period=20.0,
-            actions=[
-                IncludeLaunchDescription(
-                    PythonLaunchDescriptionSource(
-                        PathJoinSubstitution([
-                            FindPackageShare('flexiv_amr_nav2'),
-                            'launch',
-                            'navigation.launch.py'
-                        ])
-                    ),
-                    launch_arguments={
-                        'use_sim_time': 'false',
-                        'params_file': os.path.join(pkg_nav2, 'config', 'nav2_params.yaml'),
-                        'autostart': 'true',
-                    }.items(),
-                    condition=IfCondition(use_nav)
-                ),
-            ]
-        ),
-
-        # ============================================================
-        # RVIZ (optional)
-        # ============================================================
         Node(
-            package='rviz2',
-            executable='rviz2',
-            name='rviz2',
-            output='screen',
-            condition=IfCondition(use_rviz)
+            package="rviz2",
+            executable="rviz2",
+            name="rviz2",
+            output="screen",
+            condition=IfCondition(use_rviz),
         ),
     ])

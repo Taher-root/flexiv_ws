@@ -1,6 +1,7 @@
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.substitutions import FindPackageShare
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
@@ -21,7 +22,7 @@ def generate_launch_description():
             default_value=PathJoinSubstitution([
                 FindPackageShare('flexiv_amr_nav2'),
                 'maps',
-                'map.yaml'
+                'supermarket.yaml'
             ]),
             description='Map file for navigation mode'
         ),
@@ -46,9 +47,7 @@ def generate_launch_description():
                     'slam.launch.py'
                 ])
             ),
-            condition=launch.conditions.IfCondition(
-                launch.substitutions.PythonExpression(['"', mode, '" == "mapping"'])
-            )
+            condition=IfCondition(PythonExpression(['"', mode, '" == "mapping"']))
         ),
         
         IncludeLaunchDescription(
@@ -62,9 +61,7 @@ def generate_launch_description():
             launch_arguments={
                 'map': LaunchConfiguration('map')
             }.items(),
-            condition=launch.conditions.IfCondition(
-                launch.substitutions.PythonExpression(['"', mode, '" == "navigation"'])
-            )
+            condition=IfCondition(PythonExpression(['"', mode, '" == "navigation"']))
         ),
         
         # Always launch navigation stack
