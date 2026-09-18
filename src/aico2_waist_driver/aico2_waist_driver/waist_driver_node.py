@@ -13,7 +13,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import rclpy
 from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
@@ -36,7 +36,7 @@ class _Sample:
     concurrency note: whole-object attribute assignment is atomic under the
     GIL)."""
 
-    device_timestamp: float
+    device_timestamp: Tuple[int, int]  # RobotStates.timestamp: (sec, nanosec)
     host_mono: float
     q: List[float]
     dq: List[float]
@@ -184,7 +184,7 @@ class WaistDriverNode(LifecycleNode):
     # -- acquisition: poll thread + latest-slot (sec 4.1) -----------------
 
     def _poll_loop(self) -> None:
-        last_ts: Optional[float] = None
+        last_ts: Optional[Tuple[int, int]] = None
         n = len(self._joint_names)
         while not self._poll_stop.is_set():
             try:
@@ -195,7 +195,8 @@ class WaistDriverNode(LifecycleNode):
                 )
                 time.sleep(0.05)
                 continue
-            ts = float(st.timestamp)
+            # (sec, nanosec) tuple — compare exactly, don't cast to float here.
+            ts = st.timestamp
             if ts != last_ts:
                 last_ts = ts
                 self._sample = _Sample(
