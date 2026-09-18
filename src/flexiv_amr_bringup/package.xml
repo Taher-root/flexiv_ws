@@ -10,6 +10,9 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <exec_depend>flexiv_amr_driver</exec_depend>
+  <exec_depend>aico2_left_arm_driver</exec_depend>
+  <exec_depend>aico2_right_arm_driver</exec_depend>
+  <exec_depend>aico2_waist_driver</exec_depend>
   <depend>flexiv_amr_description</depend>
   <depend>flexiv_amr_sensors</depend>
   <depend>flexiv_amr_nav2</depend>

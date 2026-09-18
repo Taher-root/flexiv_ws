@@ -2,9 +2,10 @@
 """Launch arms + joint state merger + navigation stack"""
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, TimerAction, EmitEvent
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction, EmitEvent
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.substitutions import FindPackageShare
 from launch_ros.events.lifecycle import ChangeState
@@ -43,6 +44,8 @@ def _lifecycle_timers(driver, activate_sec: float):
 def generate_launch_description():
     left_pkg = FindPackageShare("aico2_left_arm_driver")
     right_pkg = FindPackageShare("aico2_right_arm_driver")
+    waist_pkg = FindPackageShare("aico2_waist_driver")
+    enable_waist_driver = LaunchConfiguration('enable_waist_driver')
 
     # Left arm driver
     left_driver = LifecycleNode(
@@ -82,6 +85,21 @@ def generate_launch_description():
         ],
     )
 
+    # Waist axes (AGV_Jiont1/2): own RDK session to the left arm's controller,
+    # independent of both arm drivers. Off by default — see aico2_waist_driver's
+    # README for the last-writer-wins race with joint_state_merger's zeros.
+    waist_driver = LifecycleNode(
+        package="aico2_waist_driver",
+        executable="waist_driver",
+        name="waist_driver",
+        output="screen",
+        condition=IfCondition(enable_waist_driver),
+        parameters=[
+            PathJoinSubstitution([waist_pkg, "config", "waist_driver.yaml"]),
+            {"mock_hardware": False},
+        ],
+    )
+
     # Joint state merger
     joint_merger = Node(
         package="flexiv_amr_driver",
@@ -107,10 +125,16 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('enable_waist_driver', default_value='false',
+                             description='Launch aico2_waist_driver publishing real '
+                                          'AGV_Jiont1/2 to /joint_states (races '
+                                          'joint_state_merger\'s zeros; see its README)'),
         left_driver,
         right_driver,
+        waist_driver,
         *_lifecycle_timers(left_driver, 3.0),
         *_lifecycle_timers(right_driver, 4.0),
+        *_lifecycle_timers(waist_driver, 5.0),
         joint_merger,
         TimerAction(
             period=6.0,  # Wait for arms to be ready

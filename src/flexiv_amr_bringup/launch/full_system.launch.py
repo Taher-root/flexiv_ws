@@ -102,6 +102,7 @@ def generate_launch_description():
 
     left_pkg = FindPackageShare("aico2_left_arm_driver")
     right_pkg = FindPackageShare("aico2_right_arm_driver")
+    waist_pkg = FindPackageShare("aico2_waist_driver")
 
     # === Launch Arguments ===
     use_camera = LaunchConfiguration('use_camera')
@@ -112,6 +113,7 @@ def generate_launch_description():
     map_file = LaunchConfiguration('map')
     use_rviz = LaunchConfiguration('use_rviz')
     mock_arms = LaunchConfiguration('mock_arms')
+    enable_waist_driver = LaunchConfiguration('enable_waist_driver')
 
     # === Arm Lifecycle Nodes ===
     left_driver = LifecycleNode(
@@ -150,6 +152,24 @@ def generate_launch_description():
         ],
     )
 
+    # Waist axes (AGV_Jiont1/2): reads q[0:2] off the left arm's RDK stream via
+    # its own session, independent of the arm drivers (joint_state_architecture.md
+    # sec 3/4.2). Off by default: while joint_state_merger is still running and
+    # also publishing /joint_states with the waist at 0.0, enabling this races
+    # last-writer-wins on those two joints (sec 8, step 3 — intentional during
+    # verification, not the steady-state setup).
+    waist_driver = LifecycleNode(
+        package="aico2_waist_driver",
+        executable="waist_driver",
+        name="waist_driver",
+        output="screen",
+        condition=IfCondition(enable_waist_driver),
+        parameters=[
+            PathJoinSubstitution([waist_pkg, "config", "waist_driver.yaml"]),
+            {"mock_hardware": mock_arms},
+        ],
+    )
+
     return LaunchDescription([
         # --- Arguments ---
         DeclareLaunchArgument('use_camera', default_value='true',
@@ -169,6 +189,10 @@ def generate_launch_description():
                              description='Launch RViz2'),
         DeclareLaunchArgument('mock_arms', default_value='false',
                              description='Use mock hardware for arms (no real robot connection)'),
+        DeclareLaunchArgument('enable_waist_driver', default_value='false',
+                             description='Launch aico2_waist_driver publishing real '
+                                          'AGV_Jiont1/2 to /joint_states (races '
+                                          'joint_state_merger\'s zeros; see its README)'),
 
         # ============================================================
         # 1. ROBOT STATE PUBLISHER (TF tree from URDF)
@@ -189,10 +213,15 @@ def generate_launch_description():
         # ============================================================
         left_driver,
         right_driver,
+        waist_driver,
 
         # Configure arms at 1s, activate at 3s (left) and 4s (right)
         *_lifecycle_timers(left_driver, 1.0, 3.0),
         *_lifecycle_timers(right_driver, 1.0, 4.0),
+        # Waist configures/activates after the left arm it reads from (no
+        # hard dependency — its own RDK session is independent — just
+        # avoiding a burst of simultaneous connects).
+        *_lifecycle_timers(waist_driver, 3.5, 5.0),
 
         # Merge /left_arm/joint_states + /right_arm/joint_states -> /joint_states
         # (includes waist joints AGV_Jiont1/2 at 0.0)
