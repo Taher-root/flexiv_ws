@@ -88,7 +88,28 @@ def test_estimate_offset_rejects_non_positive_n():
 def test_estimate_offset_raises_if_device_never_ticks():
     stuck = SimpleNamespace(timestamp=(1, 0))
     with pytest.raises(RuntimeError):
-        estimate_offset(lambda: stuck, n=5, max_polls=20)
+        estimate_offset(lambda: stuck, n=5, timeout_sec=0.01)
+
+
+def test_estimate_offset_survives_a_slow_polling_context():
+    # Regression check for the real-hardware failure (2026-09-18): a
+    # poll-COUNT cap tuned against a bare script's ~800k polls/s fell short
+    # by 15-25% inside a live rclpy node reaching only ~700k polls/s. A
+    # slower-but-still-1kHz-device context must still succeed given enough
+    # wall-clock time.
+    clock = _FakeClock()
+    robot = _FakeRobot(clock, poll_cost=1.5e-6)  # ~667k polls/s, not 800k+
+
+    estimate = estimate_offset(
+        robot.states,
+        n=200,
+        timeout_sec=5.0,
+        monotonic_fn=clock.monotonic,
+        wall_fn=clock.wall,
+    )
+
+    assert estimate.n_transitions == 200
+    assert abs(estimate.offset_sec - TRUE_OFFSET) < 1e-3
 
 
 def test_offset_tracker_adopts_first_estimate_outright():

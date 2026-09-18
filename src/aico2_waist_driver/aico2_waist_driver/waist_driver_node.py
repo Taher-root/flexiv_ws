@@ -18,7 +18,7 @@ from typing import List, Optional, Tuple
 import rclpy
 from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import JointState
 
 from aico2_left_arm_driver.flexiv_session import FlexivSession
@@ -27,6 +27,12 @@ from aico2_left_arm_driver.ros_time import seconds_to_ros_time
 
 _STALE_WARN_INTERVAL_SEC = 2.0
 _DEFAULT_JOINTS = ["AGV_Jiont1", "AGV_Jiont2"]
+
+# clock_offset only publishes when an estimate is refreshed (once at activate,
+# then every offset_refresh_sec). Transient-local so `ros2 topic echo` and any
+# other late subscriber gets the current value immediately instead of waiting
+# up to 5 minutes for the next refresh.
+_OFFSET_QOS = QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
 
 
 @dataclass(frozen=True)
@@ -121,7 +127,7 @@ class WaistDriverNode(LifecycleNode):
             JointState, "/joint_states", qos_profile_sensor_data
         )
         self._offset_pub = self.create_lifecycle_publisher(
-            DiagnosticStatus, "~/clock_offset", 10
+            DiagnosticStatus, "~/clock_offset", _OFFSET_QOS
         )
         return TransitionCallbackReturn.SUCCESS
 

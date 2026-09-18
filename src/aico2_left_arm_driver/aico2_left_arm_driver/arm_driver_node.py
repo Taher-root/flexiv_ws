@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import threading
 import time
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
 
 import rclpy
 from aico2_msgs.msg import ArmStatus
@@ -30,11 +32,15 @@ from aico2_left_arm_driver.flexiv_session import (
     tcp_pose_to_ros,
     wrench6_to_ros,
 )
+from aico2_left_arm_driver.offset_estimator import OffsetTracker
+from aico2_left_arm_driver.ros_time import seconds_to_ros_time
 from aico2_left_arm_driver.trajectory_stream import (
     reorder_to_driver,
     sample_trajectory,
     trajectory_duration,
 )
+
+_STALE_WARN_INTERVAL_SEC = 2.0
 
 
 def _namespace_defaults(namespace: str) -> tuple[str, List[str]]:
@@ -44,6 +50,29 @@ def _namespace_defaults(namespace: str) -> tuple[str, List[str]]:
         return "Right_flange", joints
     joints = [f"Left_joint{i}" for i in range(1, 8)]
     return "Left_flange", joints
+
+
+@dataclass(frozen=True)
+class _ArmSample:
+    """One RDK reading for the *publishing* path only.
+
+    Replaced whole, never mutated, so the poll thread and the publish timer
+    share it without a lock (joint_state_architecture.md sec 4.1: whole-object
+    attribute assignment is atomic under the GIL).
+
+    The control path (trajectory streaming, servo, Cartesian) deliberately
+    does NOT read from here — it calls states() directly at command time,
+    where it needs the freshest possible value rather than the last decimated
+    sample.
+    """
+
+    device_timestamp: Tuple[int, int]  # RobotStates.timestamp: (sec, nanosec)
+    host_mono: float
+    q: List[float]
+    dq: List[float]
+    tau: List[float]
+    tcp_pose: List[float]
+    ext_wrench: List[float]
 
 
 class ArmDriverNode(LifecycleNode):
@@ -86,6 +115,11 @@ class ArmDriverNode(LifecycleNode):
         self._teleop_backend = "servo"
         self._cartesian_max_lin = 0.3
         self._cartesian_max_ang = 1.047
+        self._use_device_timestamp = False
+        self._offset_refresh_sec = 300.0
+        self._offset_slew_limit = 0.001
+        self._stale_threshold_sec = 0.05
+        self._publish_effort = True
 
         self._js_pub = None
         self._status_pub = None
@@ -97,6 +131,14 @@ class ArmDriverNode(LifecycleNode):
         self._t0 = 0.0
         self._session: Optional[FlexivSession] = None
         self._hw_ready = False
+
+        # Publishing path: free-running poll thread -> latest-value slot,
+        # decoupled from the publish timer (sec 4.1/4.3). Control path is
+        # untouched and still reads states() directly.
+        self._sample: Optional[_ArmSample] = None
+        self._poll_thread: Optional[threading.Thread] = None
+        self._poll_stop = threading.Event()
+        self._offset: Optional[OffsetTracker] = None
 
         self._exec_prim_srv = None
         self._clear_fault_srv = None
@@ -163,6 +205,16 @@ class ArmDriverNode(LifecycleNode):
         self.declare_parameter("tcp_frame_id", self._default_tcp)
         self.declare_parameter("mock_idle_joint_positions", [0.0] * 7)
         self.declare_parameter("joint_names", self._default_joints)
+        # Timestamping (sec 4.3/4.4). Defaults to false here, unlike
+        # aico2_waist_driver: the arms already have live TF consumers, so
+        # enabling device timestamps is opt-in per arm rather than a silent
+        # change on upgrade. Flip to true once verified against the other,
+        # untouched arm as a control (sec 8 step 4).
+        self.declare_parameter("use_device_timestamp", False)
+        self.declare_parameter("offset_refresh_sec", 300.0)
+        self.declare_parameter("offset_slew_limit", 0.001)
+        self.declare_parameter("stale_threshold_sec", 0.05)
+        self.declare_parameter("publish_effort", True)
 
     def _validate_joint_names(self) -> None:
         """Catch mis-loaded params (e.g. Right driver publishing Left_joint*)."""
@@ -202,6 +254,18 @@ class ArmDriverNode(LifecycleNode):
         self._cartesian_max_ang = float(
             self.get_parameter("cartesian_max_angular_vel").value
         )
+
+    def _load_timestamp_config(self) -> None:
+        """Read stamping params in configure (launch YAML may not apply at __init__)."""
+        self._use_device_timestamp = bool(
+            self.get_parameter("use_device_timestamp").value
+        )
+        self._offset_refresh_sec = float(self.get_parameter("offset_refresh_sec").value)
+        self._offset_slew_limit = float(self.get_parameter("offset_slew_limit").value)
+        self._stale_threshold_sec = float(
+            self.get_parameter("stale_threshold_sec").value
+        )
+        self._publish_effort = bool(self.get_parameter("publish_effort").value)
 
     def _load_gripper_config(self) -> None:
         self._gripper_enabled = bool(self.get_parameter("gripper_enabled").value)
@@ -474,6 +538,7 @@ class ArmDriverNode(LifecycleNode):
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
         self._load_teleop_config()
+        self._load_timestamp_config()
         self._load_gripper_config()
         self.get_logger().info(
             f"configure: mock={self._mock} sn={self._robot_sn or '(unset)'} "
@@ -493,6 +558,13 @@ class ArmDriverNode(LifecycleNode):
                 self._init_rdk_dof_from_robot()
                 self._session.clear_fault()
                 self._hw_ready = True
+                # Per-controller: the two arms' clocks differ (sec 4.4), so
+                # each driver owns its own estimate — never share one.
+                self._offset = OffsetTracker(
+                    states_fn=self._session.states,
+                    refresh_sec=self._offset_refresh_sec,
+                    slew_limit_sec=self._offset_slew_limit,
+                )
             except Exception as exc:  # noqa: BLE001
                 self.get_logger().error(f"flexivrdk connect failed: {exc}")
                 self._session = None
@@ -579,10 +651,35 @@ class ArmDriverNode(LifecycleNode):
         if self._gripper_enabled:
             self._init_gripper_hw()
 
+        if not self._mock and self._session:
+            if self._use_device_timestamp and self._offset is not None:
+                # Estimate before the poll thread starts, while nothing else
+                # is contending for states() calls.
+                try:
+                    est = self._offset.refresh()
+                    self.get_logger().info(
+                        f"clock offset: {est.offset_sec:.6f}s "
+                        f"(spread {est.spread_sec * 1e6:.1f}us, "
+                        f"{est.n_transitions} transitions)"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self.get_logger().warn(
+                        f"initial offset estimate failed, falling back to now(): {exc}"
+                    )
+            self._poll_stop.clear()
+            self._poll_thread = threading.Thread(
+                target=self._poll_loop, name=f"{self._namespace}_poll", daemon=True
+            )
+            self._poll_thread.start()
+
         self._t0 = self.get_clock().now().nanoseconds * 1e-9
         if self._timer is None:
             self._timer = self.create_timer(1.0 / self._rate_hz, self._publish_state)
-        self.get_logger().info(f"activate: /{self._namespace}/* live")
+        self.get_logger().info(
+            f"activate: /{self._namespace}/* live "
+            f"(publish {self._rate_hz} Hz, device_timestamp="
+            f"{self._use_device_timestamp})"
+        )
         return TransitionCallbackReturn.SUCCESS
 
     def on_deactivate(self, state: LifecycleState) -> TransitionCallbackReturn:
@@ -591,6 +688,10 @@ class ArmDriverNode(LifecycleNode):
         if self._timer is not None:
             self.destroy_timer(self._timer)
             self._timer = None
+        self._poll_stop.set()
+        if self._poll_thread is not None:
+            self._poll_thread.join(timeout=2.0)
+            self._poll_thread = None
         if not self._mock and self._session:
             self._session.stop()
         for pub in (
@@ -654,12 +755,65 @@ class ArmDriverNode(LifecycleNode):
         if self._session is not None:
             self._session.disconnect()
             self._session = None
+        self._offset = None
+        self._sample = None
         self._hw_ready = False
         self.get_logger().info("cleanup")
         return TransitionCallbackReturn.SUCCESS
 
     def on_shutdown(self, state: LifecycleState) -> TransitionCallbackReturn:
         return TransitionCallbackReturn.SUCCESS
+
+    def _poll_loop(self) -> None:
+        """Free-running acquisition: notice every device tick, store the latest.
+
+        Acquisition rate is set by the device (1 kHz, verified on hardware),
+        not by publish_rate_hz — which is now an honest decimation factor
+        rather than an aperiodic sampler of a 1 kHz signal (sec 2a/4.1).
+        """
+        last_ts: Optional[Tuple[int, int]] = None
+        while not self._poll_stop.is_set():
+            try:
+                st = self._session.states()
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().error(
+                    f"states() failed: {exc}", throttle_duration_sec=1.0
+                )
+                time.sleep(0.05)
+                continue
+            # (sec, nanosec) tuple — compare exactly, don't cast to float here.
+            ts = st.timestamp
+            if ts != last_ts:
+                last_ts = ts
+                self._sample = _ArmSample(
+                    device_timestamp=ts,
+                    host_mono=time.monotonic(),
+                    q=[float(x) for x in st.q[: self._rdk_dof]],
+                    dq=[float(x) for x in st.dq[: self._rdk_dof]],
+                    tau=[float(x) for x in st.tau[: self._rdk_dof]],
+                    tcp_pose=[float(x) for x in st.tcp_pose],
+                    ext_wrench=[float(x) for x in st.ext_wrench_in_tcp],
+                )
+            # No sleep: states() is a cached read (~4 us, sec 1).
+
+    def _maybe_refresh_offset(self) -> None:
+        if (
+            not self._use_device_timestamp
+            or self._offset is None
+            or not self._offset.due()
+        ):
+            return
+        try:
+            self._offset.refresh()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(
+                f"offset refresh failed: {exc}", throttle_duration_sec=5.0
+            )
+
+    def _extract_arm_tau(self, tau_full: List[float]) -> List[float]:
+        start = self._rdk_arm_start_index()
+        n = min(self._dof, self._arm_dof, max(0, len(tau_full) - start))
+        return [float(tau_full[start + i]) for i in range(n)]
 
     def _publish_state(self) -> None:
         if self._js_pub is None:
@@ -695,20 +849,46 @@ class ArmDriverNode(LifecycleNode):
         else:
             if not self._session or not self._session.robot:
                 return
-            st = self._session.states()
-            q_full = [float(x) for x in st.q[: self._rdk_dof]]
-            dq_full = [float(x) for x in st.dq[: self._rdk_dof]]
-            js.position = self._extract_arm_q(q_full)
-            js.velocity = self._extract_arm_dq(dq_full)
+            self._maybe_refresh_offset()
+
+            sample = self._sample
+            if sample is None:
+                self.get_logger().warn(
+                    "no arm sample yet",
+                    throttle_duration_sec=_STALE_WARN_INTERVAL_SEC,
+                )
+                return
+            age = time.monotonic() - sample.host_mono
+            if age > self._stale_threshold_sec:
+                self.get_logger().warn(
+                    f"arm sample stale ({age * 1e3:.1f} ms); skipping publish",
+                    throttle_duration_sec=_STALE_WARN_INTERVAL_SEC,
+                )
+                return
+
+            if self._use_device_timestamp and self._offset is not None:
+                stamp = seconds_to_ros_time(
+                    self._offset.to_ros_seconds(sample.device_timestamp)
+                )
+                js.header.stamp = stamp
+
+            # q[0:2] are the waist external axes and belong to
+            # aico2_waist_driver — _extract_arm_* starts at _rdk_arm_start_index
+            # so this driver publishes only its own 7 joints. Two publishers
+            # claiming one joint makes TF jitter between them (sec 4.3).
+            js.position = self._extract_arm_q(sample.q)
+            js.velocity = self._extract_arm_dq(sample.dq)
+            if self._publish_effort:
+                js.effort = self._extract_arm_tau(sample.tau)
             fault, operational, enabled, mode, detail = self._session.status_snapshot()
             tcp_pose = PoseStamped()
             tcp_pose.header.stamp = stamp
             tcp_pose.header.frame_id = self._tcp_frame
-            tcp_pose.pose = tcp_pose_to_ros(list(st.tcp_pose))
+            tcp_pose.pose = tcp_pose_to_ros(sample.tcp_pose)
             wrench = WrenchStamped()
             wrench.header.stamp = stamp
             wrench.header.frame_id = self._tcp_frame
-            wrench.wrench = wrench6_to_ros(list(st.ext_wrench_in_tcp))
+            wrench.wrench = wrench6_to_ros(sample.ext_wrench)
 
         self._js_pub.publish(js)
         status = ArmStatus()
