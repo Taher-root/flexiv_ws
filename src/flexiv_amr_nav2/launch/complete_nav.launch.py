@@ -41,7 +41,7 @@ def generate_launch_description():
             default_value=PathJoinSubstitution([
                 FindPackageShare('flexiv_amr_nav2'),
                 'maps',
-                'rtabmap.db'
+                'rtabmap_backup.db'
             ]),
             description='Database for navigation mode (localization_backend:=rtabmap)'
         ),

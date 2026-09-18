@@ -40,7 +40,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "rtabmap_db",
             default_value=PathJoinSubstitution([
-                FindPackageShare("flexiv_amr_nav2"), "maps", "rtabmap.db"
+                FindPackageShare("flexiv_amr_nav2"), "maps", "rtabmap_backup.db"
             ]),
             description="RTAB-Map database to localize against "
                         "(localization_backend:=rtabmap)",

@@ -18,10 +18,14 @@ from launch.actions import (
     RegisterEventHandler,
     TimerAction,
 )
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessStart
 from launch.events import matches_action
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
@@ -102,7 +106,24 @@ def generate_launch_description():
 
     mock_hardware = LaunchConfiguration("mock_hardware")
     enable_waist_driver = LaunchConfiguration("enable_waist_driver")
-    use_merger = LaunchConfiguration("use_merger")
+    direct_joint_states = LaunchConfiguration("direct_joint_states")
+
+    # joint_state_architecture.md sec 3 / sec 8 step 6: the target state is
+    # every driver publishing its own joints straight to /joint_states, with
+    # robot_state_publisher merging the partial messages by name and no merger
+    # in the middle. Done as a remap rather than a code change so the cutover
+    # is one launch argument and reverting is instant — nothing in this repo
+    # consumes /left_arm/joint_states except the merger, but the VR teleop and
+    # the other machines on this ROS domain are outside it and unverified.
+    #   false (default): "joint_states" -> /<ns>/joint_states, merger stitches
+    #   true:            "joint_states" -> /joint_states, merger not started
+    joint_states_remap = [(
+        "joint_states",
+        PythonExpression([
+            "'/joint_states' if '", direct_joint_states,
+            "' == 'true' else 'joint_states'",
+        ]),
+    )]
 
     left_driver = LifecycleNode(
         package="aico2_left_arm_driver",
@@ -110,6 +131,7 @@ def generate_launch_description():
         name="left_arm_driver",
         namespace="left_arm",
         output="screen",
+        remappings=joint_states_remap,
         parameters=[
             PathJoinSubstitution([left_pkg, "config", "left_arm_hardware.yaml"]),
             {
@@ -128,6 +150,7 @@ def generate_launch_description():
         name="right_arm_driver",
         namespace="right_arm",
         output="screen",
+        remappings=joint_states_remap,
         parameters=[
             PathJoinSubstitution([right_pkg, "config", "right_arm_hardware.yaml"]),
             {
@@ -140,7 +163,7 @@ def generate_launch_description():
         ],
     )
 
-    # Waist axes (AGV_Jiont1/2): reads q[0:2] off the left arm's RDK stream via
+    # Waist axes (AGV_Joint1/2): reads q[0:2] off the left arm's RDK stream via
     # its own session, independent of the arm drivers (see
     # docs/joint_state_architecture.md sec 3/4.2). Off by default: while
     # joint_state_merger is still publishing those two joints as 0.0, enabling
@@ -169,15 +192,20 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "enable_waist_driver",
                 default_value="false",
-                description="Publish real AGV_Jiont1/2 from the RDK stream "
+                description="Publish real AGV_Joint1/2 from the RDK stream "
                             "(races joint_state_merger's zeros; see "
                             "aico2_waist_driver/README.md)",
             ),
             DeclareLaunchArgument(
-                "use_merger",
-                default_value="true",
-                description="Merge /left_arm + /right_arm joint_states into "
-                            "/joint_states (16 joints, waist at 0.0)",
+                "direct_joint_states",
+                default_value="false",
+                description="false: arms publish /<ns>/joint_states and "
+                            "joint_state_merger stitches them into /joint_states "
+                            "(16 joints, waist forced to 0.0). true: arms publish "
+                            "their own joints straight to /joint_states and the "
+                            "merger is not started — robot_state_publisher merges "
+                            "by joint name, so the waist driver's real values are "
+                            "no longer overwritten with zeros",
             ),
             left_driver,
             right_driver,
@@ -194,7 +222,7 @@ def generate_launch_description():
                 executable="joint_state_merger",
                 name="joint_state_merger",
                 output="screen",
-                condition=IfCondition(use_merger),
+                condition=UnlessCondition(direct_joint_states),
                 parameters=[
                     {
                         "left_arm_topic": "/left_arm/joint_states",

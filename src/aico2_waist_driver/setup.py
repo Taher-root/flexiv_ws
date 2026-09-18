@@ -17,7 +17,7 @@ setup(
     maintainer="oelinux",
     maintainer_email="oelinux@todo.todo",
     description=(
-        "Waist (AGV_Jiont1/2) driver: publishes the shared external axes "
+        "Waist (AGV_Joint1/2) driver: publishes the shared external axes "
         "from one Rizon controller's RDK stream as their own JointState "
         "source, independent of either arm driver."
     ),

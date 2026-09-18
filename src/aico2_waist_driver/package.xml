@@ -3,7 +3,7 @@
 <package format="3">
   <name>aico2_waist_driver</name>
   <version>0.1.0</version>
-  <description>Waist (AGV_Jiont1/2) driver: reads the shared external axes off one Rizon controller's 1 kHz RDK stream and publishes them as their own JointState source, independent of either arm driver.</description>
+  <description>Waist (AGV_Joint1/2) driver: reads the shared external axes off one Rizon controller's 1 kHz RDK stream and publishes them as their own JointState source, independent of either arm driver.</description>
   <maintainer email="oelinux@todo.todo">oelinux</maintainer>
   <license>Proprietary</license>
 

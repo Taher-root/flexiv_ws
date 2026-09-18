@@ -5,10 +5,14 @@ Publishes map -> odom TF and /map — the same job AMCL + map_server do in
 localization.launch.py. Do not run both at once; flexiv_amr_bringup's
 navigation.launch.py picks one via localization_backend.
 
-Localizes against the checked-in maps/rtabmap.db by default. Mem/IncrementalMemory
-and delete_db_on_start are forced here regardless of what rtabmap_params.yaml
-says, so this launch file can never itself add nodes to or wipe the database
-you're localizing against — only rtabmap_mapping.launch.py (mapping mode) does.
+Defaults to maps/rtabmap_backup.db — the larger, later survey (53 MB,
+2026-08-31) confirmed as the good map, not the smaller maps/rtabmap.db
+(1.8 MB, 2026-08-04) that happens to also be checked in.
+
+Mem/IncrementalMemory and delete_db_on_start are forced here regardless of
+what rtabmap_params.yaml says, so this launch file can never itself add
+nodes to or wipe the database you're localizing against — only
+rtabmap_mapping.launch.py (mapping mode) writes.
 
 Usage:
   ros2 launch flexiv_amr_nav2 rtabmap_localization.launch.py
@@ -25,7 +29,7 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     pkg_share = FindPackageShare('flexiv_amr_nav2')
     rtabmap_config = PathJoinSubstitution([pkg_share, 'config', 'rtabmap_params.yaml'])
-    default_db = PathJoinSubstitution([pkg_share, 'maps', 'rtabmap.db'])
+    default_db = PathJoinSubstitution([pkg_share, 'maps', 'rtabmap_backup.db'])
 
     rtabmap_db = LaunchConfiguration('rtabmap_db')
     use_sim_time = LaunchConfiguration('use_sim_time')

@@ -25,7 +25,7 @@ Usage:
   # Mapping with RTAB-Map
   ros2 launch flexiv_amr_bringup full_system.launch.py use_slam:=false use_rtabmap:=true
 
-  # Navigation, localizing against maps/rtabmap.db (default backend)
+  # Navigation, localizing against maps/rtabmap_backup.db (default backend)
   ros2 launch flexiv_amr_bringup full_system.launch.py use_slam:=false use_nav:=true
 
   # Navigation with AMCL instead (laser-only, against a saved map yaml)
@@ -114,7 +114,7 @@ def generate_launch_description():
         DeclareLaunchArgument("rtabmap_db",
                               default_value=PathJoinSubstitution([
                                   FindPackageShare("flexiv_amr_nav2"),
-                                  "maps", "rtabmap.db",
+                                  "maps", "rtabmap_backup.db",
                               ]),
                               description="RTAB-Map database to localize against "
                                           "(localization_backend:=rtabmap)"),
@@ -131,9 +131,13 @@ def generate_launch_description():
                               description="Use mock hardware for the arms "
                                           "(no real robot connection)"),
         DeclareLaunchArgument("enable_waist_driver", default_value="false",
-                              description="Publish real AGV_Jiont1/2 from the RDK "
+                              description="Publish real AGV_Joint1/2 from the RDK "
                                           "stream (races joint_state_merger's zeros; "
                                           "see aico2_waist_driver/README.md)"),
+        DeclareLaunchArgument("direct_joint_states", default_value="false",
+                              description="true: arms publish straight to "
+                                          "/joint_states and joint_state_merger is "
+                                          "retired (see arms.launch.py)"),
 
         # ============================================================
         # Arms: both Rizon lifecycle drivers, optional waist, merger
@@ -141,6 +145,7 @@ def generate_launch_description():
         _include("flexiv_amr_bringup", "arms.launch.py", {
             "mock_hardware": mock_arms,
             "enable_waist_driver": LaunchConfiguration("enable_waist_driver"),
+            "direct_joint_states": LaunchConfiguration("direct_joint_states"),
         }),
 
         # ============================================================
