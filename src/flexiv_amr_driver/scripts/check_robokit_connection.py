@@ -4,7 +4,10 @@ Test script to verify Robokit TCP API connection.
 Run this before launching the full ROS 2 stack.
 
 Usage:
-    python3 test_robokit_connection.py
+    python3 scripts/check_robokit_connection.py
+
+Named check_* rather than test_* so pytest does not collect it during
+`colcon test` and try to open sockets to the robot.
 """
 
 import socket
@@ -12,7 +15,9 @@ import json
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'flexiv_amr_driver'))
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'flexiv_amr_driver')
+)
 from robokit_protocol import (
     API_PORT_STATE,
     API_PORT_CTRL,

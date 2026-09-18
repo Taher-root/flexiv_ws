@@ -5,20 +5,13 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# find dependencies
+# Launch-only package: the packages it launches are declared in package.xml as
+# exec_depend, so nothing needs find_package beyond ament_cmake.
 find_package(ament_cmake REQUIRED)
-find_package(flexiv_amr_description REQUIRED)
-find_package(flexiv_amr_sensors REQUIRED)
-find_package(flexiv_amr_nav2 REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
-  # the following line skips the linter which checks for copyrights
-  # comment the line when a copyright and license is added to all source files
   set(ament_cmake_copyright_FOUND TRUE)
-  # the following line skips cpplint (only works in a git repo)
-  # comment the line when this package is in a git repo and when
-  # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
@@ -26,7 +19,6 @@ endif()
 install(DIRECTORY
   launch
   config
-  rviz
   DESTINATION share/${PROJECT_NAME}
 )
 

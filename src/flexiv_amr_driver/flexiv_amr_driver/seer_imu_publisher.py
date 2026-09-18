@@ -177,7 +177,9 @@ class SeerImuPublisher(Node):
             self.imu_pub.publish(msg)
 
         except (ConnectionError, BrokenPipeError, OSError) as e:
-            self.get_logger().warn(f'Connection lost: {e}. Reconnecting...', throttle_duration_sec=5.0)
+            self.get_logger().warn(
+                f'Connection lost: {e}. Reconnecting...', throttle_duration_sec=5.0
+            )
             self.sock = None
         except json.JSONDecodeError as e:
             self.get_logger().error(f'JSON decode error: {e}', throttle_duration_sec=5.0)

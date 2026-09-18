@@ -9,10 +9,20 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <depend>realsense2_camera</depend>
-  <depend>realsense2_description</depend>
-  <depend>depthimage_to_laserscan</depend>
-  <depend>rtabmap_ros</depend>
+  <!-- Nodes launched by launch/sensors.launch.py -->
+  <exec_depend>flexiv_amr_driver</exec_depend>
+  <exec_depend>realsense2_camera</exec_depend>
+  <exec_depend>realsense2_description</exec_depend>
+  <exec_depend>depthimage_to_laserscan</exec_depend>
+  <exec_depend>rtabmap_odom</exec_depend>
+  <exec_depend>ira_laser_tools</exec_depend>
+  <!-- realsense.launch.py / visual_odometry.launch.py (unreferenced by other
+       launch files in this repo, but restored 2026-09-18 because they may be
+       invoked directly outside git-tracked launch files — see package README
+       once confirmed on hardware). visual_odometry.launch.py uses the ROS 1
+       rtabmap_ros package name, so it will not resolve on a ROS 2 rtabmap
+       install unless that's aliased on this machine. -->
+  <exec_depend>rtabmap_ros</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

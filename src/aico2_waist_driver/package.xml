@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>aico2_waist_driver</name>
+  <version>0.1.0</version>
+  <description>Waist (AGV_Jiont1/2) driver: reads the shared external axes off one Rizon controller's 1 kHz RDK stream and publishes them as their own JointState source, independent of either arm driver.</description>
+  <maintainer email="oelinux@todo.todo">oelinux</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>rclpy_lifecycle</depend>
+  <depend>lifecycle_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>builtin_interfaces</depend>
+  <depend>aico2_left_arm_driver</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

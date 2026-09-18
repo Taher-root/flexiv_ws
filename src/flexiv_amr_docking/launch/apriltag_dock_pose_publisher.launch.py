@@ -30,7 +30,8 @@ def generate_launch_description():
                 ('image_rect', 'image_rect'),
             ],
             parameters=[{
-                'qos_overrides./camera/camera/color/camera_info.subscription.durability': 'volatile'
+                'qos_overrides./camera/camera/color/camera_info.subscription.durability':
+                    'volatile'
             }],
         ),
 

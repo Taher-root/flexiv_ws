@@ -21,7 +21,7 @@ def generate_launch_description():
             default_value=PathJoinSubstitution([
                 FindPackageShare('flexiv_amr_nav2'),
                 'maps',
-                'map.yaml'
+                'supermarket.yaml'
             ]),
             description='Full path to map yaml file'
         ),

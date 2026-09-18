@@ -1,0 +1,18 @@
+# ROS 2 / colcon build output
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Editor / OS
+*.swp
+.DS_Store
+
+# Local backups — keep history in git, not in the source tree
+*.bak
+*.bak[0-9]
+*.backup

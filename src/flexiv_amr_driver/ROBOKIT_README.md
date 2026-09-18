@@ -30,7 +30,7 @@ This package now includes **Robokit TCP API integration** for continuous velocit
    - TCP port configuration
    - Timeout settings
 
-5. **`test_robokit_connection.py`**
+5. **`scripts/check_robokit_connection.py`**
    - Standalone test script
    - Verifies Robokit TCP connection
    - Tests STATE and CTRL APIs
@@ -76,7 +76,7 @@ colcon build --packages-select flexiv_amr_driver
 source install/setup.bash
 
 # Test connection first (optional but recommended)
-python3 src/flexiv_amr_driver/test_robokit_connection.py
+python3 src/flexiv_amr_driver/scripts/check_robokit_connection.py
 
 # Launch with Robokit
 ros2 launch flexiv_amr_driver amr_driver_robokit.launch.py
@@ -129,7 +129,7 @@ Smooth Robot Motion!
 
 ```bash
 # Test connection manually
-python3 src/flexiv_amr_driver/test_robokit_connection.py
+python3 src/flexiv_amr_driver/scripts/check_robokit_connection.py
 
 # Check AMR IP
 ping 192.168.1.110
@@ -217,7 +217,7 @@ sock.send(msg)
 
 For issues or questions:
 1. Check this README
-2. Run `test_robokit_connection.py`
+2. Run `scripts/check_robokit_connection.py`
 3. Check ROS 2 logs: `ros2 node info /robokit_velocity_controller`
 4. Contact Flexiv support for LiDAR/IMU request IDs
 

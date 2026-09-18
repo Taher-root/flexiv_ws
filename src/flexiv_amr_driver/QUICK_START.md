@@ -32,7 +32,7 @@ source install/setup.bash
 
 ```bash
 # Test Robokit TCP connection
-python3 src/flexiv_amr_driver/test_robokit_connection.py
+python3 src/flexiv_amr_driver/scripts/check_robokit_connection.py
 
 # Expected output:
 # ✓ Connected to STATE API at 192.168.1.110:19204
@@ -123,7 +123,7 @@ ros2 launch flexiv_amr_driver amr_driver.launch.py
 - `flexiv_amr_driver/robokit_velocity_controller.py`
 - `launch/amr_driver_robokit.launch.py`
 - `config/amr_params_robokit.yaml`
-- `test_robokit_connection.py`
+- `scripts/check_robokit_connection.py`
 - `ROBOKIT_README.md`
 - `QUICK_START.md` (this file)
 
