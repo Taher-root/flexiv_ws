@@ -129,7 +129,23 @@ def test_offset_tracker_due_before_and_after_refresh_window():
     assert tracker.due() is True
 
 
-def test_to_ros_seconds_applies_offset():
+def test_to_ros_seconds_subtracts_offset():
+    # offset_sec = device_time - host_time (device ahead when positive), so
+    # recovering host time from a device reading must SUBTRACT it. A device
+    # clock 13s ahead reading "113" corresponds to host time "100".
     tracker = OffsetTracker(states_fn=lambda: None)
     tracker.apply_estimate(OffsetEstimate(offset_sec=13.0, spread_sec=0.0, n_transitions=1))
-    assert tracker.to_ros_seconds((100, 0)) == pytest.approx(113.0)
+    assert tracker.to_ros_seconds((113, 0)) == pytest.approx(100.0)
+
+
+def test_to_ros_seconds_matches_real_hardware_reading():
+    # Regression check against the actual capture that caught the sign bug
+    # (left arm, 2026-09-17): device_time - offset reproduced time.time()
+    # at the moment of that reading to within float precision.
+    tracker = OffsetTracker(states_fn=lambda: None)
+    tracker.apply_estimate(
+        OffsetEstimate(offset_sec=29123.436620235443, spread_sec=0.0, n_transitions=1)
+    )
+    assert tracker.to_ros_seconds((1789744375, 351014000)) == pytest.approx(
+        1789715251.9143937, abs=1e-3
+    )

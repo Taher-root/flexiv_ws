@@ -112,6 +112,17 @@ class OffsetTracker:
     push TF backwards in time and make tf2 discard its buffer, so refreshes
     move the applied offset by at most slew_limit_sec per call rather than
     jumping straight to the new estimate.
+
+    Sign convention (matches estimate_offset): offset_sec = device_time -
+    host_time, so a positive offset means the device clock reads ahead of
+    the host. to_ros_seconds() must therefore SUBTRACT it to recover a
+    host-equivalent time from a device timestamp. Confirmed against real
+    hardware 2026-09-17 (left arm): offset_sec ~= +29123s (device ahead);
+    device_time_seconds(reading) - offset_sec reproduced time.time() at
+    the moment of that reading to 7 decimal places. An earlier version of
+    this method added the offset instead, which would have doubled the
+    drift to ~58000s and made every published stamp unusable by tf2 —
+    caught here before it ever ran against hardware.
     """
 
     def __init__(
@@ -166,4 +177,5 @@ class OffsetTracker:
         self._last_refresh = self._clock_fn()
 
     def to_ros_seconds(self, device_timestamp: RawTimestamp) -> float:
-        return device_time_seconds(device_timestamp) + self._offset_sec
+        """Host/ROS-clock-equivalent seconds for a raw device timestamp."""
+        return device_time_seconds(device_timestamp) - self._offset_sec
