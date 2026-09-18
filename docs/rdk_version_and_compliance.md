@@ -79,23 +79,95 @@ gravity compensation is correct, then confirm with
 Software biasing cannot substitute — it corrects what we print, never what
 the controller believes.
 
-## 3. Order of operations
+## 3. Adaptive Assembly is not licensed on this robot
 
-`src/aico2_left_arm_driver/scripts/rdk_primitive_pih.py` runs the stages.
-Nothing that moves runs without `--yes-move`.
+Confirmed on hardware, 2026-09-18. With the arm in Auto (Remote), enabled,
+external axes locked and the mode switched to `NRT_PRIMITIVE_EXECUTION`,
+`ExecutePrimitive("SearchHole", ...)` produced:
 
-1. `check` — resting wrench and `info()`. No enable, no motion.
-2. Declare the tool in Elements; re-run `check` until the resting wrench is
-   small.
-3. `zero` — `ZeroFTSensor`. The cheapest test that primitive execution works
-   on this license at all. Documented against an F/T sensor we do not have,
-   so a rejection is informative rather than a failure.
-4. `search` — `SearchHole`, tool already in contact near the hole.
-5. `checkpih` — `CheckPiH`.
-6. `insert` — `InsertComp`.
+```
+[error] [Event Log] [303009] Primitive [SearchHole] is unlicensed.
+```
 
-Whether Adaptive Assembly is licensed here is unknown: the license string
-reads `RDK-Professional`, and these primitives may be a separate package.
-Step 3 or 4 will say — an unavailable primitive is rejected at
-`ExecutePrimitive`, which is why the order above spends its first motion on
-the cheapest primitive rather than on a spiral search.
+Everything up to the licence check worked: mode switch, `Enable()`, the waist
+lock, the parameter encoding. Only the licence stops it. `info().license_type`
+reads `RDK-Professional+TDK-Standard`, and Adaptive Assembly is evidently a
+separate package.
+
+Two things to know about how that failure presents:
+
+- **`ExecutePrimitive` does not raise.** It returns normally and the refusal
+  appears only in the controller event log. `rdk_primitive_pih.py` now proves
+  the primitive actually started (`busy()` plus at least one of its own state
+  keys) and reports `event_log()` when it did not, so an unlicensed primitive
+  fails in two seconds naming the licence instead of polling to the watchdog.
+- **The licence check happens at load, before motion.** That makes it safe to
+  enumerate: `rdk_primitive_pih.py <sn> probe --yes-move` loads each primitive
+  and `Stop()`s it immediately, and prints a licensed/unlicensed table.
+
+## 4. What still works: the impedance API
+
+The licence gated Flexiv's packaged search and insertion behaviour, not
+compliance. `SetCartesianImpedance`, `SetForceControlAxis`,
+`SetForceControlFrame`, `SetMaxContactWrench`, `SetNullSpacePosture`,
+`SetPassiveForceControl` and `SendCartesianMotionForce` are RDK control API,
+not primitives, and need no primitive licence.
+
+`src/aico2_left_arm_driver/scripts/rdk_compliance_demo.py` uses them.
+Configuration order matters, and comes from Flexiv's own
+`intermediate4_non_realtime_cartesian_motion_force_control.py`:
+
+1. `SwitchMode(NRT_CARTESIAN_MOTION_FORCE)`
+2. read `states().tcp_pose` as the hold pose
+3. `SetMaxContactWrench(<small>)` — soft-contact clamp while every axis is
+   still motion-controlled
+4. `SetForceControlFrame(...)`, `SetForceControlAxis([...])`
+5. `SetMaxContactWrench([inf]*6)` **only after** force control is active on
+   that axis, or the contact force spikes when the clamp lifts
+6. `SendCartesianMotionForce(pose, wrench)` in a loop at 1-100 Hz
+
+Motion control always references the world frame; force control can reference
+world or TCP. Sign convention: in WORLD `+Fz` presses down, in TCP `-Fz`
+presses along the tool. `SetCartesianImpedance` can be called inside the
+streaming loop, so stiffness is ramped rather than stepped — stepping straight
+to a low stiffness drops the arm.
+
+Stages: `soft` (compliant hold — push it, it yields and springs back),
+`press` (one axis force-controlled), `pih` (insertion axis force-controlled,
+soft laterally and in rotation so the peg self-aligns).
+
+### The bias sets a floor on how soft we can go
+
+Impedance holds position against force, so a steady phantom force `F`
+displaces the TCP by `F/K`. The ~24 N resting bias therefore sags the arm by
+24/K metres as soon as the stiffness lands:
+
+| stiffness | sag |
+| --------- | --- |
+| 10000 N/m (nominal) | 2.4 mm |
+| 1000 N/m | 24 mm |
+| 500 N/m | 50 mm |
+| 200 N/m | 124 mm |
+
+`rdk_compliance_demo.py` measures the resting wrench, computes that sag, and
+refuses to ramp past `--max-sag` (default 50 mm). So until the tool is
+declared in Elements, useful compliance bottoms out around 500 N/m — soft
+enough to demonstrate (10 N gives 20 mm) but not soft enough for insertion.
+
+`soft` works regardless: it commands no force, so the bias only sags it.
+`press` and `pih` command a force the bias corrupts directly, and require
+`--i-know-the-bias` to run at all.
+
+## 5. Order of operations
+
+1. `rdk_primitive_pih.py <sn> check` — resting wrench and `info()`. No enable,
+   no motion. Also the fastest check that the robot is in Auto (Remote):
+   `IN_MANUAL_MODE` and even plain `IN_AUTO_MODE` block RDK control.
+2. `rdk_compliance_demo.py <sn> soft --yes-move` — the arm becomes compliant
+   and you can push it. Works today, licence and bias notwithstanding.
+3. Declare the tool (mass, centre of mass, inertia) in Flexiv Elements;
+   re-run step 1 until the resting wrench is near zero.
+4. `rdk_compliance_demo.py <sn> pih --yes-move` at a low lateral stiffness —
+   insertion without the primitives.
+5. Only if Adaptive Assembly gets licensed: `rdk_primitive_pih.py <sn> probe`
+   to confirm, then the `search` / `checkpih` / `insert` stages.
