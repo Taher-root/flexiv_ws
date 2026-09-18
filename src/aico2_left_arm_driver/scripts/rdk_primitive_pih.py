@@ -98,6 +98,39 @@ _KEY_ALIASES = {
 }
 
 
+# operational_status() values and what to do about them. Text is from the RDK
+# 1.9.3 headers (data.hpp): "Except for the first two, the other enumerators
+# indicate the cause of the robot being not ready to operate." Note that plain
+# Auto mode is listed as a blocking cause -- RDK needs Auto (Remote), not Auto.
+_STATUS_ADVICE = {
+    "READY": None,
+    "NOT_ENABLED": "call Enable() — this script does that",
+    "BOOTING": "controller still booting, wait and retry",
+    "RELEASING_BRAKE": "brake release in progress, wait",
+    "ESTOP_NOT_RELEASED": "release the E-stop",
+    "MINOR_FAULT": "ClearFault() — this script tries that",
+    "CRITICAL_FAULT": "clear the fault in Flexiv Elements; check its event log",
+    "IN_REDUCED_STATE": "robot is in reduced state; clear the reduced-speed "
+                        "condition in Elements",
+    "IN_RECOVERY_STATE": "robot is in recovery state; run recovery in Elements "
+                         "to bring joints back inside their limits",
+    "IN_MANUAL_MODE": "switch the robot to Auto (Remote) mode — RDK cannot "
+                      "take control in Manual mode",
+    "IN_AUTO_MODE": "switch from regular Auto to Auto (REMOTE) mode — plain "
+                    "Auto is not enough for RDK",
+}
+# Statuses that no amount of waiting will resolve: they need a person to change
+# something on the robot, so fail fast rather than burn --enable-timeout.
+_BLOCKING_STATUSES = (
+    "IN_MANUAL_MODE", "IN_AUTO_MODE", "ESTOP_NOT_RELEASED", "CRITICAL_FAULT",
+    "IN_RECOVERY_STATE",
+)
+
+
+def _status_name(robot) -> str:
+    return str(robot.operational_status()).rsplit(".", 1)[-1]
+
+
 def _stop_robot(reason: str) -> None:
     global _STOPPED
     if _ROBOT is None or _STOPPED:
@@ -107,7 +140,11 @@ def _stop_robot(reason: str) -> None:
     try:
         _ROBOT.Stop()
     except Exception as exc:  # noqa: BLE001
-        print(f"[safety] Stop() raised: {exc}", flush=True)
+        # Stop() switches mode, which the controller refuses when the robot was
+        # never operational (e.g. still in Manual mode). Harmless: there is
+        # nothing to stop.
+        print(f"[safety] Stop() declined ({exc}) — nothing was moving",
+              flush=True)
 
 
 def _on_sigint(_signum, _frame):
@@ -162,14 +199,36 @@ def enable_for_primitives(robot, rdk, lock_waist: bool, enable_timeout: float):
         if not robot.ClearFault():
             raise RuntimeError("ClearFault() failed; clear it in Elements first")
 
-    print("Enable() — E-stop released, motion bar in Auto Remote (or Manual)")
+    # Check the blocking statuses before Enable(), so a robot in Manual mode
+    # fails in a second with the remedy instead of silently waiting out
+    # --enable-timeout.
+    status = _status_name(robot)
+    if status in _BLOCKING_STATUSES:
+        raise RuntimeError(
+            f"robot is {status} and Enable() cannot change that — "
+            f"{_STATUS_ADVICE.get(status, 'see Flexiv Elements')}"
+        )
+
+    print(f"status {status} — Enable()")
     robot.Enable()
     deadline = time.monotonic() + enable_timeout
+    last_report = 0.0
     while not robot.operational():
+        status = _status_name(robot)
+        if status in _BLOCKING_STATUSES:
+            raise RuntimeError(
+                f"robot became {status} while enabling — "
+                f"{_STATUS_ADVICE.get(status, 'see Flexiv Elements')}"
+            )
+        waited = time.monotonic() - (deadline - enable_timeout)
+        if waited - last_report >= 2.0:
+            last_report = waited
+            print(f"  waiting for operational: {status} ({waited:.0f}s)",
+                  flush=True)
         if time.monotonic() >= deadline:
             raise TimeoutError(
-                f"not operational after {enable_timeout:.0f}s "
-                f"(status: {robot.operational_status()})"
+                f"not operational after {enable_timeout:.0f}s (status "
+                f"{status}: {_STATUS_ADVICE.get(status, 'unknown cause')})"
             )
         time.sleep(0.5)
     print("operational")
@@ -249,9 +308,16 @@ def stage_check(args, rdk, robot):
         print(f"  {field:16s} {getattr(info, field, '<absent>')}")
     print(f"  {'K_x_nom':16s} {_fmt(info.K_x_nom, 1)}")
     print(f"  {'mode':16s} {robot.mode()}")
-    print(f"  {'operational':16s} {robot.operational()}  "
-          f"status={robot.operational_status()}")
+    status = _status_name(robot)
+    print(f"  {'operational':16s} {robot.operational()}  status={status}")
     print(f"  {'fault':16s} {robot.fault()}")
+    advice = _STATUS_ADVICE.get(status, "unrecognised status")
+    if advice:
+        print()
+        print(f"  NOT READY FOR RDK CONTROL — {status}")
+        print(f"  {advice}.")
+        print("  No stage that moves the arm can run until this reads READY")
+        print("  or NOT_ENABLED.")
 
     st = robot.states()
     print(f"  {'tcp_pose':16s} {_fmt(st.tcp_pose, 4)}")
