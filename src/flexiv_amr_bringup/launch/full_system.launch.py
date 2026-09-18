@@ -3,16 +3,17 @@
 
 Composed from the per-subsystem launch files rather than restating them:
 
-  arms.launch.py            (flexiv_amr_bringup)  both Rizon arms, waist, merger
-  hardware_test.launch.py   (flexiv_amr_bringup)  URDF/TF + chassis + sensors
-    display.launch.py       (flexiv_amr_description)
-    amr_driver.launch.py    (flexiv_amr_driver)
-    sensors.launch.py       (flexiv_amr_sensors)
-  ekf.launch.py             (flexiv_amr_nav2)     sensor fusion
-  slam.launch.py            (flexiv_amr_nav2)     SLAM Toolbox      [use_slam]
-  rtabmap_mapping.launch.py (flexiv_amr_nav2)     RTAB-Map SLAM     [use_rtabmap]
-  localization.launch.py    (nav2_bringup)        AMCL + map_server [use_nav]
-  navigation.launch.py      (flexiv_amr_nav2)     Nav2 stack        [use_nav]
+  arms.launch.py                  (flexiv_amr_bringup)  both Rizon arms, waist, merger
+  hardware_test.launch.py         (flexiv_amr_bringup)  URDF/TF + chassis + sensors
+    display.launch.py             (flexiv_amr_description)
+    amr_driver.launch.py          (flexiv_amr_driver)
+    sensors.launch.py             (flexiv_amr_sensors)
+  ekf.launch.py                   (flexiv_amr_nav2)  sensor fusion
+  slam.launch.py                  (flexiv_amr_nav2)  SLAM Toolbox mapping    [use_slam]
+  rtabmap_mapping.launch.py       (flexiv_amr_nav2)  RTAB-Map mapping        [use_rtabmap]
+  rtabmap_localization.launch.py  (flexiv_amr_nav2)  RTAB-Map localization  [use_nav, default]
+  localization.launch.py          (flexiv_amr_nav2)  AMCL + map_server      [backend=amcl]
+  navigation.launch.py            (flexiv_amr_nav2)  Nav2 stack              [use_nav]
 
 The staged start delays live here, because they are a property of bringing the
 whole system up at once, not of the subsystems themselves.
@@ -24,10 +25,12 @@ Usage:
   # Mapping with RTAB-Map
   ros2 launch flexiv_amr_bringup full_system.launch.py use_slam:=false use_rtabmap:=true
 
-  # Navigation against a saved map
+  # Navigation, localizing against maps/rtabmap.db (default backend)
   ros2 launch flexiv_amr_bringup full_system.launch.py use_slam:=false use_nav:=true
-  ros2 launch flexiv_amr_bringup full_system.launch.py use_slam:=false \
-      use_nav:=true map:=/path/to/map.yaml
+
+  # Navigation with AMCL instead (laser-only, against a saved map yaml)
+  ros2 launch flexiv_amr_bringup full_system.launch.py use_slam:=false use_nav:=true \
+      localization_backend:=amcl map:=/path/to/map.yaml
 
   # Mock arms (no robot connection) / no camera
   ros2 launch flexiv_amr_bringup full_system.launch.py mock_arms:=true
@@ -54,12 +57,12 @@ from launch_ros.substitutions import FindPackageShare
 LASERSCAN_TOPICS = "/scan/nav /scan/avoid /scan/depth /scan/top"
 
 # Staged start-up, seconds after launch.
-MERGER_DELAY = 3.0    # TF tree + scan sources up
-EKF_DELAY = 4.0       # odom + IMU sources publishing
-SLAM_DELAY = 8.0      # arms + EKF + merged scan settled
-RTABMAP_DELAY = 15.0  # both cameras enumerated on USB and streaming
-AMCL_DELAY = 10.0
-NAV2_DELAY = 20.0     # map_server + AMCL active, /map and map->odom TF up
+MERGER_DELAY = 3.0          # TF tree + scan sources up
+EKF_DELAY = 4.0             # odom + IMU sources publishing
+SLAM_DELAY = 8.0            # arms + EKF + merged scan settled
+RTABMAP_MAP_DELAY = 15.0    # both cameras enumerated on USB and streaming
+LOCALIZATION_DELAY = 10.0   # odometry/filtered + scans + (for rtabmap) camera up
+NAV2_DELAY = 20.0           # localization active, /map and map->odom TF up
 
 
 def _include(package, launch_file, launch_arguments=None, condition=None):
@@ -80,11 +83,18 @@ def generate_launch_description():
     use_nav = LaunchConfiguration("use_nav")
     use_rviz = LaunchConfiguration("use_rviz")
     map_file = LaunchConfiguration("map")
+    rtabmap_db = LaunchConfiguration("rtabmap_db")
+    localization_backend = LaunchConfiguration("localization_backend")
     mock_arms = LaunchConfiguration("mock_arms")
 
     nav2_params = PathJoinSubstitution(
         [FindPackageShare("flexiv_amr_nav2"), "config", "nav2_params.yaml"]
     )
+
+    def _nav_backend_is(backend):
+        return IfCondition(PythonExpression(
+            ["'", use_nav, "' == 'true' and '", localization_backend, f"' == '{backend}'"]
+        ))
 
     return LaunchDescription([
         # --- Arguments ---
@@ -97,13 +107,24 @@ def generate_launch_description():
         DeclareLaunchArgument("use_rtabmap", default_value="false",
                               description="Launch RTAB-Map instead of slam_toolbox"),
         DeclareLaunchArgument("use_nav", default_value="false",
-                              description="Launch Nav2 (AMCL + map_server + navigation stack)"),
+                              description="Launch localization + Nav2 stack"),
+        DeclareLaunchArgument("localization_backend", default_value="rtabmap",
+                              description="'rtabmap' (localize against rtabmap_db, "
+                                          "lidar+visual) or 'amcl' (laser-only against map:=)"),
+        DeclareLaunchArgument("rtabmap_db",
+                              default_value=PathJoinSubstitution([
+                                  FindPackageShare("flexiv_amr_nav2"),
+                                  "maps", "rtabmap.db",
+                              ]),
+                              description="RTAB-Map database to localize against "
+                                          "(localization_backend:=rtabmap)"),
         DeclareLaunchArgument("map",
                               default_value=PathJoinSubstitution([
                                   FindPackageShare("flexiv_amr_nav2"),
                                   "maps", "supermarket.yaml",
                               ]),
-                              description="Map yaml for navigation mode"),
+                              description="Map yaml to localize against "
+                                          "(localization_backend:=amcl)"),
         DeclareLaunchArgument("use_rviz", default_value="false",
                               description="Launch RViz2"),
         DeclareLaunchArgument("mock_arms", default_value="false",
@@ -154,7 +175,7 @@ def generate_launch_description():
             ],
         ),
         TimerAction(
-            period=RTABMAP_DELAY,
+            period=RTABMAP_MAP_DELAY,
             actions=[
                 _include("flexiv_amr_nav2", "rtabmap_mapping.launch.py",
                          condition=IfCondition(use_rtabmap)),
@@ -162,23 +183,20 @@ def generate_launch_description():
         ),
 
         # ============================================================
-        # Navigation. nav2_bringup's own localization_launch.py is used
-        # for AMCL + map_server, but its bringup_launch.py is not: the
-        # Jazzy version pulls in route_server and docking_server, which
-        # we do not need and which block lifecycle activation.
+        # Localization (use_nav only) — exactly one of these publishes
+        # map -> odom + /map. Default is RTAB-Map against rtabmap_db
+        # (lidar + visual features); localization_backend:=amcl switches
+        # to nav2's own AMCL (laser-only, needs map:=).
         # ============================================================
         TimerAction(
-            period=AMCL_DELAY,
+            period=LOCALIZATION_DELAY,
             actions=[
-                _include("nav2_bringup", "localization_launch.py", {
-                    "map": map_file,
-                    "use_sim_time": "false",
-                    "params_file": nav2_params,
-                    "autostart": "true",
-                    "use_composition": "False",
-                }, condition=IfCondition(PythonExpression(
-                    ["'", use_nav, "' == 'true' and '", use_rtabmap, "' != 'true'"]
-                ))),
+                _include("flexiv_amr_nav2", "rtabmap_localization.launch.py",
+                         {"rtabmap_db": rtabmap_db},
+                         condition=_nav_backend_is("rtabmap")),
+                _include("flexiv_amr_nav2", "localization.launch.py",
+                         {"map": map_file},
+                         condition=_nav_backend_is("amcl")),
             ],
         ),
         TimerAction(
