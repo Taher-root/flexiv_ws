@@ -24,6 +24,12 @@ STAGES
   bias     No motion, no enable. Measures the standing wrench over --seconds
            and writes it to --bias-file. This quantifies the tool-gravity
            offset; it does NOT fix it (see THE BIAS PROBLEM).
+  probe    Finds out which primitives this licence allows. Loads each one and
+           Stop()s it immediately; the licence check happens at load, before
+           motion. Run this before search/checkpih/insert -- on this robot the
+           Adaptive Assembly primitives are unlicensed (event 303009), and
+           ExecutePrimitive does not raise when they are, it just never
+           starts.
   zero     Enables the arm and runs the ZeroFTSensor primitive. Static data
            collection, the arm should not travel. The one stage worth trying
            before anything moves, because it is the cheapest test that
@@ -125,6 +131,49 @@ _BLOCKING_STATUSES = (
     "IN_MANUAL_MODE", "IN_AUTO_MODE", "ESTOP_NOT_RELEASED", "CRITICAL_FAULT",
     "IN_RECOVERY_STATE",
 )
+
+
+def _event_key(event):
+    """Identity for one controller event. RobotEvent.id is an error code, not
+    unique, so pair it with the timestamp and text."""
+    return (repr(getattr(event, "timestamp", None)),
+            getattr(event, "id", None),
+            getattr(event, "description", ""))
+
+
+def _event_keys(robot):
+    try:
+        return {_event_key(e) for e in robot.event_log()}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _print_new_events(robot, before, only_bad=True):
+    """Print controller events that appeared since the `before` snapshot.
+
+    The controller reports things RDK's Python calls do not raise on -- an
+    unlicensed primitive is logged as event 303009 and ExecutePrimitive
+    returns normally -- so this is the only way to see why nothing happened.
+    """
+    try:
+        events = robot.event_log()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[events] event_log() unavailable: {exc}")
+        return []
+    new = [e for e in events if _event_key(e) not in before]
+    bad_levels = ("ERROR", "CRITICAL")
+    shown = [e for e in new
+             if not only_bad
+             or str(getattr(e, "level", "")).rsplit(".", 1)[-1] in bad_levels]
+    for e in shown:
+        level = str(getattr(e, "level", "?")).rsplit(".", 1)[-1]
+        print(f"[events] {level} [{getattr(e, 'id', '?')}] "
+              f"{getattr(e, 'description', '')}")
+        for field in ("probable_causes", "recommended_actions"):
+            text = getattr(e, field, "")
+            if text:
+                print(f"           {field}: {text}")
+    return shown
 
 
 def _status_name(robot) -> str:
@@ -244,6 +293,41 @@ def enable_for_primitives(robot, rdk, lock_waist: bool, enable_timeout: float):
     print(f"mode: {robot.mode()}")
 
 
+def start_primitive(robot, name, params, expect_keys, start_timeout=2.0):
+    """ExecutePrimitive, then prove it actually started.
+
+    ExecutePrimitive returns normally for a primitive the controller refuses
+    to load -- an unlicensed one only shows up as event 303009 in the
+    controller log -- so a bare call would leave us polling states that never
+    arrive until the watchdog fires. Wait for busy() plus at least one of the
+    primitive's own state keys, and report the controller's events if neither
+    appears.
+    """
+    print()
+    print("=" * 72)
+    print(f"ExecutePrimitive({name!r}, {params!r})")
+    print("=" * 72)
+    before = _event_keys(robot)
+    robot.ExecutePrimitive(name, params)
+
+    deadline = time.monotonic() + start_timeout
+    while time.monotonic() < deadline:
+        states = dict(robot.primitive_states())
+        if robot.busy() and any(_state(states, k) is not None
+                                for k in expect_keys):
+            return states
+        time.sleep(0.05)
+
+    bad = _print_new_events(robot, before)
+    unlicensed = any("unlicensed" in getattr(e, "description", "").lower()
+                     for e in bad)
+    detail = (f"primitive {name!r} is not licensed on this robot"
+              if unlicensed else
+              f"primitive {name!r} did not start within {start_timeout:.1f}s "
+              f"(busy={robot.busy()}, states={dict(robot.primitive_states())})")
+    raise RuntimeError(detail)
+
+
 def run_primitive(robot, name, params, done_keys, max_seconds, bias=None,
                   poll_sec=0.25):
     """Execute one primitive and stream its states until a done key is reached.
@@ -255,11 +339,8 @@ def run_primitive(robot, name, params, done_keys, max_seconds, bias=None,
 
     Returns the final states dict. Stop()s and raises on timeout or fault.
     """
-    print()
-    print("=" * 72)
-    print(f"ExecutePrimitive({name!r}, {params!r})")
-    print("=" * 72)
-    robot.ExecutePrimitive(name, params)
+    expect_keys = [e[0] if isinstance(e, tuple) else e for e in done_keys]
+    start_primitive(robot, name, params, expect_keys)
 
     t0 = time.monotonic()
     states: dict = {}
@@ -483,11 +564,7 @@ def stage_insert(args, rdk, robot):
     }
     enable_for_primitives(robot, rdk, args.lock_waist, args.enable_timeout)
     # Transitions on isMoving == 0, so wait for it to go false rather than true.
-    print()
-    print("=" * 72)
-    print(f"ExecutePrimitive('InsertComp', {params!r})")
-    print("=" * 72)
-    robot.ExecutePrimitive("InsertComp", params)
+    start_primitive(robot, "InsertComp", params, ["isMoving", "insertDis"])
     bias = _load_bias(args)
     t0 = time.monotonic()
     saw_motion = False
@@ -522,6 +599,96 @@ def stage_insert(args, rdk, robot):
         time.sleep(0.25)
 
 
+# Minimal, valid parameter sets: enough for the controller to accept the
+# primitive so the licence check is what decides, with the slowest velocities
+# and smallest ranges each primitive allows.
+_PROBE_PRIMITIVES = (
+    ("ZeroFTSensor", {"dataCollectTime": 0.2, "enableStaticCheck": 0,
+                      "calibExtraPayload": 0}, ["terminated"]),
+    ("SearchHole", {"contactAxis": [0, 0, 1], "contactForce": 1.0,
+                    "searchAxis": [1.0, 0.0, 0.0], "searchPattern": "SPIRAL",
+                    "spiralRadius": 0.001, "timeFactor": 10,
+                    "maxVelForceDir": 0.005, "searchImmed": 0,
+                    "enableMaxWrench": [1, 1, 1, 1, 1, 1],
+                    "maxContactWrench": [30.0, 30.0, 30.0, 10.0, 10.0, 10.0]},
+     ["pushDis", "searchResisForce", "terminated"]),
+    ("CheckPiH", {"contactAxis": [0.0, 0.0, 1.0],
+                  "searchAxis": [1.0, 0.0, 0.0], "searchRange": 0.001,
+                  "searchForce": 1.0, "searchVel": 0.001,
+                  "linearSearchOnly": 1, "returnToInitPose": 1},
+     ["checkComplete", "pegIsInHole", "terminated"]),
+    ("InsertComp", {"insertAxis": "Z", "compAxis": [0, 0, 0, 0, 0, 0],
+                    "maxContactForce": 1.0, "deadbandScale": 100.0,
+                    "insertVel": 0.001, "compVelScale": 10.0},
+     ["isMoving", "insertDis", "terminated"]),
+    ("Mate", {}, ["terminated"]),
+    ("FastenScrew", {}, ["terminated"]),
+)
+
+
+def stage_probe(args, rdk, robot):
+    """Find out which primitives this licence allows, one load at a time.
+
+    The licence check happens when the controller loads the primitive, before
+    any motion, and shows up only in the event log (event 303009). So each
+    primitive is loaded and stopped immediately: an unlicensed one never
+    moves at all, and a licensed one gets at most the fraction of a second
+    between load and Stop() -- under a millimetre at the velocities above.
+    Give the arm clearance anyway.
+    """
+    enable_for_primitives(robot, rdk, args.lock_waist, args.enable_timeout)
+    results = {}
+    for name, params, expect_keys in _PROBE_PRIMITIVES:
+        before = _event_keys(robot)
+        print(f"\n--- probing {name}")
+        try:
+            robot.ExecutePrimitive(name, params, False)
+        except Exception as exc:  # noqa: BLE001
+            results[name] = f"rejected by RDK: {exc}"
+            _print_new_events(robot, before)
+            continue
+        # Give the controller a moment to load and log, then stop regardless.
+        started = False
+        deadline = time.monotonic() + args.probe_settle
+        while time.monotonic() < deadline:
+            if robot.busy() and any(
+                _state(dict(robot.primitive_states()), k) is not None
+                for k in expect_keys
+            ):
+                started = True
+                break
+            time.sleep(0.02)
+        robot.Stop()
+        bad = _print_new_events(robot, before)
+        if any("unlicensed" in getattr(e, "description", "").lower()
+               for e in bad):
+            results[name] = "UNLICENSED"
+        elif started:
+            results[name] = "licensed (loaded and ran)"
+        elif bad:
+            results[name] = "failed to load, see events above"
+        else:
+            results[name] = (
+                f"no states within {args.probe_settle:.1f}s and no error "
+                "logged — inconclusive"
+            )
+        # Stop() leaves IDLE; get back into primitive mode for the next one.
+        robot.SwitchMode(rdk.Mode.NRT_PRIMITIVE_EXECUTION)
+
+    print()
+    print("=" * 72)
+    print("PRIMITIVE AVAILABILITY")
+    print("=" * 72)
+    for name, verdict in results.items():
+        print(f"  {name:14s} {verdict}")
+    if all(v == "UNLICENSED" for n, v in results.items() if n != "ZeroFTSensor"):
+        print()
+        print("  None of the Adaptive Assembly primitives are licensed. Force")
+        print("  compliance is still available through the impedance API")
+        print("  (SetCartesianImpedance / SetForceControlAxis /")
+        print("  SendCartesianMotionForce), which needs no primitive licence.")
+
+
 def _load_bias(args):
     if not args.use_bias:
         return None
@@ -536,10 +703,11 @@ def _load_bias(args):
     return bias
 
 
-_MOVING_STAGES = {"zero", "search", "checkpih", "insert"}
+_MOVING_STAGES = {"zero", "search", "checkpih", "insert", "probe"}
 _STAGES = {
     "check": stage_check,
     "bias": stage_bias,
+    "probe": stage_probe,
     "zero": stage_zero,
     "search": stage_search,
     "checkpih": stage_checkpih,
@@ -567,6 +735,9 @@ def build_parser():
                    default=os.path.expanduser("~/.ros/aico2_wrench_bias.json"))
     p.add_argument("--use-bias", action="store_true",
                    help="subtract the measured bias from PRINTED wrenches")
+    p.add_argument("--probe-settle", type=float, default=0.4,
+                   help="probe stage: seconds between loading a primitive and "
+                        "Stop()ing it")
     p.add_argument("--calib-payload", action="store_true",
                    help="zero stage: set ZeroFTSensor calibExtraPayload=1")
 
