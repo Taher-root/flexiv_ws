@@ -9,7 +9,7 @@ restating its nodes, so a node's parameters are defined in exactly one place.
 
 ```
 full_system.launch.py            arms + hardware + EKF + (SLAM | RTAB-Map | localization+Nav2)
-├─ arms.launch.py                both Rizon lifecycle drivers, waist, merger
+├─ arms.launch.py                both Rizon lifecycle drivers, waist, merger*
 └─ hardware_test.launch.py       URDF/TF + chassis + sensors
    ├─ display.launch.py          (flexiv_amr_description)  robot_state_publisher
    ├─ amr_driver.launch.py       (flexiv_amr_driver)       chassis + odom + status
@@ -23,6 +23,8 @@ arms_with_navigation.launch.py   arms + mapping_robokit
 mapping_robokit.launch.py        alias: mapping.launch.py use_robokit:=true
 ```
 
+*`joint_state_merger` runs only while `direct_joint_states:=false` — see below.
+
 Subsystem launches live in `flexiv_amr_nav2` (`ekf`, `slam`, `localization`,
 `rtabmap_localization`, `navigation`, `rtabmap_mapping`) and are reused here.
 
@@ -33,16 +35,38 @@ localization backend via `localization_backend` (default `rtabmap`) — exactly
 one of these owns the `map -> odom` TF and `/map`:
 
 - **`rtabmap`** (default) — `rtabmap_localization.launch.py` localizes against
-  `maps/rtabmap.db` using lidar + visual features. Never writes to the
+  `maps/rtabmap_backup.db` using lidar + visual features. Never writes to the
   database (`Mem/IncrementalMemory` and `delete_db_on_start` are forced off in
   that launch file regardless of `rtabmap_params.yaml`). Override the database
   with `rtabmap_db:=/path/to/other.db`.
 - **`amcl`** — `localization.launch.py`, laser-only, against `map:=` (a map
   yaml, default `maps/supermarket.yaml`).
 
-`rtabmap_mapping.launch.py` (used by `use_rtabmap:=true` for *mapping*, not
-localization) is a separate file — see Known gaps below, it currently shares a
-quirk with the localization path that's worth fixing before relying on it.
+`rtabmap_mapping.launch.py` (used by `use_rtabmap:=true`) is the mapping
+counterpart: it forces `Mem/IncrementalMemory: true` and writes to its own
+`rtabmap_db` (default `~/.ros/aico2_map.db`), deliberately never the map
+navigation localizes against. `rtabmap_params.yaml` holds only the tuning both
+modes share — the three mode keys live in the launch files so neither can
+silently flip the other's behaviour.
+
+### Retiring joint_state_merger
+
+`direct_joint_states` switches between the two `/joint_states` topologies
+(`joint_state_architecture.md` sec 3, sec 8 step 6):
+
+- **`false`** (default) — arms publish `/left_arm/joint_states` and
+  `/right_arm/joint_states`; `joint_state_merger` stitches them into a
+  16-joint `/joint_states` with the waist **forced to 0.0**.
+- **`true`** — each driver publishes only its own joints straight to
+  `/joint_states`, the merger is not started, and `robot_state_publisher`
+  merges the partial messages by joint name. This is what lets
+  `enable_waist_driver:=true` actually reach TF instead of being overwritten
+  with the merger's zeros.
+
+Implemented as a launch remap, so flipping it back is one argument. Nothing in
+this repo consumes the per-arm topics except the merger, but check anything
+outside it (VR teleop, other machines on the ROS domain) before making `true`
+the default.
 
 ## Common commands
 
@@ -55,7 +79,7 @@ ros2 launch flexiv_amr_bringup hardware_test.launch.py
 ros2 launch flexiv_amr_bringup mapping.launch.py
 ros2 launch flexiv_amr_bringup mapping.launch.py use_robokit:=true use_rviz:=false
 
-# Navigation, localizing against maps/rtabmap.db (default backend)
+# Navigation, localizing against maps/rtabmap_backup.db (default backend)
 ros2 launch flexiv_amr_bringup navigation.launch.py
 
 # Navigation with AMCL instead (laser-only, against a saved map yaml)
@@ -93,8 +117,9 @@ ros2 launch flexiv_amr_bringup arms.launch.py mock_hardware:=true
 | `use_slam` / `use_rtabmap` | full_system | `true` / `false` | Mapping backend: SLAM Toolbox or RTAB-Map |
 | `use_nav` | navigation, full_system | `false` (`navigation.launch.py` implies true) | Start localization + Nav2 |
 | `localization_backend` | navigation, full_system | `rtabmap` | `rtabmap` (against `rtabmap_db:=`) or `amcl` (against `map:=`) |
-| `rtabmap_db` | navigation, full_system | `maps/rtabmap.db` | Database RTAB-Map localizes against |
+| `rtabmap_db` | navigation, full_system | `maps/rtabmap_backup.db` | Database RTAB-Map localizes against (mapping writes to `~/.ros/aico2_map.db`) |
 | `map` | navigation, full_system | `maps/supermarket.yaml` | Map yaml AMCL localizes against |
+| `direct_joint_states` | full_system, arms, arms_with_navigation | `false` | Arms publish straight to `/joint_states`, retiring `joint_state_merger` |
 | `use_rviz` | most | varies | Launch RViz2 |
 
 `full_system.launch.py` turns the top camera on with the rest of the cameras and
@@ -105,32 +130,25 @@ system starts at once.
 
 ## Known gaps
 
-- **`rtabmap_mapping.launch.py` (the mapping backend, `use_rtabmap:=true`) is
-  configured for localization, not mapping.** `rtabmap_params.yaml` sets
-  `Mem/IncrementalMemory: 'false'`, so as things stand this launch file will
-  localize against whatever `database_path` points at rather than grow a new
-  map — the opposite of what `use_rtabmap:=true` promises for a *mapping* run.
-  That file's `database_path` is also a single-user absolute path
-  (`/home/vivangupta/...rtabmap_backup.db`) that won't resolve on another
-  checkout. Fix both before trusting `use_rtabmap:=true` for actual mapping.
-  (`rtabmap_localization.launch.py`, the new localization path, is unaffected —
-  it forces its own `Mem/IncrementalMemory`/`database_path`/`delete_db_on_start`
-  regardless of this file.)
-- **Visual odometry from the bottom camera is dead-coded off in `ekf.yaml`**
-  (`odom1: /camera/odom` is commented out — "quality=0, publishes null poses").
-  Only the top camera's visual odometry (`odom2`) is fused, and only when
-  `use_top_camera:=true`. On the single-camera default path (`hardware_test`,
-  `mapping`, `navigation` without `full_system`), visual odometry is computed
-  but never reaches the EKF.
-- **No RViz configs are checked in.** RViz launches with its default view;
-  the older `mapping.rviz` / `navigation.rviz` referenced by earlier versions
-  of these launch files were never committed.
-- **`realsense.launch.py` / `visual_odometry.launch.py`** (`flexiv_amr_sensors`)
-  are not included by any other launch file in this repo — if nothing outside
-  git invokes them directly, they're dead. `realsense.launch.py` is also
-  missing a `PythonLaunchDescriptionSource` wrapper around its include, and
-  `visual_odometry.launch.py` uses the ROS 1 `rtabmap_ros` package name. Left
-  as-is pending confirmation of real usage.
+- **`maps/rtabmap_backup.db` is not checked in.** The localization default now
+  points at it (it is the good map: 53 MB, 2026-08-31, versus the 1.8 MB
+  2026-08-04 `rtabmap.db` that *is* committed). Either commit it or place it in
+  `flexiv_amr_nav2/maps/` on the robot, or pass `rtabmap_db:=` explicitly.
+- **The top D456 is not mounted or connected**, so `ekf.yaml` fuses only the
+  bottom camera's visual odometry (`odom1: /camera/odom`). The `odom2` block and
+  the `use_top_camera:=true` plumbing are both in place and commented/off —
+  re-enable both once the camera is physically installed.
+- **The bottom camera's visual odometry was previously disabled** in `ekf.yaml`
+  with "quality=0, publishes null poses". It is enabled again as of 2026-09-18
+  because it is the only connected camera; if that symptom returns, check
+  `/camera/odom` before suspecting the filter.
+- **No RViz configs are checked in.** RViz launches with its default view; the
+  older `mapping.rviz` / `navigation.rviz` these launch files once referenced
+  were never committed.
+- **`AGV_Jiont1`/`AGV_Jiont2` are misspelled** in the URDF (joint names only —
+  the links `AGV_Yaw`/`AGV_Pitch` and all meshes are spelled correctly, so TF
+  frames are unaffected). In-repo it is 5 functional occurrences; renaming also
+  touches anything outside the repo that looks joints up by name.
 
 ## Troubleshooting
 

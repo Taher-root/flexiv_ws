@@ -19,18 +19,15 @@ rtabmap:
     sync_queue_size: 30
     topic_queue_size: 30
 
-    # database_path/delete_db_on_start below are this file's defaults only.
-    # rtabmap_localization.launch.py (localization, reads maps/rtabmap.db,
-    # never writes) overrides both explicitly and always forces
-    # Mem/IncrementalMemory: 'false' regardless of the value below.
-    # rtabmap_mapping.launch.py (mapping) uses these as-is — note that means
-    # it inherits Mem/IncrementalMemory: 'false' too, so as currently
-    # configured it will localize against this path rather than grow a new
-    # map. Fix this file's path (it's a single-user absolute path that
-    # won't resolve on another checkout) and Mem/IncrementalMemory before
-    # relying on rtabmap_mapping.launch.py to build a fresh map.
-    database_path: /home/vivangupta/flexiv_ws/src/flexiv_amr_nav2/maps/rtabmap_backup.db
-    delete_db_on_start: false
+    # NOTE: database_path, delete_db_on_start and Mem/IncrementalMemory are
+    # deliberately NOT set in this file. They are what distinguish mapping
+    # from localization, and each launch file sets all three explicitly:
+    #   rtabmap_mapping.launch.py      -> IncrementalMemory true,  writable db
+    #   rtabmap_localization.launch.py -> IncrementalMemory false, read-only db
+    # This file holds only the tuning both modes share. Setting a mode key
+    # here would silently override one of them — which is exactly how this
+    # file previously forced the "mapping" launch into localization mode,
+    # against a hardcoded single-user absolute path.
 
     # === Detection / Loop Closure ===
     Rtabmap/DetectionRate: '2.0'

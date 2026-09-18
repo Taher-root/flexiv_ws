@@ -80,8 +80,15 @@ ekf_filter_node:
     # Best for: 6DoF motion in feature-rich environments
     # Weakness: fails during fast rotation (motion blur), drifts
     # USE DIFFERENTIAL MODE to prevent jumps
+    #
+    # ENABLED 2026-09-18: this is the camera that is actually connected, so
+    # it is the one visual odometry source feeding the filter. It was
+    # previously commented out with "quality=0, publishes null poses" — if
+    # that returns, watch /camera/odom's pose covariance and twist before
+    # blaming the filter, and re-disable here rather than elsewhere.
+    # Differential mode limits the damage from a tracking dropout.
     # ============================================================
-    # odom1: /camera/odom         # DISABLED: quality=0, publishes null poses
+    odom1: /camera/odom
     odom1_config: [false, false, false,
                    false, false, false,
                    true, false, false,
@@ -96,8 +103,14 @@ ekf_filter_node:
     # Best for: 6DoF motion, sees further (higher mount)
     # Weakness: same as bottom - motion blur, drift
     # USE DIFFERENTIAL MODE to prevent jumps
+    #
+    # DISABLED 2026-09-18: the top camera is not mounted in its final
+    # position and is not plugged in, so this topic never publishes. Fusing
+    # a dead source is worse than fusing none. The launch plumbing stays in
+    # place (sensors.launch.py use_top_camera:=true) — uncomment the odom2
+    # line below once the camera is physically mounted and connected.
     # ============================================================
-    odom2: /camera_top/odom
+    # odom2: /camera_top/odom     # DISABLED: top camera not mounted/connected
     odom2_config: [false, false, false,
                    false, false, false,
                    true, false, false,

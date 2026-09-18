@@ -33,12 +33,17 @@ def generate_launch_description():
         DeclareLaunchArgument("enable_waist_driver", default_value="false",
                               description="Publish real AGV_Jiont1/2 from the RDK "
                                           "stream (see aico2_waist_driver/README.md)"),
+        DeclareLaunchArgument("direct_joint_states", default_value="false",
+                              description="true: arms publish straight to "
+                                          "/joint_states and joint_state_merger is "
+                                          "retired (see arms.launch.py)"),
         DeclareLaunchArgument("use_rviz", default_value="true",
                               description="Launch RViz2"),
 
         _include("flexiv_amr_bringup", "arms.launch.py", {
             "mock_hardware": LaunchConfiguration("mock_arms"),
             "enable_waist_driver": LaunchConfiguration("enable_waist_driver"),
+            "direct_joint_states": LaunchConfiguration("direct_joint_states"),
         }),
 
         TimerAction(
