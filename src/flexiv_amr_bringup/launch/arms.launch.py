@@ -115,6 +115,7 @@ def generate_launch_description():
         package="aico2_waist_driver",
         executable="waist_driver",
         name="waist_driver",
+        namespace="",
         output="screen",
         condition=IfCondition(enable_waist_driver),
         parameters=[
