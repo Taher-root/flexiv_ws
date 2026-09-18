@@ -1,0 +1,14 @@
+# Goal
+string source_id
+string target_id
+float32 max_speed
+float32 max_angular_speed
+---
+# Result
+bool success
+string message
+---
+# Feedback
+float32 percentage_complete
+float32 distance_remaining
+string current_status

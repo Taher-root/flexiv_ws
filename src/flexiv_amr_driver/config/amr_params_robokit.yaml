@@ -1,0 +1,22 @@
+﻿/**:
+  ros__parameters:
+    # AMR Network Configuration
+    amr_ip: "192.168.1.110"
+    
+    # Robokit TCP Ports
+    ctrl_port: 19205      # Control API (velocity commands)
+    state_port: 19204     # State API (location, speed)
+    
+    # Control Parameters
+    max_linear_speed: 0.5
+    max_angular_speed: 1.0
+    cmd_timeout: 0.5
+    socket_timeout: 0.1
+    
+    # Odometry Parameters
+    base_frame: "base_link"
+    odom_frame: "odom_raw"
+    publish_tf: false      # Let EKF publish odom->base_link
+    
+    # Status Monitor Parameters
+    status_rate: 2.0

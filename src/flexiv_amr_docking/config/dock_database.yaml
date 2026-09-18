@@ -1,0 +1,8 @@
+# pose is [x, y, yaw] of the dock in the map frame.
+# Get it from: ros2 run tf2_ros tf2_echo map base_link (parked at dock),
+# then add pi to the yaw so it faces back out at the robot.
+docks:
+  dock_1:
+    type: 'flexiv_dock_plugin'
+    frame: map
+    pose: [-0.638666, -0.0574113, -2.151519]

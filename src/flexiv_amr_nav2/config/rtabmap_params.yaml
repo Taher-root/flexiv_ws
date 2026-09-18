@@ -1,0 +1,94 @@
+rtabmap:
+  ros__parameters:
+    frame_id: base_link
+    odom_frame_id: odom
+    map_frame_id: map
+    publish_tf: true
+    tf_delay: 0.05
+
+    # Use bundled RGBDImage from rgbd_sync node
+    # This prevents RTAB-Map from subscribing to raw image topics
+    # (which would compete with visual odom nodes for SHM resources)
+    subscribe_depth: false
+    subscribe_rgb: false
+    subscribe_rgbd: true
+    subscribe_scan: true
+    subscribe_odom: true
+    approx_sync: true
+    approx_sync_max_interval: 0.5
+    sync_queue_size: 30
+    topic_queue_size: 30
+
+    database_path: /home/vivangupta/flexiv_ws/src/flexiv_amr_nav2/maps/rtabmap_backup.db
+    delete_db_on_start: false
+
+    # === Detection / Loop Closure ===
+    Rtabmap/DetectionRate: '2.0'
+    Rtabmap/TimeThr: '0.0'
+    Rtabmap/MemoryThr: '0'
+    # Loop closure threshold - lower = more sensitive (triggers more often)
+    Rtabmap/LoopThr: '0.09'
+
+    # === Visual Features (USED FOR LOOP CLOSURE) ===
+    # FeatureType 8 = ORB (fast on ARM64)
+    Vis/MinInliers: '15'
+    Vis/MaxFeatures: '800'
+    Vis/FeatureType: '8'
+    Vis/CorNNType: '1'
+    Kp/MaxFeatures: '800'
+    Kp/DetectorStrategy: '8'
+    Kp/NNStrategy: '1'
+
+    # === Registration Strategy ===
+    # 0 = Visual only, 1 = ICP only, 2 = Visual + ICP
+    # MUST be 2 to use images for loop closure + ICP for refinement
+    # (was 1 = ICP only, which defeats the purpose of RTAB-Map)
+    Reg/Strategy: '2'
+    Reg/Force3DoF: 'true'
+
+    # === Optimizer ===
+    Optimizer/Strategy: '1'
+    Optimizer/Iterations: '20'
+    Optimizer/Slam2D: 'true'
+    RGBD/OptimizeMaxError: '3.0'
+
+    # === Node Creation Thresholds ===
+    # How far the robot must move before adding a new map node.
+    # CRITICAL for ghost prevention during rotation:
+    #   - Too low = spam nodes during rotation with drifted odom = ghosts
+    #   - 0.35 rad (~20 deg) means no new node until significant rotation
+    RGBD/AngularUpdate: '0.35'
+    RGBD/LinearUpdate: '0.2'
+
+    # === Proximity / Graph ===
+    RGBD/ProximityBySpace: 'true'
+    RGBD/ProximityMaxGraphDepth: '0'
+    RGBD/ProximityPathMaxNeighbors: '10'
+    RGBD/CreateOccupancyGrid: 'true'
+
+    # === Occupancy Grid ===
+    Grid/FromDepth: 'true'
+    Grid/RangeMax: '8.0'
+    Grid/RangeMin: '0.3'
+    Grid/CellSize: '0.05'
+    Grid/MaxObstacleHeight: '2.0'
+    Grid/MinObstacleHeight: '0.1'
+    Grid/MaxGroundHeight: '0.05'
+    Grid/3D: 'false'
+    Grid/RayTracing: 'true'
+    Grid/Sensor: '0'
+    cloud_output_voxelized: true
+    cloud_voxel_size: 0.02
+
+    # === ICP (used for local scan refinement alongside visual) ===
+    Icp/MaxCorrespondenceDistance: '0.2'
+    Icp/VoxelSize: '0.05'
+    Icp/PointToPlane: 'true'
+    Icp/Iterations: '30'
+
+    # === Memory ===
+    Mem/IncrementalMemory: 'false'
+    Mem/InitWMWithAllNodes: 'true'
+    Mem/STMSize: '30'
+    Mem/RehearsalSimilarity: '0.6'
+    Mem/NotLinkedNodesKept: 'false'

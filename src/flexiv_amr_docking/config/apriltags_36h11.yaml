@@ -1,0 +1,17 @@
+/**:
+  ros__parameters:
+    image_transport: raw
+    family: 36h11
+    size: 0.14          # <-- MEASURE: outer black square edge, metres
+    max_hamming: 0
+    publish_tf: true
+    detector:
+      threads: 2
+      decimate: 2.0
+      blur: 0.0
+      refine: true
+      sharpening: 0.25
+      debug: false
+    tag:
+      ids: [1]
+      sizes: [0.14]     # <-- same value as above

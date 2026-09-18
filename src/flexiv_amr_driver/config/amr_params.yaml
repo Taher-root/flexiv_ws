@@ -1,0 +1,19 @@
+/**:
+  ros__parameters:
+    # AMR Network Configuration
+    amr_ip: "192.168.1.110"
+    
+    # Control Parameters
+    control_rate: 10.0
+    max_linear_speed: 0.5
+    max_angular_speed: 1.0
+    rotation_threshold: 0.01
+    auto_gain_control: true
+    
+    # Odometry Parameters
+    base_frame: "base_link"
+    odom_frame: "odom_raw"
+    publish_tf: true
+    
+    # Status Monitor Parameters
+    status_rate: 2.0

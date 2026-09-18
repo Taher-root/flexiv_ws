@@ -1,0 +1,46 @@
+# 8BitDo controller -> /cmd_vel teleop config
+#
+# Tested with 8BitDo pads (Pro 2 / Ultimate / SN30 Pro) in "X-input" mode
+# (hold START + X or set the mode switch to X) connected via USB or the
+# 2.4G dongle / Bluetooth. In X-input mode Linux exposes it like an Xbox
+# controller, which is what the axis/button indices below assume.
+#
+# AICO2 base is holonomic (vx, vy, w) so we map:
+#   Left stick  Y  -> forward / backward   (linear.x)
+#   Left stick  X  -> strafe left / right  (linear.y)
+#   Right stick X  -> rotate               (angular.z)
+#   LB (button 4)  -> deadman "enable" button (must hold to move)
+#   RB (button 5)  -> "turbo" button (hold for max speed)
+#
+# If your controller doesn't move the robot, or moves on the wrong axis,
+# run `ros2 topic echo /joy` while moving each stick/button to find the
+# correct indices for your pad/mode, then edit this file.
+
+joy_node:
+  ros__parameters:
+    device_id: 0
+    deadzone: 0.05
+    autorepeat_rate: 20.0
+
+teleop_twist_joy_node:
+  ros__parameters:
+    require_enable_button: true
+    enable_button: 4          # LB
+    enable_turbo_button: 5    # RB
+
+    axis_linear:
+      x: 1                    # Left stick vertical
+      y: 0                    # Left stick horizontal (strafe)
+    scale_linear:
+      x: 0.3
+      y: 0.3
+    scale_linear_turbo:
+      x: 0.5
+      y: 0.5
+
+    axis_angular:
+      yaw: 3                  # Right stick horizontal
+    scale_angular:
+      yaw: 0.6
+    scale_angular_turbo:
+      yaw: 1.0
