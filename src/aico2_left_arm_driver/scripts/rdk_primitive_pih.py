@@ -85,16 +85,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
-import signal
 import sys
 import time
 
-# Stop() on the way out of anything, including Ctrl-C.
-_ROBOT = None
-_STOPPED = False
+import rdk_common as rc
 
+_SCRIPT = "rdk_primitive_pih.py"
+
+# Stop() on the way out of anything, including Ctrl-C.
 # primitive_states() key aliases: the v3.11 SearchHole page lists the state as
 # "pushDis" in its table and "pushDistance" in its default transition
 # condition. Accept either rather than guessing which the controller uses.
@@ -102,117 +101,6 @@ _KEY_ALIASES = {
     "pushDis": ("pushDis", "pushDistance"),
     "pushDistance": ("pushDistance", "pushDis"),
 }
-
-
-# operational_status() values and what to do about them. Text is from the RDK
-# 1.9.3 headers (data.hpp): "Except for the first two, the other enumerators
-# indicate the cause of the robot being not ready to operate." Note that plain
-# Auto mode is listed as a blocking cause -- RDK needs Auto (Remote), not Auto.
-_STATUS_ADVICE = {
-    "READY": None,
-    "NOT_ENABLED": "call Enable() — this script does that",
-    "BOOTING": "controller still booting, wait and retry",
-    "RELEASING_BRAKE": "brake release in progress, wait",
-    "ESTOP_NOT_RELEASED": "release the E-stop",
-    "MINOR_FAULT": "ClearFault() — this script tries that",
-    "CRITICAL_FAULT": "clear the fault in Flexiv Elements; check its event log",
-    "IN_REDUCED_STATE": "robot is in reduced state; clear the reduced-speed "
-                        "condition in Elements",
-    "IN_RECOVERY_STATE": "robot is in recovery state; run recovery in Elements "
-                         "to bring joints back inside their limits",
-    "IN_MANUAL_MODE": "switch the robot to Auto (Remote) mode — RDK cannot "
-                      "take control in Manual mode",
-    "IN_AUTO_MODE": "switch from regular Auto to Auto (REMOTE) mode — plain "
-                    "Auto is not enough for RDK",
-}
-# Statuses that no amount of waiting will resolve: they need a person to change
-# something on the robot, so fail fast rather than burn --enable-timeout.
-_BLOCKING_STATUSES = (
-    "IN_MANUAL_MODE", "IN_AUTO_MODE", "ESTOP_NOT_RELEASED", "CRITICAL_FAULT",
-    "IN_RECOVERY_STATE",
-)
-
-
-def _event_key(event):
-    """Identity for one controller event. RobotEvent.id is an error code, not
-    unique, so pair it with the timestamp and text."""
-    return (repr(getattr(event, "timestamp", None)),
-            getattr(event, "id", None),
-            getattr(event, "description", ""))
-
-
-def _event_keys(robot):
-    try:
-        return {_event_key(e) for e in robot.event_log()}
-    except Exception:  # noqa: BLE001
-        return set()
-
-
-def _print_new_events(robot, before, only_bad=True):
-    """Print controller events that appeared since the `before` snapshot.
-
-    The controller reports things RDK's Python calls do not raise on -- an
-    unlicensed primitive is logged as event 303009 and ExecutePrimitive
-    returns normally -- so this is the only way to see why nothing happened.
-    """
-    try:
-        events = robot.event_log()
-    except Exception as exc:  # noqa: BLE001
-        print(f"[events] event_log() unavailable: {exc}")
-        return []
-    new = [e for e in events if _event_key(e) not in before]
-    bad_levels = ("ERROR", "CRITICAL")
-    shown = [e for e in new
-             if not only_bad
-             or str(getattr(e, "level", "")).rsplit(".", 1)[-1] in bad_levels]
-    for e in shown:
-        level = str(getattr(e, "level", "?")).rsplit(".", 1)[-1]
-        print(f"[events] {level} [{getattr(e, 'id', '?')}] "
-              f"{getattr(e, 'description', '')}")
-        for field in ("probable_causes", "recommended_actions"):
-            text = getattr(e, field, "")
-            if text:
-                print(f"           {field}: {text}")
-    return shown
-
-
-def _status_name(robot) -> str:
-    return str(robot.operational_status()).rsplit(".", 1)[-1]
-
-
-def _stop_robot(reason: str) -> None:
-    global _STOPPED
-    if _ROBOT is None or _STOPPED:
-        return
-    _STOPPED = True
-    print(f"\n[safety] Stop() — {reason}", flush=True)
-    try:
-        _ROBOT.Stop()
-    except Exception as exc:  # noqa: BLE001
-        # Stop() switches mode, which the controller refuses when the robot was
-        # never operational (e.g. still in Manual mode). Harmless: there is
-        # nothing to stop.
-        print(f"[safety] Stop() declined ({exc}) — nothing was moving",
-              flush=True)
-
-
-def _on_sigint(_signum, _frame):
-    _stop_robot("SIGINT")
-    sys.exit(130)
-
-
-def _fmt(vals, prec=2):
-    try:
-        return "[" + " ".join(f"{float(v):7.{prec}f}" for v in vals) + "]"
-    except TypeError:
-        return repr(vals)
-
-
-def _norm3(vals):
-    try:
-        return math.sqrt(sum(float(v) ** 2 for v in list(vals)[:3]))
-    except (TypeError, ValueError):
-        return float("nan")
 
 
 def _wrench(robot, bias=None):
@@ -230,65 +118,11 @@ def _state(states: dict, key: str, default=None):
     return default
 
 
-# ── connect / enable ─────────────────────────────────────────────────────────
-def connect(sn: str):
-    global _ROBOT
-    import flexivrdk
-
-    print(f"flexivrdk {getattr(flexivrdk, '__version__', '?')} at {flexivrdk.__file__}")
-    print(f"Connecting Robot({sn!r})")
-    _ROBOT = flexivrdk.Robot(sn)
-    return flexivrdk, _ROBOT
-
-
 def enable_for_primitives(robot, rdk, lock_waist: bool, enable_timeout: float):
-    """Clear fault, enable, lock external axes, switch to primitive execution."""
-    if robot.fault():
-        print("fault set — ClearFault()")
-        if not robot.ClearFault():
-            raise RuntimeError("ClearFault() failed; clear it in Elements first")
-
-    # Check the blocking statuses before Enable(), so a robot in Manual mode
-    # fails in a second with the remedy instead of silently waiting out
-    # --enable-timeout.
-    status = _status_name(robot)
-    if status in _BLOCKING_STATUSES:
-        raise RuntimeError(
-            f"robot is {status} and Enable() cannot change that — "
-            f"{_STATUS_ADVICE.get(status, 'see Flexiv Elements')}"
-        )
-
-    print(f"status {status} — Enable()")
-    robot.Enable()
-    deadline = time.monotonic() + enable_timeout
-    last_report = 0.0
-    while not robot.operational():
-        status = _status_name(robot)
-        if status in _BLOCKING_STATUSES:
-            raise RuntimeError(
-                f"robot became {status} while enabling — "
-                f"{_STATUS_ADVICE.get(status, 'see Flexiv Elements')}"
-            )
-        waited = time.monotonic() - (deadline - enable_timeout)
-        if waited - last_report >= 2.0:
-            last_report = waited
-            print(f"  waiting for operational: {status} ({waited:.0f}s)",
-                  flush=True)
-        if time.monotonic() >= deadline:
-            raise TimeoutError(
-                f"not operational after {enable_timeout:.0f}s (status "
-                f"{status}: {_STATUS_ADVICE.get(status, 'unknown cause')})"
-            )
-        time.sleep(0.5)
-    print("operational")
-
-    # LockExternalAxes requires IDLE, so it has to happen before SwitchMode.
+    """Enable, lock the waist, and switch to primitive execution."""
+    rc.enable(robot, enable_timeout)
     # Locked by default: nothing here should be driving the waist.
-    ext_dof = int(getattr(robot.info(), "DoF_e", 0) or 0)
-    if ext_dof > 0:
-        robot.LockExternalAxes(bool(lock_waist))
-        print(f"external axes ({ext_dof}) {'LOCKED' if lock_waist else 'unlocked'}")
-
+    rc.lock_external_axes(robot, lock_waist)
     robot.SwitchMode(rdk.Mode.NRT_PRIMITIVE_EXECUTION)
     print(f"mode: {robot.mode()}")
 
@@ -307,7 +141,7 @@ def start_primitive(robot, name, params, expect_keys, start_timeout=2.0):
     print("=" * 72)
     print(f"ExecutePrimitive({name!r}, {params!r})")
     print("=" * 72)
-    before = _event_keys(robot)
+    before = rc.event_keys(robot)
     robot.ExecutePrimitive(name, params)
 
     deadline = time.monotonic() + start_timeout
@@ -318,7 +152,7 @@ def start_primitive(robot, name, params, expect_keys, start_timeout=2.0):
             return states
         time.sleep(0.05)
 
-    bad = _print_new_events(robot, before)
+    bad = rc.print_new_events(robot, before)
     unlicensed = any("unlicensed" in getattr(e, "description", "").lower()
                      for e in bad)
     detail = (f"primitive {name!r} is not licensed on this robot"
@@ -350,7 +184,7 @@ def run_primitive(robot, name, params, done_keys, max_seconds, bias=None,
 
         w = _wrench(robot, bias)
         shown = {k: states[k] for k in sorted(states) if k not in ("timePeriod",)}
-        print(f"t={elapsed:5.1f}s |F|={_norm3(w):6.2f}N {_fmt(w)}  {shown}",
+        print(f"t={elapsed:5.1f}s |F|={rc.norm3(w):6.2f}N {rc.fmt(w)}  {shown}",
               flush=True)
 
         for entry in done_keys:
@@ -365,10 +199,10 @@ def run_primitive(robot, name, params, done_keys, max_seconds, bias=None,
                 return states
 
         if robot.fault():
-            _stop_robot(f"fault raised during {name}")
+            rc.stop_robot(f"fault raised during {name}")
             raise RuntimeError(f"{name}: robot faulted — check Elements event log")
         if elapsed >= max_seconds:
-            _stop_robot(f"{name} exceeded --max-seconds")
+            rc.stop_robot(f"{name} exceeded --max-seconds")
             raise TimeoutError(
                 f"{name}: none of {done_keys} became true in {max_seconds:.0f}s; "
                 f"last states: {states}"
@@ -387,12 +221,12 @@ def stage_check(args, rdk, robot):
     for field in ("serial_num", "model_name", "software_ver", "license_type",
                   "DoF", "DoF_m", "DoF_e", "has_FT_sensor"):
         print(f"  {field:16s} {getattr(info, field, '<absent>')}")
-    print(f"  {'K_x_nom':16s} {_fmt(info.K_x_nom, 1)}")
+    print(f"  {'K_x_nom':16s} {rc.fmt(info.K_x_nom, 1)}")
     print(f"  {'mode':16s} {robot.mode()}")
-    status = _status_name(robot)
+    status = rc.status_name(robot)
     print(f"  {'operational':16s} {robot.operational()}  status={status}")
     print(f"  {'fault':16s} {robot.fault()}")
-    advice = _STATUS_ADVICE.get(status, "unrecognised status")
+    advice = rc.STATUS_ADVICE.get(status, "unrecognised status")
     if advice:
         print()
         print(f"  NOT READY FOR RDK CONTROL — {status}")
@@ -401,42 +235,30 @@ def stage_check(args, rdk, robot):
         print("  or NOT_ENABLED.")
 
     st = robot.states()
-    print(f"  {'tcp_pose':16s} {_fmt(st.tcp_pose, 4)}")
-    print(f"  {'q (rad)':16s} {_fmt(st.q, 4)}")
+    print(f"  {'tcp_pose':16s} {rc.fmt(st.tcp_pose, 4)}")
+    print(f"  {'q (rad)':16s} {rc.fmt(st.q, 4)}")
 
     print()
     print(f"Resting wrench over {args.seconds:.0f}s — DO NOT TOUCH THE ARM")
-    mean, peak = _sample_wrench(robot, args.seconds)
-    print(f"  mean {_fmt(mean)}  |F|={_norm3(mean):.2f} N")
+    mean, peak = rc.resting_wrench(robot, args.seconds)
+    print(f"  mean {rc.fmt(mean)}  |F|={rc.norm3(mean):.2f} N")
     print(f"  peak |F| {peak:.2f} N")
     print()
-    if _norm3(mean) > 3.0:
-        print(f"  {_norm3(mean):.1f} N of force the arm is not feeling. Declare the")
+    if rc.norm3(mean) > 3.0:
+        print(f"  {rc.norm3(mean):.1f} N of force the arm is not feeling. Declare the")
         print("  tool/payload in Flexiv Elements before trusting any force")
         print("  threshold in a primitive. See THE BIAS PROBLEM in this file.")
     else:
         print("  Resting wrench is small — gravity compensation looks right.")
 
 
-def _sample_wrench(robot, seconds):
-    n, acc, peak = 0, [0.0] * 6, 0.0
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < seconds:
-        w = _wrench(robot)
-        acc = [a + b for a, b in zip(acc, w)]
-        peak = max(peak, _norm3(w))
-        n += 1
-        time.sleep(0.002)
-    return ([a / max(n, 1) for a in acc], peak)
-
-
 def stage_bias(args, rdk, robot):
     """No motion, no enable. Measure and store the resting wrench."""
     print(f"\nMeasuring resting wrench for {args.seconds:.0f}s — "
           "DO NOT TOUCH THE ARM")
-    mean, peak = _sample_wrench(robot, args.seconds)
-    print(f"  mean {_fmt(mean, 3)}")
-    print(f"  |F| mean {_norm3(mean):.3f} N   peak {peak:.3f} N")
+    mean, peak = rc.resting_wrench(robot, args.seconds)
+    print(f"  mean {rc.fmt(mean, 3)}")
+    print(f"  |F| mean {rc.norm3(mean):.3f} N   peak {peak:.3f} N")
     payload = {
         "robot_sn": args.robot_sn,
         "measured_at": time.time(),
@@ -478,8 +300,8 @@ def stage_zero(args, rdk, robot):
         max_seconds=args.max_seconds,
     )
     print("\nResting wrench after zeroing:")
-    mean, _ = _sample_wrench(robot, 3.0)
-    print(f"  mean {_fmt(mean)}  |F|={_norm3(mean):.2f} N")
+    mean, _peak = rc.resting_wrench(robot, 3.0)
+    print(f"  mean {rc.fmt(mean)}  |F|={rc.norm3(mean):.2f} N")
 
 
 def stage_search(args, rdk, robot):
@@ -574,7 +396,7 @@ def stage_insert(args, rdk, robot):
         moving = bool(_state(states, "isMoving", 0))
         saw_motion = saw_motion or moving
         w = _wrench(robot, bias)
-        print(f"t={elapsed:5.1f}s |F|={_norm3(w):6.2f}N insertDis="
+        print(f"t={elapsed:5.1f}s |F|={rc.norm3(w):6.2f}N insertDis="
               f"{_state(states, 'insertDis')} isMoving={moving}", flush=True)
         # isMoving can still read 0 in the first moments while the motion
         # ramps up, so a falling edge is the signal; a 0 that outlasts the
@@ -591,10 +413,10 @@ def stage_insert(args, rdk, robot):
                   f"insertDis={_state(states, 'insertDis')}")
             return states
         if robot.fault():
-            _stop_robot("fault raised during InsertComp")
+            rc.stop_robot("fault raised during InsertComp")
             raise RuntimeError("InsertComp: robot faulted")
         if elapsed >= args.max_seconds:
-            _stop_robot("InsertComp exceeded --max-seconds")
+            rc.stop_robot("InsertComp exceeded --max-seconds")
             raise TimeoutError(f"InsertComp: still running; last {states}")
         time.sleep(0.25)
 
@@ -639,13 +461,13 @@ def stage_probe(args, rdk, robot):
     enable_for_primitives(robot, rdk, args.lock_waist, args.enable_timeout)
     results = {}
     for name, params, expect_keys in _PROBE_PRIMITIVES:
-        before = _event_keys(robot)
+        before = rc.event_keys(robot)
         print(f"\n--- probing {name}")
         try:
             robot.ExecutePrimitive(name, params, False)
         except Exception as exc:  # noqa: BLE001
             results[name] = f"rejected by RDK: {exc}"
-            _print_new_events(robot, before)
+            rc.print_new_events(robot, before)
             continue
         # Give the controller a moment to load and log, then stop regardless.
         started = False
@@ -659,7 +481,7 @@ def stage_probe(args, rdk, robot):
                 break
             time.sleep(0.02)
         robot.Stop()
-        bad = _print_new_events(robot, before)
+        bad = rc.print_new_events(robot, before)
         if any("unlicensed" in getattr(e, "description", "").lower()
                for e in bad):
             results[name] = "UNLICENSED"
@@ -698,7 +520,7 @@ def _load_bias(args):
     except (OSError, KeyError, ValueError) as exc:
         print(f"[bias] ignoring {args.bias_file}: {exc}")
         return None
-    print(f"[bias] subtracting {_fmt(bias)} from printed wrenches only — "
+    print(f"[bias] subtracting {rc.fmt(bias)} from printed wrenches only — "
           "the controller still uses its own uncorrected estimate")
     return bias
 
@@ -795,32 +617,25 @@ def build_parser():
 
 def main():
     args = build_parser().parse_args()
-    signal.signal(signal.SIGINT, _on_sigint)
+    rc.install_sigint_handler()
 
-    if args.stage in _MOVING_STAGES and not args.yes_move:
-        print(f"Stage {args.stage!r} enables the arm and can move it.")
-        print("Re-run with --yes-move once the E-stop is in your hand, the arm")
-        print("has clearance, and you have read THE BIAS PROBLEM in this file:")
-        print()
-        print(f"  python3 {os.path.basename(sys.argv[0])} {args.robot_sn} "
-              f"{args.stage} --yes-move")
-        print()
-        print("Argument values this stage would use:")
-        for k, v in sorted(vars(args).items()):
-            if k not in ("robot_sn", "stage", "yes_move"):
-                print(f"  {k:22s} {v}")
+    if args.stage in _MOVING_STAGES and not rc.gate_move(
+        args, _SCRIPT,
+        warning_lines=("Read THE BIAS PROBLEM at the top of this file first.",),
+    ):
         return 0
 
-    rdk, robot = connect(args.robot_sn)
+    rdk, robot = rc.connect(args.robot_sn)
     try:
         _STAGES[args.stage](args, rdk, robot)
+    except SystemExit:
+        raise
     except Exception as exc:  # noqa: BLE001
-        _stop_robot(f"{type(exc).__name__}: {exc}")
+        rc.stop_robot(f"{type(exc).__name__}: {exc}")
         print(f"\nFAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
     finally:
-        if args.stage in _MOVING_STAGES:
-            _stop_robot("stage finished")
+        rc.stop_robot("stage finished")
     print("\nDone.")
     return 0
 

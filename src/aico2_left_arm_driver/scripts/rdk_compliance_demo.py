@@ -64,96 +64,12 @@ from __future__ import annotations
 
 import argparse
 import math
-import signal
 import sys
 import time
 
-_ROBOT = None
-_STOPPED = False
+import rdk_common as rc
 
-# Blocking operational_status() values, same set and reasons as
-# rdk_primitive_pih.py: these need a person, not a wait.
-_BLOCKING_STATUSES = {
-    "IN_MANUAL_MODE": "switch the robot to Auto (Remote) mode",
-    "IN_AUTO_MODE": "switch from regular Auto to Auto (REMOTE) mode",
-    "ESTOP_NOT_RELEASED": "release the E-stop",
-    "CRITICAL_FAULT": "clear the fault in Flexiv Elements",
-    "IN_RECOVERY_STATE": "run recovery in Elements",
-}
-
-
-def _stop_robot(reason: str) -> None:
-    global _STOPPED
-    if _ROBOT is None or _STOPPED:
-        return
-    _STOPPED = True
-    print(f"\n[safety] Stop() — {reason}", flush=True)
-    try:
-        _ROBOT.Stop()
-    except Exception as exc:  # noqa: BLE001
-        print(f"[safety] Stop() declined ({exc}) — nothing was moving")
-
-
-def _on_sigint(_signum, _frame):
-    _stop_robot("SIGINT")
-    sys.exit(130)
-
-
-def _fmt(vals, prec=2):
-    return "[" + " ".join(f"{float(v):7.{prec}f}" for v in vals) + "]"
-
-
-def _norm3(vals):
-    return math.sqrt(sum(float(v) ** 2 for v in list(vals)[:3]))
-
-
-def _status_name(robot):
-    return str(robot.operational_status()).rsplit(".", 1)[-1]
-
-
-def _resting_wrench(robot, seconds=3.0):
-    n, acc = 0, [0.0] * 6
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < seconds:
-        w = robot.states().ext_wrench_in_tcp
-        acc = [a + float(b) for a, b in zip(acc, w)]
-        n += 1
-        time.sleep(0.002)
-    return [a / max(n, 1) for a in acc]
-
-
-def connect_and_enable(sn, enable_timeout):
-    global _ROBOT
-    import flexivrdk
-
-    print(f"flexivrdk {getattr(flexivrdk, '__version__', '?')}")
-    print(f"Connecting Robot({sn!r})")
-    _ROBOT = robot = flexivrdk.Robot(sn)
-
-    if robot.fault():
-        print("fault set — ClearFault()")
-        if not robot.ClearFault():
-            raise RuntimeError("ClearFault() failed")
-
-    status = _status_name(robot)
-    if status in _BLOCKING_STATUSES:
-        raise RuntimeError(f"robot is {status} — {_BLOCKING_STATUSES[status]}")
-
-    print(f"status {status} — Enable()")
-    robot.Enable()
-    deadline = time.monotonic() + enable_timeout
-    while not robot.operational():
-        status = _status_name(robot)
-        if status in _BLOCKING_STATUSES:
-            raise RuntimeError(
-                f"robot became {status} — {_BLOCKING_STATUSES[status]}")
-        if time.monotonic() >= deadline:
-            raise TimeoutError(f"not operational after {enable_timeout:.0f}s "
-                               f"(status {status})")
-        time.sleep(0.5)
-    print("operational")
-    return flexivrdk, robot
-
+_SCRIPT = "rdk_compliance_demo.py"
 
 def check_sag(robot, target_K, max_sag, flag="--stiffness"):
     """Refuse a stiffness that turns the resting force bias into a big droop.
@@ -163,11 +79,11 @@ def check_sag(robot, target_K, max_sag, flag="--stiffness"):
     softer we go the further it sags.
     """
     print(f"\nMeasuring resting wrench (3s) — DO NOT TOUCH THE ARM")
-    bias = _resting_wrench(robot)
-    f_bias = _norm3(bias)
+    bias = rc.resting_wrench(robot)[0]
+    f_bias = rc.norm3(bias)
     k_min = min(float(k) for k in target_K[:3])
     sag = f_bias / k_min if k_min > 0 else float("inf")
-    print(f"  resting |F| {f_bias:.2f} N {_fmt(bias)}")
+    print(f"  resting |F| {f_bias:.2f} N {rc.fmt(bias)}")
     print(f"  softest translational stiffness {k_min:.0f} N/m")
     print(f"  predicted steady-state sag {sag * 1000:.0f} mm "
           f"({f_bias:.1f} N / {k_min:.0f} N/m)")
@@ -186,9 +102,9 @@ def enter_cartesian(rdk, robot, soft_clamp):
     robot.SwitchMode(rdk.Mode.NRT_CARTESIAN_MOTION_FORCE)
     print(f"mode: {robot.mode()}")
     init_pose = [float(x) for x in robot.states().tcp_pose]
-    print(f"init TCP pose {_fmt(init_pose, 4)}")
+    print(f"init TCP pose {rc.fmt(init_pose, 4)}")
     robot.SetMaxContactWrench(soft_clamp)
-    print(f"max contact wrench clamped to {_fmt(soft_clamp, 1)}")
+    print(f"max contact wrench clamped to {rc.fmt(soft_clamp, 1)}")
     # Hold the elbow where it is: with 7 joints for a 6-DOF task the null space
     # drifts otherwise. q is length 9 here (2 waist + 7 arm), so slice the arm.
     q = [float(x) for x in robot.states().q]
@@ -221,7 +137,7 @@ def ramp_stiffness(robot, nominal_K, target_K, ramp_sec, init_pose, rate):
         if frac >= 1.0:
             break
         time.sleep(period)
-    print(f"stiffness now {_fmt(target_K, 0)}")
+    print(f"stiffness now {rc.fmt(target_K, 0)}")
 
 
 def stream(robot, init_pose, wrench, seconds, rate, banner):
@@ -243,7 +159,7 @@ def stream(robot, init_pose, wrench, seconds, rate, banner):
         pose = [float(x) for x in st.tcp_pose]
         dev = math.sqrt(sum((a - b) ** 2 for a, b in zip(pose[:3],
                                                          init_pose[:3])))
-        f = _norm3(st.ext_wrench_in_tcp)
+        f = rc.norm3(st.ext_wrench_in_tcp)
         peak_dev = max(peak_dev, dev)
         peak_f = max(peak_f, f)
         now = time.monotonic() - t0
@@ -259,8 +175,8 @@ def stream(robot, init_pose, wrench, seconds, rate, banner):
 def stage_soft(args, rdk, robot):
     nominal_K = [float(x) for x in robot.info().K_x_nom]
     target_K = [args.stiffness] * 3 + [args.rot_stiffness] * 3
-    print(f"\nnominal stiffness {_fmt(nominal_K, 0)}")
-    print(f"target  stiffness {_fmt(target_K, 0)}")
+    print(f"\nnominal stiffness {rc.fmt(nominal_K, 0)}")
+    print(f"target  stiffness {rc.fmt(target_K, 0)}")
     check_sag(robot, target_K, args.max_sag)
 
     init_pose = enter_cartesian(rdk, robot, args.max_contact_wrench)
@@ -396,7 +312,7 @@ def main():
             "`soft` needs no such flag: it commands no force, so the bias only "
             "sags it."
         )
-    signal.signal(signal.SIGINT, _on_sigint)
+    rc.install_sigint_handler()
 
     if not args.yes_move:
         print(f"Stage {args.stage!r} enables the arm and makes it compliant —")
@@ -411,16 +327,17 @@ def main():
         return 0
 
     try:
-        rdk, robot = connect_and_enable(args.robot_sn, args.enable_timeout)
+        rdk, robot = rc.connect(args.robot_sn)
+        rc.enable(robot, args.enable_timeout)
         _STAGES[args.stage](args, rdk, robot)
     except SystemExit:
         raise
     except Exception as exc:  # noqa: BLE001
-        _stop_robot(f"{type(exc).__name__}: {exc}")
+        rc.stop_robot(f"{type(exc).__name__}: {exc}")
         print(f"\nFAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
     finally:
-        _stop_robot("stage finished")
+        rc.stop_robot("stage finished")
     print("\nDone.")
     return 0
 
