@@ -48,7 +48,7 @@ def _iqr(values: Sequence[float]) -> float:
 def estimate_offset(
     states_fn: Callable[[], object],
     n: int = 200,
-    max_polls: Optional[int] = None,
+    timeout_sec: float = 5.0,
     timestamp_attr: str = "timestamp",
     monotonic_fn: Callable[[], float] = time.monotonic,
     wall_fn: Callable[[], float] = time.time,
@@ -63,15 +63,25 @@ def estimate_offset(
     against the 1 kHz device stream, so it folds in up to 1 ms of phase
     quantisation. This is the "do it properly" version described in sec 6.
 
+    Bounded by wall-clock time, not a poll count: how many polls it takes to
+    gather n transitions depends on the execution context. Confirmed on real
+    hardware 2026-09-18: a bare single-threaded script reached ~800k polls/s,
+    but the same loop running inside a live rclpy LifecycleNode (logging,
+    threading, executor overhead) only reached ~700k polls/s — enough to
+    make an earlier poll-COUNT cap (n*500) fall short by 15-25% every time,
+    even though the device itself streamed fine throughout. n=200 at 1 kHz
+    needs >=200ms; the 5 s default leaves generous headroom for a slower
+    context without ever meaningfully delaying a real failure.
+
     monotonic_fn/wall_fn are injected so this is testable with a fake clock;
     in production they default to time.monotonic/time.time.
     """
     if n <= 0:
         raise ValueError("n must be positive")
-    limit = max_polls if max_polls is not None else n * 500
 
     mono0 = monotonic_fn()
     wall0 = wall_fn()
+    deadline = mono0 + timeout_sec
 
     def host_time_at(t_mono: float) -> float:
         return wall0 + (t_mono - mono0)
@@ -80,10 +90,10 @@ def estimate_offset(
     prev_ts: Optional[RawTimestamp] = None
     polls = 0
     while len(samples) < n:
-        if polls >= limit:
+        if monotonic_fn() >= deadline:
             raise RuntimeError(
                 f"only {len(samples)}/{n} timestamp transitions seen in "
-                f"{polls} polls; device may not be streaming"
+                f"{timeout_sec}s ({polls} polls); device may not be streaming"
             )
         polls += 1
         t0 = monotonic_fn()
@@ -131,12 +141,14 @@ class OffsetTracker:
         refresh_sec: float = 300.0,
         slew_limit_sec: float = 0.001,
         n_samples: int = 200,
+        estimate_timeout_sec: float = 5.0,
         clock_fn: Callable[[], float] = time.monotonic,
     ) -> None:
         self._states_fn = states_fn
         self._refresh_sec = refresh_sec
         self._slew_limit = slew_limit_sec
         self._n_samples = n_samples
+        self._estimate_timeout_sec = estimate_timeout_sec
         self._clock_fn = clock_fn
         self._offset_sec = 0.0
         self._spread_sec = 0.0
@@ -160,7 +172,9 @@ class OffsetTracker:
         )
 
     def refresh(self) -> OffsetEstimate:
-        estimate = estimate_offset(self._states_fn, n=self._n_samples)
+        estimate = estimate_offset(
+            self._states_fn, n=self._n_samples, timeout_sec=self._estimate_timeout_sec
+        )
         self.apply_estimate(estimate)
         return estimate
 
