@@ -12,11 +12,18 @@ Usage:
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, EmitEvent, TimerAction
+from launch.actions import (
+    DeclareLaunchArgument,
+    EmitEvent,
+    RegisterEventHandler,
+    TimerAction,
+)
 from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessStart
 from launch.events import matches_action
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import LifecycleNode, Node
+from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
 from launch_ros.substitutions import FindPackageShare
 from lifecycle_msgs.msg import Transition
@@ -27,35 +34,63 @@ RIGHT_JOINTS = [f"Right_joint{i}" for i in range(1, 8)]
 LEFT_SN = "Rizon4-063352"
 RIGHT_SN = "Rizon4R-062077"
 
+# Grace period between a driver process spawning and its lifecycle service
+# being discoverable. Blind wall-clock timers from launch start are not
+# enough: on 2026-09-18 the left arm missed a CONFIGURE emitted 1.0s after
+# launch (its service wasn't up yet), then died when ACTIVATE arrived 2s
+# later against a still-unconfigured state machine. Timed from each
+# process's own start instead, and ACTIVATE now waits for configure to
+# actually succeed rather than guessing how long it takes.
+_SERVICE_GRACE_SEC = 2.0
 
-def _lifecycle_timers(driver, configure_sec: float, activate_sec: float):
-    """Timer actions that configure then activate a lifecycle node.
 
-    A node whose own condition kept it from launching simply matches nothing
-    here, so these stay harmless for the optional waist driver.
+def _lifecycle_startup(driver, connect_delay_sec: float = 0.0):
+    """Configure a lifecycle node once it is up, then activate it once
+    configure has actually succeeded.
+
+    connect_delay_sec staggers CONFIGURE across drivers — that transition is
+    where the blocking flexivrdk connect happens (~1.35s measured), so
+    spreading it avoids several simultaneous connects to the controllers.
+
+    A node whose own condition kept it from launching never emits
+    OnProcessStart, so these handlers stay harmless for the optional waist
+    driver.
     """
     return [
-        TimerAction(
-            period=configure_sec,
-            actions=[
-                EmitEvent(
-                    event=ChangeState(
-                        lifecycle_node_matcher=matches_action(driver),
-                        transition_id=Transition.TRANSITION_CONFIGURE,
+        RegisterEventHandler(
+            OnProcessStart(
+                target_action=driver,
+                on_start=[
+                    TimerAction(
+                        period=_SERVICE_GRACE_SEC + connect_delay_sec,
+                        actions=[
+                            EmitEvent(
+                                event=ChangeState(
+                                    lifecycle_node_matcher=matches_action(driver),
+                                    transition_id=Transition.TRANSITION_CONFIGURE,
+                                )
+                            )
+                        ],
                     )
-                )
-            ],
+                ],
+            )
         ),
-        TimerAction(
-            period=activate_sec,
-            actions=[
-                EmitEvent(
-                    event=ChangeState(
-                        lifecycle_node_matcher=matches_action(driver),
-                        transition_id=Transition.TRANSITION_ACTIVATE,
+        RegisterEventHandler(
+            OnStateTransition(
+                target_lifecycle_node=driver,
+                # start_state pins this to a successful configure, so a later
+                # deactivate (active -> inactive) does not silently re-activate.
+                start_state="configuring",
+                goal_state="inactive",
+                entities=[
+                    EmitEvent(
+                        event=ChangeState(
+                            lifecycle_node_matcher=matches_action(driver),
+                            transition_id=Transition.TRANSITION_ACTIVATE,
+                        )
                     )
-                )
-            ],
+                ],
+            )
         ),
     ]
 
@@ -147,11 +182,13 @@ def generate_launch_description():
             left_driver,
             right_driver,
             waist_driver,
-            *_lifecycle_timers(left_driver, 1.0, 3.0),
-            *_lifecycle_timers(right_driver, 1.0, 4.0),
-            # Waist configures after the left arm it reads from — no hard
-            # dependency, just avoiding a burst of simultaneous RDK connects.
-            *_lifecycle_timers(waist_driver, 3.5, 5.0),
+            # Staggered so the blocking RDK connects in each CONFIGURE do not
+            # overlap; each ACTIVATE then follows its own successful configure.
+            *_lifecycle_startup(left_driver),
+            *_lifecycle_startup(right_driver, connect_delay_sec=1.5),
+            # Waist reads the left arm's controller — no hard ordering
+            # dependency, it just goes last.
+            *_lifecycle_startup(waist_driver, connect_delay_sec=3.0),
             Node(
                 package="flexiv_amr_driver",
                 executable="joint_state_merger",
