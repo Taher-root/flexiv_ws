@@ -1,0 +1,746 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot name="AICO2-Rizon4">
+  <link name="base_link">
+    <inertial>
+      <origin xyz="-0.0099502 0.00064386 -0.49963" rpy="0 0 0" />
+      <mass value="13.521" />
+      <inertia ixx="0.47728" ixy="0.0012371" ixz="-0.00011149" iyy="0.32888" iyz="0.00067751" izz="0.61335" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/AGV_Base.obj" />
+      </geometry>
+      <material name="">
+        <color rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/AGV_Base.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="AGV_Yaw">
+    <inertial>
+      <origin xyz="-0.0043303 0.00048946 -0.23272" rpy="0 0 0" />
+      <mass value="3.8856" />
+      <inertia ixx="0.19395" ixy="1.4769E-05" ixz="0.0044155" iyy="0.17521" iyz="-2.95E-05" izz="0.11685" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/AGV_Yaw.obj" />
+      </geometry>
+      <material name="">
+        <color rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/AGV_Yaw.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="AGV_Pitch">
+    <inertial>
+      <origin xyz="0.0019792 0.0035444 0.23693" rpy="0 0 0" />
+      <mass value="4.6518" />
+      <inertia ixx="0.20401" ixy="2.4575E-07" ixz="-0.0056035" iyy="0.15677" iyz="3.3212E-05" izz="0.10979" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/AGV_Pitch.obj" />
+      </geometry>
+      <material name="">
+        <color rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/AGV_Pitch.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Left_link0">
+    <inertial>
+      <mass value="3.8" />
+      <origin rpy="0.00010729 -0.0008979 0.067633" xyz="0.0 -0.0 0.09" />
+      <inertia ixx="0.02" ixy="0.0" ixz="0.0" iyy="0.02" iyz="0.0" izz="0.01" />
+    </inertial>
+    <visual name="shell">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/link0.obj" />
+      </geometry>
+    </visual>
+    <collision name="convex_mesh">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link0.stl" />
+      </geometry>
+    </collision>
+    <workspace>
+      <origin rpy="0 0 0" xyz="0 0 0.365" />
+      <geometry>
+        <sphere radius="0.890" />
+      </geometry>
+    </workspace>
+  </link>
+  <link name="Left_link1">
+    <inertial>
+      <mass value="3.6" />
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.15" />
+      <inertia ixx="0.03" ixy="0.0" ixz="0.0" iyy="0.03" iyz="0.0" izz="0.01" />
+    </inertial>
+    <visual name="shell">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/link1.obj" />
+      </geometry>
+    </visual>
+    <visual name="ring">
+      <origin rpy="0 0 0" xyz="0 0 -0.0025" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/ring.obj" scale="0.062 0.062 0.002" />
+      </geometry>
+    </visual>
+    <collision name="convex_mesh">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link1.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Left_link2">
+    <inertial>
+      <mass value="2.7" />
+      <origin rpy="0 0 0" xyz="-0.0 0.04 0.1" />
+      <inertia ixx="0.02" ixy="0.0" ixz="0.0" iyy="0.02" iyz="-0.0" izz="0.0" />
+    </inertial>
+    <visual name="shell">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/link2.obj" />
+      </geometry>
+    </visual>
+    <visual name="ring">
+      <origin rpy="1.5707963 0 0" xyz="0 -0.0025 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/ring.obj" scale="0.062 0.062 0.002" />
+      </geometry>
+    </visual>
+    <collision name="convex_mesh">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link2.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Left_link3">
+    <inertial>
+      <mass value="2.4" />
+      <origin rpy="0 0 0" xyz="-0.01 -0.0 0.14" />
+      <inertia ixx="0.01" ixy="0.0" ixz="-0.0" iyy="0.01" iyz="-0.0" izz="0.0" />
+    </inertial>
+    <visual name="shell">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/link3.obj" />
+      </geometry>
+    </visual>
+    <visual name="ring">
+      <origin rpy="0 0 0" xyz="0 0 -0.0025" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/ring.obj" scale="0.051 0.051 0.002" />
+      </geometry>
+    </visual>
+    <collision name="convex_mesh">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link3.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Left_link4">
+    <inertial>
+      <mass value="2.4" />
+      <origin rpy="0 0 0" xyz="-0.01 0.03 0.1" />
+      <inertia ixx="0.02" ixy="0.0" ixz="-0.0" iyy="0.02" iyz="-0.0" izz="0.0" />
+    </inertial>
+    <visual name="shell">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/link4.obj" />
+      </geometry>
+    </visual>
+    <visual name="ring">
+      <origin rpy="1.5707963 0 0" xyz="0 -0.0025 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/ring.obj" scale="0.051 0.051 0.002" />
+      </geometry>
+    </visual>
+    <collision name="convex_mesh">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link4.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Left_link5">
+    <inertial>
+      <mass value="2.3" />
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.14" />
+      <inertia ixx="0.01" ixy="0.0" ixz="0.0" iyy="0.01" iyz="0.0" izz="0.0" />
+    </inertial>
+    <visual name="shell">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/link5.obj" />
+      </geometry>
+    </visual>
+    <visual name="ring">
+      <origin rpy="0 0 0" xyz="0 0 -0.0025" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/ring.obj" scale="0.051 0.051 0.002" />
+      </geometry>
+    </visual>
+    <collision name="convex_mesh">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link5.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Left_link6">
+    <inertial>
+      <mass value="2.2" />
+      <origin rpy="0 0 0" xyz="0.02 0.06 0.07" />
+      <inertia ixx="0.01" ixy="0.0" ixz="0.0" iyy="0.01" iyz="0.0" izz="0.0" />
+    </inertial>
+    <visual name="shell">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/link6.obj" />
+      </geometry>
+    </visual>
+    <visual name="ring">
+      <origin rpy="1.5707963 0 0" xyz="0 -0.0025 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/ring.obj" scale="0.051 0.051 0.002" />
+      </geometry>
+    </visual>
+    <collision name="convex_mesh">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link6.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Left_link7">
+    <inertial>
+      <mass value="0.8" />
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.03" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+    <visual name="shell">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/link7.obj" />
+      </geometry>
+    </visual>
+    <visual name="ring">
+      <origin rpy="0 0 0" xyz="0 0 -0.0025" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/ring.obj" scale="0.051 0.051 0.002" />
+      </geometry>
+    </visual>
+    <collision name="convex_mesh">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link7.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Left_flange">
+    <inertial>
+      <mass value="0.0" />
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.0" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+  </link>
+  <link name="Right_link0">
+    <inertial>
+      <mass value="3.7" />
+      <origin rpy="0 0.035 0.298" xyz="1.5708 0 0" />
+      <inertia ixx="0.02" ixy="0.0" ixz="0.0" iyy="0.02" iyz="-0.0" izz="0.01" />
+    </inertial>
+    <visual name="shell">
+      <origin rpy="0 0 3.141592653589793" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/link0.obj" />
+      </geometry>
+    </visual>
+    <collision name="convex_mesh">
+      <origin rpy="0 0 3.141592653589793" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link0.stl" />
+      </geometry>
+    </collision>
+    <workspace>
+      <origin rpy="0 0 0" xyz="0 0 0.365" />
+      <geometry>
+        <sphere radius="0.890" />
+      </geometry>
+    </workspace>
+  </link>
+  <link name="Right_link1">
+    <inertial>
+      <mass value="3.7" />
+      <origin rpy="0 0 0" xyz="-0.0 0.01 -0.15" />
+      <inertia ixx="0.03" ixy="0.0" ixz="0.0" iyy="0.03" iyz="-0.0" izz="0.01" />
+    </inertial>
+    <visual name="shell">
+      <origin rpy="0 3.141592653589793 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/link1.obj" />
+      </geometry>
+    </visual>
+    <visual name="ring">
+      <origin rpy="0 0 0" xyz="0 0 0.0025" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/ring.obj" scale="0.062 0.062 0.002" />
+      </geometry>
+    </visual>
+    <collision name="convex_mesh">
+      <origin rpy="0 3.141592653589793 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link1.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Right_link2">
+    <inertial>
+      <mass value="2.7" />
+      <origin rpy="0 0 0" xyz="0.0 -0.04 -0.1" />
+      <inertia ixx="0.02" ixy="0.0" ixz="0.0" iyy="0.02" iyz="-0.0" izz="0.0" />
+    </inertial>
+    <visual name="shell">
+      <origin rpy="3.141592653589793 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/link2.obj" />
+      </geometry>
+    </visual>
+    <visual name="ring">
+      <origin rpy="1.5707963 0 0" xyz="0 0.0025 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/ring.obj" scale="0.062 0.062 0.002" />
+      </geometry>
+    </visual>
+    <collision name="convex_mesh">
+      <origin rpy="3.141592653589793 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link2.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Right_link3">
+    <inertial>
+      <mass value="2.4" />
+      <origin rpy="0 0 0" xyz="-0.01 -0.0 -0.13" />
+      <inertia ixx="0.01" ixy="0.0" ixz="0.0" iyy="0.01" iyz="0.0" izz="0.0" />
+    </inertial>
+    <visual name="shell">
+      <origin rpy="0 3.141592653589793 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/link3r.obj" />
+      </geometry>
+    </visual>
+    <visual name="ring">
+      <origin rpy="0 0 0" xyz="0 0 0.0025" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/ring.obj" scale="0.051 0.051 0.002" />
+      </geometry>
+    </visual>
+    <collision name="convex_mesh">
+      <origin rpy="0 3.141592653589793 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link3r.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Right_link4">
+    <inertial>
+      <mass value="2.4" />
+      <origin rpy="0 0 0" xyz="0.01 -0.03 -0.1" />
+      <inertia ixx="0.02" ixy="0.0" ixz="-0.0" iyy="0.02" iyz="-0.0" izz="0.0" />
+    </inertial>
+    <visual name="shell">
+      <origin rpy="3.141592653589793 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/link4r.obj" />
+      </geometry>
+    </visual>
+    <visual name="ring">
+      <origin rpy="1.5707963 0 0" xyz="0 0.0025 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/ring.obj" scale="0.051 0.051 0.002" />
+      </geometry>
+    </visual>
+    <collision name="convex_mesh">
+      <origin rpy="3.141592653589793 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link4r.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Right_link5">
+    <inertial>
+      <mass value="2.4" />
+      <origin rpy="0 0 0" xyz="0.0 0.0 -0.13" />
+      <inertia ixx="0.01" ixy="0.0" ixz="0.0" iyy="0.01" iyz="-0.0" izz="0.0" />
+    </inertial>
+    <visual name="shell">
+      <origin rpy="0 3.141592653589793 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/link5.obj" />
+      </geometry>
+    </visual>
+    <visual name="ring">
+      <origin rpy="0 0 0" xyz="0 0 0.0025" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/ring.obj" scale="0.051 0.051 0.002" />
+      </geometry>
+    </visual>
+    <collision name="convex_mesh">
+      <origin rpy="0 3.141592653589793 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link5.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Right_link6">
+    <inertial>
+      <mass value="2.2" />
+      <origin rpy="0 0 0" xyz="-0.02 -0.06 -0.07" />
+      <inertia ixx="0.01" ixy="0.0" ixz="0.0" iyy="0.01" iyz="0.0" izz="0.0" />
+    </inertial>
+    <visual name="shell">
+      <origin rpy="0 3.141592653589793 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/link6r.obj" />
+      </geometry>
+    </visual>
+    <visual name="ring">
+      <origin rpy="1.5707963 0 0" xyz="0 0.0025 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/ring.obj" scale="0.051 0.051 0.002" />
+      </geometry>
+    </visual>
+    <collision name="convex_mesh">
+      <origin rpy="0 3.141592653589793 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link6r.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Right_link7">
+    <inertial>
+      <mass value="0.8" />
+      <origin rpy="0 0 0" xyz="0.0 -0.0 0.03" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+    <visual name="shell">
+      <origin rpy="3.141592653589793 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/link7.obj" />
+      </geometry>
+    </visual>
+    <visual name="ring">
+      <origin rpy="0 0 0" xyz="0 0 0.0025" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/visual/ring.obj" scale="0.051 0.051 0.002" />
+      </geometry>
+    </visual>
+    <collision name="convex_mesh">
+      <origin rpy="3.141592653589793 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link7.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="Right_flange">
+    <inertial>
+      <mass value="0.0" />
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.0" />
+      <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0" />
+    </inertial>
+  </link>
+
+  <joint name="AGV_Jiont1" type="revolute">
+    <origin xyz="0 0 0.2975" rpy="0 0 0" />
+    <parent link="base_link" />
+    <child link="AGV_Yaw" />
+    <axis xyz="0 0 1" />
+    <limit lower="-1.57" upper="1.57" effort="400" velocity="1" />
+  </joint>
+  <joint name="AGV_Jiont2" type="revolute">
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <parent link="AGV_Yaw" />
+    <child link="AGV_Pitch" />
+    <axis xyz="0 1 0" />
+    <limit lower="0" upper="1.57" effort="1000" velocity="1" />
+  </joint>
+  <joint name="Left_Joint0" type="fixed">
+    <origin xyz="0 -0.035 0.298" rpy="-1.5708 0 0" />
+    <parent link="AGV_Pitch" />
+    <child link="Left_link0" />
+    <axis xyz="0 0 0" />
+  </joint>
+  <joint name="Left_joint1" type="revolute">
+    <parent link="Left_link0" />
+    <child link="Left_link1" />
+    <origin rpy="0.0 0.0 -3.141592653589793" xyz="0.0 0.0 0.155" />
+    <axis xyz="0 0 1" />
+    <limit effort="123" lower="-2.8798" upper="2.8798" velocity="2.0944" />
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-2.7925" soft_upper_limit="2.7925" />
+  </joint>
+  <joint name="Left_joint2" type="revolute">
+    <parent link="Left_link1" />
+    <child link="Left_link2" />
+    <origin rpy="0.0 0.0 0.0" xyz="0.0 0.03 0.21" />
+    <axis xyz="0 1 0" />
+    <limit effort="123" lower="-2.3562" upper="2.3562" velocity="2.0944" />
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-2.2689" soft_upper_limit="2.2689" />
+  </joint>
+  <joint name="Left_joint3" type="revolute">
+    <parent link="Left_link2" />
+    <child link="Left_link3" />
+    <origin rpy="0.0 0.0 0.0" xyz="0.0 0.035 0.205" />
+    <axis xyz="0 0 1" />
+    <limit effort="64" lower="-3.0543" upper="3.0543" velocity="2.4435" />
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-2.9671" soft_upper_limit="2.9671" />
+  </joint>
+  <joint name="Left_joint4" type="revolute">
+    <parent link="Left_link3" />
+    <child link="Left_link4" />
+    <origin rpy="0.0 0.0 -3.141592653589793" xyz="-0.02 -0.03 0.19" />
+    <axis xyz="0 1 0" />
+    <limit effort="64" lower="-1.9548" upper="2.7751" velocity="2.4435" />
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-1.8675" soft_upper_limit="2.6878" />
+  </joint>
+  <joint name="Left_joint5" type="revolute">
+    <parent link="Left_link4" />
+    <child link="Left_link5" />
+    <origin rpy="0.0 0.0 -3.141592653589793" xyz="-0.02 0.025 0.195" />
+    <axis xyz="0 0 1" />
+    <limit effort="39" lower="-3.0543" upper="3.0543" velocity="4.8869" />
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-2.9671" soft_upper_limit="2.9671" />
+  </joint>
+  <joint name="Left_joint6" type="revolute">
+    <parent link="Left_link5" />
+    <child link="Left_link6" />
+    <origin rpy="0.0 0.0 0.0" xyz="0.0 0.03 0.19" />
+    <axis xyz="0 1 0" />
+    <limit effort="39" lower="-1.4835" upper="4.6251" velocity="4.8869" />
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-1.3963" soft_upper_limit="4.5379" />
+  </joint>
+  <joint name="Left_joint7" type="revolute">
+    <parent link="Left_link6" />
+    <child link="Left_link7" />
+    <origin rpy="0.0 -1.5707963478683205 0.0" xyz="-0.015 0.073 0.11" />
+    <axis xyz="0 0 1" />
+    <limit effort="39" lower="-3.0543" upper="3.0543" velocity="4.8869" />
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-2.9671" soft_upper_limit="2.9671" />
+  </joint>
+  <joint name="Left_link7_to_flange" type="fixed">
+    <parent link="Left_link7" />
+    <child link="Left_flange" />
+    <origin rpy="0.0 0.0 -3.141592653589793" xyz="0.0 0.0 0.081" />
+  </joint>
+
+  <joint name="Right_Joint0" type="fixed">
+    <origin xyz="0 0.035 0.298" rpy="1.5708 0 0" />
+    <parent link="AGV_Pitch" />
+    <child link="Right_link0" />
+    <axis xyz="0 0 0" />
+  </joint>
+  <joint name="Right_joint1" type="revolute">
+    <parent link="Right_link0" />
+    <child link="Right_link1" />
+    <origin rpy="3.141592653589793 0.0 -3.141592653589793" xyz="0.0 0.0 0.155" />
+    <axis xyz="0 0 1" />
+    <limit effort="123" lower="-2.8798" upper="2.8798" velocity="2.0944" />
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-2.7925" soft_upper_limit="2.7925" />
+  </joint>
+  <joint name="Right_joint2" type="revolute">
+    <parent link="Right_link1" />
+    <child link="Right_link2" />
+    <origin rpy="0.0 0.0 -3.141592653589793" xyz="0.0 0.03 -0.21" />
+    <axis xyz="0 1 0" />
+    <limit effort="123" lower="-2.3562" upper="2.3562" velocity="2.0944" />
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-2.2689" soft_upper_limit="2.2689" />
+  </joint>
+  <joint name="Right_joint3" type="revolute">
+    <parent link="Right_link2" />
+    <child link="Right_link3" />
+    <origin rpy="0.0 0.0 -3.141592653589793" xyz="0.0 -0.035 -0.205" />
+    <axis xyz="0 0 1" />
+    <limit effort="64" lower="-3.0543" upper="3.0543" velocity="2.4435" />
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-2.9671" soft_upper_limit="2.9671" />
+  </joint>
+  <joint name="Right_joint4" type="revolute">
+    <parent link="Right_link3" />
+    <child link="Right_link4" />
+    <origin rpy="0.0 0.0 0.0" xyz="-0.02 -0.03 -0.19" />
+    <axis xyz="0 1 0" />
+    <limit effort="64" lower="-1.9548" upper="2.7751" velocity="2.4435" />
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-1.8675" soft_upper_limit="2.6878" />
+  </joint>
+  <joint name="Right_joint5" type="revolute">
+    <parent link="Right_link4" />
+    <child link="Right_link5" />
+    <origin rpy="0.0 0.0 0.0" xyz="0.02 -0.025 -0.195" />
+    <axis xyz="0 0 1" />
+    <limit effort="39" lower="-3.0543" upper="3.0543" velocity="4.8869" />
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-2.9671" soft_upper_limit="2.9671" />
+  </joint>
+  <joint name="Right_joint6" type="revolute">
+    <parent link="Right_link5" />
+    <child link="Right_link6" />
+    <origin rpy="0.0 0.0 -3.141592653589793" xyz="0.0 0.03 -0.19" />
+    <axis xyz="0 1 0" />
+    <limit effort="39" lower="-1.4835" upper="4.6251" velocity="4.8869" />
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-1.3963" soft_upper_limit="4.5379" />
+  </joint>
+  <joint name="Right_joint7" type="revolute">
+    <parent link="Right_link6" />
+    <child link="Right_link7" />
+    <origin rpy="0.0 -1.5707963478683205 0.0" xyz="0.015 -0.073 -0.11" />
+    <axis xyz="0 0 1" />
+    <limit effort="39" lower="-3.0543" upper="3.0543" velocity="4.8869" />
+    <safety_controller k_position="100.0" k_velocity="40.0" soft_lower_limit="-2.9671" soft_upper_limit="2.9671" />
+  </joint>
+  <joint name="Right_link7_to_flange" type="fixed">
+    <parent link="Right_link7" />
+    <child link="Right_flange" />
+    <origin rpy="3.141592653589793 0.0 0.0" xyz="0.0 0.0 -0.081" />
+  </joint>
+    <!-- Camera Link -->
+  <link name="camera_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.025 0.09 0.025"/>
+      </geometry>
+      <material name="camera_gray">
+        <color rgba="0.5 0.5 0.5 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.025 0.09 0.025"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <origin xyz="0.39 0.0 -0.57" rpy="0 0 0"/>
+  </joint>
+
+  <link name="camera_depth_frame"/>
+  
+  <joint name="camera_depth_joint" type="fixed">
+    <parent link="camera_link"/>
+    <child link="camera_depth_frame"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <link name="camera_color_frame"/>
+  
+  <joint name="camera_color_joint" type="fixed">
+    <parent link="camera_link"/>
+    <child link="camera_color_frame"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ========== Top-mounted D456 Depth Camera ========== -->
+  <link name="camera_top_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.026 0.124 0.029"/>
+      </geometry>
+      <material name="camera_top_gray">
+        <color rgba="0.3 0.3 0.3 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.026 0.124 0.029"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="camera_top_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_top_link"/>
+    <origin xyz="0.05 0.0 0.8" rpy="0 0 0"/>
+  </joint>
+
+  <link name="camera_top_depth_optical_frame"/>
+
+  <joint name="camera_top_depth_optical_joint" type="fixed">
+    <parent link="camera_top_link"/>
+    <child link="camera_top_depth_optical_frame"/>
+    <origin xyz="0 0 0" rpy="-1.5707963 0 -1.5707963"/>
+  </joint>
+
+  <link name="camera_top_color_optical_frame"/>
+
+  <joint name="camera_top_color_optical_joint" type="fixed">
+    <parent link="camera_top_link"/>
+    <child link="camera_top_color_optical_frame"/>
+    <origin xyz="0 0 0" rpy="-1.5707963 0 -1.5707963"/>
+  </joint>
+
+  <!-- ========== Seer Chassis Sensors ========== -->
+  <!-- Front LiDAR: Free Optics H1EO-02C (Navigation, 40m range, 30Hz) -->
+  <link name="lidar_nav_link"/>
+
+  <joint name="lidar_nav_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="lidar_nav_link"/>
+    <origin xyz="0.3342 0.0017 0.1981" rpy="3.14159 0 -0.00192"/>
+  </joint>
+
+  <!-- Rear LiDAR: Free Optics C214 (Obstacle avoidance, 50m range, 25Hz) -->
+  <link name="lidar_avoid_link"/>
+
+  <joint name="lidar_avoid_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="lidar_avoid_link"/>
+    <origin xyz="-0.3319 0.0 0.1746" rpy="3.14159 0 -3.14072"/>
+  </joint>
+
+  <!-- Seer Chassis IMU -->
+  <link name="imu_link"/>
+
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+</robot>
