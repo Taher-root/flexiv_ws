@@ -6,18 +6,29 @@ arm at any time; it cannot move anything.
 Usage:
     python3 rdk_diag.py <robot_sn>
 
-Gathers what offset_estimator.py, ros_time.py and waist_driver_node.py assume
-but have never verified against real hardware:
+Gathers what offset_estimator.py and waist_driver_node.py need from real
+hardware:
   - flexivrdk version actually installed
-  - RobotStates.timestamp: python type, raw value, units (guessed by
-    comparing consecutive deltas and an assumed-seconds diff against host
-    wall clock)
+  - RobotStates.timestamp cadence at 1kHz polling
   - info().DoF / DoF_m / DoF_e (whether q[0:2] really is the waist)
   - states().q / .dq / .tau lengths and a live sample
+
+Confirmed 2026-09-17 against flexivrdk 1.9.0: RobotStates.timestamp is a
+(sec, nanosec) int tuple, not a scalar — the same shape as a ROS Time
+message. This script and offset_estimator.device_time_seconds() both decode
+it that way now.
 """
 import statistics
 import sys
 import time
+
+
+def _device_seconds(raw_timestamp):
+    """(sec, nanosec) int tuple -> float seconds. Mirrors
+    offset_estimator.device_time_seconds(); kept inline so this script has
+    no dependency on the ROS package and can run with bare flexivrdk."""
+    sec, nanosec = raw_timestamp
+    return float(sec) + float(nanosec) * 1e-9
 
 
 def main():
@@ -47,8 +58,13 @@ def main():
     print(f"\ntimestamp: type={type(ts).__name__} repr={ts!r}")
     now_wall = time.time()
     print(f"host time.time() right now: {now_wall!r}")
-    print(f"time.time() - float(timestamp) [assumes seconds, same epoch]: "
-          f"{now_wall - float(ts)!r}")
+    if isinstance(ts, tuple) and len(ts) == 2:
+        ts_sec = _device_seconds(ts)
+        print(f"decoded as (sec, nanosec): {ts[0]} s + {ts[1]} ns -> {ts_sec!r} s")
+        print(f"host - device offset (seconds): {now_wall - ts_sec!r}")
+    else:
+        print("UNEXPECTED shape (not a 2-tuple) — decode manually before trusting "
+              "device_time_seconds().")
 
     print("\nPolling for 3s to measure timestamp cadence (no sleep, tight loop)...")
     deltas = []
@@ -59,17 +75,14 @@ def main():
         s = robot.states()
         cur = s.timestamp
         if last_ts is not None and cur != last_ts:
-            deltas.append(float(cur) - float(last_ts))
+            deltas.append(_device_seconds(cur) - _device_seconds(last_ts))
         last_ts = cur
         polls += 1
     print(f"polls={polls}  distinct_timestamp_transitions={len(deltas)}")
     if deltas:
-        print(f"delta (raw timestamp units) median={statistics.median(deltas)!r} "
+        print(f"delta (seconds) median={statistics.median(deltas)!r} "
               f"min={min(deltas)!r} max={max(deltas)!r}")
-        print("If this system is at 1kHz and these deltas are ~0.001, timestamp "
-              "is in seconds (matches offset_estimator.py's assumption).")
-        print("If these deltas are ~1.0, timestamp is likely milliseconds.")
-        print("If these deltas are ~1000+, timestamp is likely microseconds.")
+        print("Expect ~0.001 (1 kHz) per joint_state_architecture.md sec 1.")
 
     print("\nDone. No commands were sent to the robot.")
 

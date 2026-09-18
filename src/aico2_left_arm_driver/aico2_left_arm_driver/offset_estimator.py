@@ -9,19 +9,23 @@ from __future__ import annotations
 import statistics
 import time
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence, Tuple
+
+RawTimestamp = Tuple[int, int]
 
 
-def device_time_seconds(raw_timestamp: float) -> float:
+def device_time_seconds(raw_timestamp: RawTimestamp) -> float:
     """Convert a raw RobotStates.timestamp to seconds.
 
-    flexivrdk 1.9 does not document the timestamp's unit or epoch. The
-    baseline measurements in joint_state_architecture.md sec 1 treated
-    successive diffs as seconds directly (1000.2 us cadence came out right
-    that way), so this is the identity conversion until checked against
-    real hardware. Change this in one place if that assumption is wrong.
+    Confirmed 2026-09-17 against flexivrdk 1.9.0 on real hardware (see
+    scripts/rdk_diag.py): RobotStates.timestamp is a (sec, nanosec) int
+    pair — the same shape as ROS's own Time message — not a scalar. The
+    device/host offset it revealed (~29123 s on the left arm) lines up with
+    the ~29107 s measured for joint_state_architecture.md sec 1, so this is
+    the same clock, correctly decoded.
     """
-    return float(raw_timestamp)
+    sec, nanosec = raw_timestamp
+    return float(sec) + float(nanosec) * 1e-9
 
 
 @dataclass(frozen=True)
@@ -73,7 +77,7 @@ def estimate_offset(
         return wall0 + (t_mono - mono0)
 
     samples: List[float] = []
-    prev_ts: Optional[float] = None
+    prev_ts: Optional[RawTimestamp] = None
     polls = 0
     while len(samples) < n:
         if polls >= limit:
@@ -85,7 +89,9 @@ def estimate_offset(
         t0 = monotonic_fn()
         state = states_fn()
         t1 = monotonic_fn()
-        ts = float(getattr(state, timestamp_attr))
+        # Keep the raw (sec, nanosec) tuple for the equality check — tuple
+        # equality is exact, unlike comparing two floats derived from it.
+        ts: RawTimestamp = getattr(state, timestamp_attr)
         if prev_ts is not None and ts != prev_ts:
             device_t = device_time_seconds(ts)
             samples.append(device_t - host_time_at((t0 + t1) / 2.0))
@@ -159,5 +165,5 @@ class OffsetTracker:
         self._spread_sec = estimate.spread_sec
         self._last_refresh = self._clock_fn()
 
-    def to_ros_seconds(self, device_timestamp: float) -> float:
+    def to_ros_seconds(self, device_timestamp: RawTimestamp) -> float:
         return device_time_seconds(device_timestamp) + self._offset_sec
