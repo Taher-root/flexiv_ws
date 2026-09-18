@@ -3,7 +3,7 @@ waist_driver:
     source_robot_sn: "Rizon4-063352"
     mock_hardware: false
     publish_rate_hz: 200.0          # decimation from the RDK's 1 kHz stream
-    joint_names: ["AGV_Jiont1", "AGV_Jiont2"]
+    joint_names: ["AGV_Joint1", "AGV_Joint2"]
     use_device_timestamp: true
     offset_refresh_sec: 300.0
     offset_slew_limit: 0.001

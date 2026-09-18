@@ -10,7 +10,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
 
-WAIST = ["AGV_Jiont1", "AGV_Jiont2"]
+WAIST = ["AGV_Joint1", "AGV_Joint2"]
 LEFT = [f"Left_joint{i}" for i in range(1, 8)]
 RIGHT = [f"Right_joint{i}" for i in range(1, 8)]
 ALL_JOINTS: List[str] = WAIST + LEFT + RIGHT

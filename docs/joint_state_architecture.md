@@ -79,7 +79,7 @@ from each arm, so its output is as stale as the slower one, then republishes on
 its own timer. Two arms' data taken at different instants get one shared stamp.
 
 **(d) Waist joints hardcoded to zero.** `joint_state_merger` publishes
-`AGV_Jiont1` and `AGV_Jiont2` as 0.0 while real 1 kHz data sits unused in
+`AGV_Joint1` and `AGV_Joint2` as 0.0 while real 1 kHz data sits unused in
 `q[0]`/`q[1]`. Every TF consumer downstream — including anything relating the
 base LiDAR to the head camera — is working from a waist pose that is fiction.
 
@@ -202,12 +202,19 @@ use a double-buffer or `std::atomic<std::shared_ptr<Sample>>`.
 | Node name | `waist_driver` |
 | RDK target | configurable `source_robot_sn`, default `Rizon4-063352` |
 | Publishes | `/joint_states` — 2 joints only |
-| Joint names | `AGV_Jiont1` (yaw, `q[0]`), `AGV_Jiont2` (pitch, `q[1]`) |
+| Joint names | `AGV_Joint1` (yaw, `q[0]`), `AGV_Joint2` (pitch, `q[1]`) |
 
-**Note the existing joint names are misspelled** (`Jiont`, not `Joint`). They
-match the URDF, so do **not** silently fix them here — the URDF, this node, and
-any consumer must change together or TF breaks. Either keep the typo or fix it
-everywhere in one commit. Flag it, pick one, be consistent.
+**Resolved 2026-09-18 — the names were misspelled (`Jiont`) and have been
+fixed.** The original note said to pick one spelling and apply it everywhere
+in a single commit; that happened. What made it safe: the typo was confined
+to the two `<joint name=...>` strings in the URDF. The *links*
+(`AGV_Yaw`, `AGV_Pitch`) and every mesh file were already spelled correctly,
+and TF frames come from link names — so no TF frame ever carried the typo and
+nothing in the transform tree changed. In-repo that left 5 functional
+occurrences (URDF ×2, `waist_driver.yaml`, `waist_driver_node.py`'s
+`_DEFAULT_JOINTS`, `joint_state_merger.py`'s `WAIST`), renamed together.
+Anything outside this repo that looks these joints up **by name** — not by
+frame — still needs checking.
 
 Parameters:
 
@@ -216,7 +223,7 @@ waist_driver:
   ros__parameters:
     source_robot_sn: "Rizon4-063352"
     publish_rate_hz: 200.0          # decimation from 1 kHz
-    joint_names: ["AGV_Jiont1", "AGV_Jiont2"]
+    joint_names: ["AGV_Joint1", "AGV_Joint2"]
     use_device_timestamp: true
     offset_refresh_sec: 300.0
     stale_threshold_sec: 0.05
@@ -322,7 +329,7 @@ used for the baseline so the numbers are comparable.
 - [ ] Left and right arms produce independent offsets ~13 s apart, as measured
 
 **Waist**
-- [ ] `AGV_Jiont1`/`AGV_Jiont2` carry real values, not 0.0
+- [ ] `AGV_Joint1`/`AGV_Joint2` carry real values, not 0.0
 - [ ] TF `base_link → AGV_Yaw → AGV_Pitch` moves when the torso moves
       *(blocked: torso currently locked)*
 - [ ] Values match the other arm's `q[0]`/`q[1]` to within one LSB
@@ -360,9 +367,10 @@ Rizon controller participate in IEEE 1588 as master or slave, and is there a
 configuration for it?* If yes, the offset estimator becomes a fallback rather
 than the primary mechanism. Until then it is the primary mechanism.
 
-**Joint name typo.** `AGV_Jiont1`/`AGV_Jiont2` are misspelled in the URDF and
-carried through the merger. Fixing them is a coordinated change across the URDF,
-the new node, and any consumer. Decide before implementing, not during.
+**Joint name typo — DECIDED, fixed 2026-09-18.** Renamed to
+`AGV_Joint1`/`AGV_Joint2` across the URDF, waist driver and merger in one
+commit. Cheaper than this section assumed: links and meshes were already
+correct, so TF frames were never affected. See §4.2.
 
 ---
 

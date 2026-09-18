@@ -131,7 +131,7 @@ def generate_launch_description():
                               description="Use mock hardware for the arms "
                                           "(no real robot connection)"),
         DeclareLaunchArgument("enable_waist_driver", default_value="false",
-                              description="Publish real AGV_Jiont1/2 from the RDK "
+                              description="Publish real AGV_Joint1/2 from the RDK "
                                           "stream (races joint_state_merger's zeros; "
                                           "see aico2_waist_driver/README.md)"),
         DeclareLaunchArgument("direct_joint_states", default_value="false",

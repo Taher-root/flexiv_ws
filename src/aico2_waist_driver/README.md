@@ -1,6 +1,6 @@
 # aico2_waist_driver
 
-Publishes the waist axes `AGV_Jiont1` (yaw) / `AGV_Jiont2` (pitch) to
+Publishes the waist axes `AGV_Joint1` (yaw) / `AGV_Joint2` (pitch) to
 `/joint_states`, read directly off one Rizon controller's 1 kHz RDK stream
 via its own RDK session — independent of both arm drivers.
 
@@ -13,7 +13,7 @@ sec 4.2/4.4 for this node's design).
 `RobotStates.q` on either Rizon controller is length 9, not 7: `q[0]` is
 waist yaw, `q[1]` is waist pitch, `q[2:9]` is that arm's own 7 joints. Both
 arms report the same waist state (`joint_state_architecture.md` sec 1). Today
-`flexiv_amr_driver/joint_state_merger` publishes `AGV_Jiont1`/`AGV_Jiont2` as
+`flexiv_amr_driver/joint_state_merger` publishes `AGV_Joint1`/`AGV_Joint2` as
 a hardcoded `0.0` because nothing reads `q[0:2]` — this node reads it.
 
 It opens a second, read-only RDK session to whichever controller
@@ -26,7 +26,7 @@ independent of the arm drivers'.
 ## Running it during the merger transition
 
 `joint_state_merger` also publishes to `/joint_states` with the waist at
-0.0. Running both at once means last-writer-wins on `AGV_Jiont1/2` between
+0.0. Running both at once means last-writer-wins on `AGV_Joint1/2` between
 this node and the merger — expected and useful for verifying this node's
 values before the merger is retired (`joint_state_architecture.md` sec 8,
 step 3). Watch `ros2 topic echo /joint_states` or RViz's TF for whichever

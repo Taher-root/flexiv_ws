@@ -163,7 +163,7 @@ def generate_launch_description():
         ],
     )
 
-    # Waist axes (AGV_Jiont1/2): reads q[0:2] off the left arm's RDK stream via
+    # Waist axes (AGV_Joint1/2): reads q[0:2] off the left arm's RDK stream via
     # its own session, independent of the arm drivers (see
     # docs/joint_state_architecture.md sec 3/4.2). Off by default: while
     # joint_state_merger is still publishing those two joints as 0.0, enabling
@@ -192,7 +192,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "enable_waist_driver",
                 default_value="false",
-                description="Publish real AGV_Jiont1/2 from the RDK stream "
+                description="Publish real AGV_Joint1/2 from the RDK stream "
                             "(races joint_state_merger's zeros; see "
                             "aico2_waist_driver/README.md)",
             ),

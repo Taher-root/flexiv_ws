@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lifecycle node for the waist axes (AGV_Jiont1/2), read off one Rizon
+"""Lifecycle node for the waist axes (AGV_Joint1/2), read off one Rizon
 controller's 1 kHz RDK stream independently of either arm driver.
 
 See joint_state_architecture.md sec 3 ("Why a separate waist node"), 4.2,
@@ -26,7 +26,7 @@ from aico2_left_arm_driver.offset_estimator import OffsetTracker
 from aico2_left_arm_driver.ros_time import seconds_to_ros_time
 
 _STALE_WARN_INTERVAL_SEC = 2.0
-_DEFAULT_JOINTS = ["AGV_Jiont1", "AGV_Jiont2"]
+_DEFAULT_JOINTS = ["AGV_Joint1", "AGV_Joint2"]
 
 # clock_offset only publishes when an estimate is refreshed (once at activate,
 # then every offset_refresh_sec). Transient-local so `ros2 topic echo` and any
@@ -49,7 +49,7 @@ class _Sample:
 
 
 class WaistDriverNode(LifecycleNode):
-    """Publishes AGV_Jiont1 (yaw) / AGV_Jiont2 (pitch) to /joint_states."""
+    """Publishes AGV_Joint1 (yaw) / AGV_Joint2 (pitch) to /joint_states."""
 
     def __init__(self, node_name: str = "waist_driver") -> None:
         super().__init__(node_name)

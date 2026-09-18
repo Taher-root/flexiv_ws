@@ -31,7 +31,7 @@ def generate_launch_description():
         DeclareLaunchArgument("mock_arms", default_value="false",
                               description="Use mock hardware for the arms"),
         DeclareLaunchArgument("enable_waist_driver", default_value="false",
-                              description="Publish real AGV_Jiont1/2 from the RDK "
+                              description="Publish real AGV_Joint1/2 from the RDK "
                                           "stream (see aico2_waist_driver/README.md)"),
         DeclareLaunchArgument("direct_joint_states", default_value="false",
                               description="true: arms publish straight to "

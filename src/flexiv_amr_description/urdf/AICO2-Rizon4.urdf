@@ -484,14 +484,14 @@
     </inertial>
   </link>
 
-  <joint name="AGV_Jiont1" type="revolute">
+  <joint name="AGV_Joint1" type="revolute">
     <origin xyz="0 0 0.2975" rpy="0 0 0" />
     <parent link="base_link" />
     <child link="AGV_Yaw" />
     <axis xyz="0 0 1" />
     <limit lower="-1.57" upper="1.57" effort="400" velocity="1" />
   </joint>
-  <joint name="AGV_Jiont2" type="revolute">
+  <joint name="AGV_Joint2" type="revolute">
     <origin xyz="0 0 0" rpy="0 0 0" />
     <parent link="AGV_Yaw" />
     <child link="AGV_Pitch" />

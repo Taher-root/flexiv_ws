@@ -113,7 +113,7 @@ ros2 launch flexiv_amr_bringup arms.launch.py mock_hardware:=true
 | `laserscan_topics` | hardware_test, sensors | nav+avoid+depth | Scans merged into `/scan/merged` |
 | `merger_delay` | hardware_test, sensors | `0.0` | Delay before starting the scan merger |
 | `mock_arms` | full_system, arms_with_navigation | `false` | Run the arm drivers without flexivrdk |
-| `enable_waist_driver` | full_system, arms, arms_with_navigation | `false` | Publish real `AGV_Jiont1/2` (see `aico2_waist_driver/README.md`) |
+| `enable_waist_driver` | full_system, arms, arms_with_navigation | `false` | Publish real `AGV_Joint1/2` (see `aico2_waist_driver/README.md`) |
 | `use_slam` / `use_rtabmap` | full_system | `true` / `false` | Mapping backend: SLAM Toolbox or RTAB-Map |
 | `use_nav` | navigation, full_system | `false` (`navigation.launch.py` implies true) | Start localization + Nav2 |
 | `localization_backend` | navigation, full_system | `rtabmap` | `rtabmap` (against `rtabmap_db:=`) or `amcl` (against `map:=`) |
@@ -145,7 +145,7 @@ system starts at once.
 - **No RViz configs are checked in.** RViz launches with its default view; the
   older `mapping.rviz` / `navigation.rviz` these launch files once referenced
   were never committed.
-- **`AGV_Jiont1`/`AGV_Jiont2` are misspelled** in the URDF (joint names only —
+- **`AGV_Joint1`/`AGV_Joint2` are misspelled** in the URDF (joint names only —
   the links `AGV_Yaw`/`AGV_Pitch` and all meshes are spelled correctly, so TF
   frames are unaffected). In-repo it is 5 functional occurrences; renaming also
   touches anything outside the repo that looks joints up by name.
