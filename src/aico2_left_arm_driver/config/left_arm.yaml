@@ -1,0 +1,18 @@
+left_arm_driver:
+  ros__parameters:
+    robot_ip: "192.168.1.100"
+    robot_sn: ""
+    mock_hardware: true
+    publish_rate_hz: 50.0
+    # Boots at the 'home' pose. NOTE: home has joint6=0 (wrist singularity), so
+    # MoveIt Servo / VR teleop will halt here — Plan&Execute to the SRDF 'ready'
+    # state (joint6=+pi/2) before engaging teleop.
+    mock_idle_joint_positions: [0.0, -0.7145, 0.0, 1.6559, 0.0, 0.0, 0.0]
+    joint_names:
+      - Left_joint1
+      - Left_joint2
+      - Left_joint3
+      - Left_joint4
+      - Left_joint5
+      - Left_joint6
+      - Left_joint7

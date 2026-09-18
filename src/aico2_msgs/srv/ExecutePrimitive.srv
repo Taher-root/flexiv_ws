@@ -1,0 +1,5 @@
+# Flexiv RDK primitive string, e.g. MoveL(target=...).
+string primitive
+---
+bool success
+string message

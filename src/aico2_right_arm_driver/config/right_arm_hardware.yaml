@@ -1,0 +1,23 @@
+right_arm_driver:
+  ros__parameters:
+    robot_ip: "192.168.1.101"
+    robot_sn: "Rizon4R-062077"
+    mock_hardware: false
+    auto_enable: true
+    operational_timeout_sec: 30.0
+    publish_rate_hz: 50.0
+    default_max_joint_vel: 1.5
+    default_max_joint_acc: 3.0
+    goal_joint_tolerance: 0.02
+    tcp_frame_id: "Right_flange"
+    teleop_backend: cartesian
+    cartesian_max_linear_vel: 0.3
+    cartesian_max_angular_vel: 1.047
+    joint_names:
+      - Right_joint1
+      - Right_joint2
+      - Right_joint3
+      - Right_joint4
+      - Right_joint5
+      - Right_joint6
+      - Right_joint7

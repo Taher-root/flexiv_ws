@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>aico2_right_arm_driver</name>
+  <version>0.1.0</version>
+  <description>Right Rizon arm driver (Flexiv RDK) with lifecycle and mock mode.</description>
+  <maintainer email="oelinux@todo.todo">oelinux</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>aico2_left_arm_driver</depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

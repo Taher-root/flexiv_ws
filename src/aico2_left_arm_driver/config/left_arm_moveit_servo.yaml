@@ -1,0 +1,18 @@
+# Mock driver params for MoveIt Servo VR teleop.
+# Pair with: aico2_bringup/mock_moveit_servo.launch.py
+left_arm_driver:
+  ros__parameters:
+    robot_ip: "192.168.1.100"
+    robot_sn: ""
+    mock_hardware: true
+    publish_rate_hz: 50.0
+    teleop_backend: servo
+    mock_idle_joint_positions: [0.0, -0.7145, 0.0, 1.6559, 0.0, 0.0, 0.0]
+    joint_names:
+      - Left_joint1
+      - Left_joint2
+      - Left_joint3
+      - Left_joint4
+      - Left_joint5
+      - Left_joint6
+      - Left_joint7

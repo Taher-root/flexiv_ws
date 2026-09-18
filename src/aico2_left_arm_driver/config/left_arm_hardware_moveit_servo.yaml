@@ -1,0 +1,32 @@
+# Hardware driver params for MoveIt Servo VR teleop (joint streaming path).
+# Pair with: aico2_bringup/hardware_moveit_servo.launch.py
+#            aico2_vr_teleop/teleop_moveit_servo.launch.py
+left_arm_driver:
+  ros__parameters:
+    robot_ip: "192.168.1.100"
+    robot_sn: "Rizon4-063352"
+    mock_hardware: false
+    auto_enable: true
+    operational_timeout_sec: 30.0
+    publish_rate_hz: 50.0
+    default_max_joint_vel: 1.5
+    default_max_joint_acc: 3.0
+    goal_joint_tolerance: 0.02
+    tcp_frame_id: "Left_flange"
+    teleop_backend: servo
+    log_rdk_send_rate: true
+    log_rdk_send_interval_sec: 1.0
+    gripper_enabled: true
+    gripper_name: "Flexiv-GN01"
+    gripper_max_force_fraction: 0.75
+    gripper_open_threshold: 0.08
+    gripper_grasp_threshold: 0.15
+    gripper_force_resend_delta: 3.0
+    joint_names:
+      - Left_joint1
+      - Left_joint2
+      - Left_joint3
+      - Left_joint4
+      - Left_joint5
+      - Left_joint6
+      - Left_joint7

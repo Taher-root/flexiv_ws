@@ -1,0 +1,18 @@
+# Mock driver params for MoveIt Servo VR teleop.
+right_arm_driver:
+  ros__parameters:
+    robot_ip: "192.168.1.101"
+    robot_sn: ""
+    mock_hardware: true
+    publish_rate_hz: 50.0
+    teleop_backend: servo
+    mock_idle_joint_positions: [0.0, -0.7396, 0.0, 1.5301, 0.0, 0.0, 0.0]
+    tcp_frame_id: "Right_flange"
+    joint_names:
+      - Right_joint1
+      - Right_joint2
+      - Right_joint3
+      - Right_joint4
+      - Right_joint5
+      - Right_joint6
+      - Right_joint7
