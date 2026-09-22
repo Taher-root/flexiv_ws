@@ -35,14 +35,19 @@ import math
 import sys
 import time
 
+import re
+import xml.etree.ElementTree as ET
+
 import rclpy
+from action_msgs.msg import GoalStatus
 from builtin_interfaces.msg import Duration
 from control_msgs.action import FollowJointTrajectory
 from lifecycle_msgs.srv import GetState
 from rclpy.action import ActionClient
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import JointState
+from std_msgs.msg import Bool, String
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 _PASS, _FAIL, _WARN = "PASS", "FAIL", "warn"
@@ -57,7 +62,24 @@ class ArmChecker(Node):
         self._samples = []
         self._sub = self.create_subscription(
             JointState, "/joint_states", self._on_js, qos_profile_sensor_data)
+        self._fault = None
+        self.create_subscription(
+            Bool, f"/{self._ns}/fault" if self._ns else "/fault",
+            self._on_fault, 10)
+        # robot_description is latched (transient local), so a late subscriber
+        # still gets it. robot_state_publisher and move_group both publish it.
+        self._urdf = None
+        self.create_subscription(
+            String, "/robot_description", self._on_urdf,
+            QoSProfile(depth=1,
+                       durability=QoSDurabilityPolicy.TRANSIENT_LOCAL))
         self.results = []
+
+    def _on_fault(self, msg):
+        self._fault = bool(msg.data)
+
+    def _on_urdf(self, msg):
+        self._urdf = msg.data
 
     def _on_js(self, msg: JointState):
         self._samples.append((time.monotonic(), list(msg.name),
@@ -119,6 +141,42 @@ class ArmChecker(Node):
                 f"ros2 lifecycle set /{self._ns}/{self._node_name} activate")
         return self.record(_PASS, "lifecycle state is active")
 
+    def check_not_faulted(self, seconds=2.0):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline and self._fault is None:
+            rclpy.spin_once(self, timeout_sec=0.05)
+        node = f"/{self._ns}/{self._node_name}" if self._ns else f"/{self._node_name}"
+        if self._fault is None:
+            return self.record(
+                _WARN, "arm is not in fault",
+                f"no message on /{self._ns}/fault within {seconds:.0f}s")
+        if self._fault:
+            return self.record(
+                _FAIL, "arm is not in fault",
+                "the arm has a fault, so the driver rejects every trajectory "
+                "goal. Clear it:\n"
+                f"ros2 service call {node}/clear_fault std_srvs/srv/Trigger\n"
+                "A minor fault usually means a command went out of range or hit "
+                "a limit; check Flexiv Elements' event log for which.")
+        return self.record(_PASS, "arm is not in fault")
+
+    def joint_limits(self, seconds=3.0):
+        """Joint limits from the URDF on /robot_description, or None."""
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline and self._urdf is None:
+            rclpy.spin_once(self, timeout_sec=0.05)
+        if self._urdf is None:
+            return None
+        limits = {}
+        for m in re.finditer(
+            r'<joint name="([^"]+)"[^>]*>(.*?)</joint>', self._urdf, re.S
+        ):
+            lim = re.search(r'<limit[^/]*lower="([-\d.eE]+)"\s+'
+                            r'upper="([-\d.eE]+)"', m.group(2))
+            if lim:
+                limits[m.group(1)] = (float(lim.group(1)), float(lim.group(2)))
+        return limits or None
+
     def check_joint_states(self, seconds=3.0):
         self._samples.clear()
         deadline = time.monotonic() + seconds
@@ -176,8 +234,32 @@ class ArmChecker(Node):
             return self.record(_FAIL, "trajectory goal accepted",
                                "no live joint positions to build a goal from")
         index = joint - 1
+        name = self._joint_names[index]
         target = list(start)
         target[index] = start[index] + math.radians(degrees)
+
+        limits = self.joint_limits()
+        if limits is None:
+            self.record(
+                _WARN, "target is within joint limits",
+                "no URDF on /robot_description, so limits were not checked — "
+                "start robot_state_publisher "
+                "(ros2 launch flexiv_amr_description display.launch.py)")
+        elif name in limits:
+            lower, upper = limits[name]
+            if not lower <= target[index] <= upper:
+                return self.record(
+                    _FAIL, "target is within joint limits",
+                    f"{name} would be commanded to "
+                    f"{math.degrees(target[index]):.2f}°, outside its limits "
+                    f"[{math.degrees(lower):.2f}, {math.degrees(upper):.2f}]°. "
+                    f"Commanding past a limit faults the arm.\n"
+                    f"It is at {math.degrees(start[index]):.2f}° — try "
+                    f"--degrees {-degrees:.0f}.")
+            self.record(
+                _PASS, "target is within joint limits",
+                f"{math.degrees(target[index]):.2f}° in "
+                f"[{math.degrees(lower):.2f}, {math.degrees(upper):.2f}]°")
 
         traj = JointTrajectory()
         traj.joint_names = list(self._joint_names)
@@ -215,12 +297,24 @@ class ArmChecker(Node):
         if result_future.result() is None:
             return self.record(_FAIL, "trajectory completed",
                                f"no result within {duration + timeout:.0f}s")
-        res = result_future.result().result
+        wrapped = result_future.result()
+        res = wrapped.result
         code = res.error_code
-        ok = code == FollowJointTrajectory.Result.SUCCESSFUL
-        detail = f"error_code={code}"
+        status = wrapped.status
+        # SUCCESSFUL is 0, which is also the field's default, so a server that
+        # aborts without setting error_code looks successful. Trust the goal
+        # status, and treat any error_string as a failure too.
+        ok = (code == FollowJointTrajectory.Result.SUCCESSFUL
+              and status == GoalStatus.STATUS_SUCCEEDED
+              and not res.error_string)
+        status_name = {
+            GoalStatus.STATUS_SUCCEEDED: "SUCCEEDED",
+            GoalStatus.STATUS_ABORTED: "ABORTED",
+            GoalStatus.STATUS_CANCELED: "CANCELED",
+        }.get(status, f"status({status})")
+        detail = f"error_code={code}, goal status={status_name}"
         if res.error_string:
-            detail += f", error_string={res.error_string!r}"
+            detail += f"\nerror_string={res.error_string!r}"
 
         # Let the last joint_states arrive, then report what actually moved.
         for _ in range(20):
@@ -254,7 +348,10 @@ def main():
     ap.add_argument("--joint", type=int, default=4,
                     help="arm joint to move, 1-7 (default 4, the elbow — "
                          "visible, unlike joint 7)")
-    ap.add_argument("--degrees", type=float, default=15.0)
+    ap.add_argument("--degrees", type=float, default=-15.0,
+                    help="relative move in degrees; negative by default because "
+                         "Left_joint4's upper limit (159°) is close to the poses "
+                         "this arm tends to sit in")
     ap.add_argument("--duration", type=float, default=4.0,
                     help="trajectory duration in seconds")
     ap.add_argument("--timeout", type=float, default=5.0)
@@ -287,6 +384,7 @@ def main():
 
         ok = checker.check_node()
         ok = checker.check_lifecycle() and ok
+        ok = checker.check_not_faulted() and ok
         ok = checker.check_joint_states(args.seconds) and ok
         ok = checker.check_action_server(args.timeout) and ok
 
