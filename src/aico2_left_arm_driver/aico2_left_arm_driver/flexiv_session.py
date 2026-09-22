@@ -142,6 +142,30 @@ class FlexivSession:
             pose, wrench, max_linear_vel=max_linear_vel, max_angular_vel=max_angular_vel
         )
 
+    def joint_stiffness_nominal(self) -> List[float]:
+        """RobotInfo.K_q_nom, length = robot DoF (9 here: 2 waist + 7 arm).
+
+        The waist entries are +inf on this robot -- it is positionally rigid
+        and its stiffness is not ours to set. SetJointImpedance validates
+        against [0, K_q_nom] per axis, so those entries must be passed through
+        unchanged.
+        """
+        return [float(x) for x in self._robot.info().K_q_nom]
+
+    def set_joint_impedance(
+        self, K_q: List[float], Z_q: Optional[List[float]] = None
+    ) -> None:
+        """Set joint stiffness. Only valid in a joint impedance control mode.
+
+        RDK 1.9 lists SetJointImpedance as applicable to RT_JOINT_IMPEDANCE and
+        NRT_JOINT_IMPEDANCE only, so callers must have switched mode first or
+        this raises std::logic_error.
+        """
+        if Z_q is None:
+            self._robot.SetJointImpedance(K_q)
+        else:
+            self._robot.SetJointImpedance(K_q, Z_q)
+
     def execute_primitive_name(self, name: str) -> None:
         self.switch_mode(self._flexivrdk.Mode.NRT_PRIMITIVE_EXECUTION)
         self._robot.ExecutePrimitive(name, {}, True)

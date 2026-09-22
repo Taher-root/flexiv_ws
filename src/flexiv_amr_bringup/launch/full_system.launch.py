@@ -13,6 +13,7 @@ Composed from the per-subsystem launch files rather than restating them:
   rtabmap_mapping.launch.py       (flexiv_amr_nav2)  RTAB-Map mapping        [use_rtabmap]
   rtabmap_localization.launch.py  (flexiv_amr_nav2)  RTAB-Map localization  [use_nav, default]
   localization.launch.py          (flexiv_amr_nav2)  AMCL + map_server      [backend=amcl]
+  move_group.launch.py            (aico2_moveit_config)  arm motion planning   [use_moveit]
   navigation.launch.py            (flexiv_amr_nav2)  Nav2 stack              [use_nav]
 
 The staged start delays live here, because they are a property of bringing the
@@ -31,6 +32,9 @@ Usage:
   # Navigation with AMCL instead (laser-only, against a saved map yaml)
   ros2 launch flexiv_amr_bringup full_system.launch.py use_slam:=false use_nav:=true \
       localization_backend:=amcl map:=/path/to/map.yaml
+
+  # With MoveIt planning for the arms
+  ros2 launch flexiv_amr_bringup full_system.launch.py use_moveit:=true
 
   # Mock arms (no robot connection) / no camera
   ros2 launch flexiv_amr_bringup full_system.launch.py mock_arms:=true
@@ -63,6 +67,7 @@ SLAM_DELAY = 8.0            # arms + EKF + merged scan settled
 RTABMAP_MAP_DELAY = 15.0    # both cameras enumerated on USB and streaming
 LOCALIZATION_DELAY = 10.0   # odometry/filtered + scans + (for rtabmap) camera up
 NAV2_DELAY = 20.0           # localization active, /map and map->odom TF up
+MOVEIT_DELAY = 6.0          # both arm drivers active and serving their actions
 
 
 def _include(package, launch_file, launch_arguments=None, condition=None):
@@ -86,6 +91,7 @@ def generate_launch_description():
     rtabmap_db = LaunchConfiguration("rtabmap_db")
     localization_backend = LaunchConfiguration("localization_backend")
     mock_arms = LaunchConfiguration("mock_arms")
+    use_moveit = LaunchConfiguration("use_moveit")
 
     nav2_params = PathJoinSubstitution(
         [FindPackageShare("flexiv_amr_nav2"), "config", "nav2_params.yaml"]
@@ -125,6 +131,9 @@ def generate_launch_description():
                               ]),
                               description="Map yaml to localize against "
                                           "(localization_backend:=amcl)"),
+        DeclareLaunchArgument("use_moveit", default_value="false",
+                              description="Launch move_group for arm motion "
+                                          "planning (aico2_moveit_config)"),
         DeclareLaunchArgument("use_rviz", default_value="false",
                               description="Launch RViz2"),
         DeclareLaunchArgument("mock_arms", default_value="false",
@@ -212,6 +221,20 @@ def generate_launch_description():
                     "params_file": nav2_params,
                     "autostart": "true",
                 }, condition=IfCondition(use_nav)),
+            ],
+        ),
+
+        # ============================================================
+        # Arm motion planning (use_moveit). Delayed until both arm drivers
+        # are active: move_group resolves its controllers by looking for
+        # /left_arm/follow_joint_trajectory and /right_arm/..., and a
+        # controller it cannot find at startup stays unusable.
+        # ============================================================
+        TimerAction(
+            period=MOVEIT_DELAY,
+            actions=[
+                _include("aico2_moveit_config", "move_group.launch.py",
+                         condition=IfCondition(use_moveit)),
             ],
         ),
 
