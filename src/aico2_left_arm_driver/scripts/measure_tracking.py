@@ -386,6 +386,16 @@ def report(run, name, target, result, status, csv_path, plot_path=None,
                     print(f"                     the {drop:.0f}-point drop with "
                           f"a wider window means much of the narrow figure is "
                           f"sampling noise; {wide[2]:.0f}% is the real stepping")
+                elif dup_pct > 20.0:
+                    # Wrong to call this real stepping. Corruption affecting
+                    # one sample in three does not wash out of a window only
+                    # three times wider, so a spread that survives says
+                    # nothing either way while the repeat rate is this high.
+                    print(f"                     with {dup_pct:.0f}% repeated "
+                          f"samples a spread that survives a 3x window is NOT "
+                          f"evidence of real stepping — the corruption is too "
+                          f"dense to wash out. Fix acquisition before reading "
+                          f"this number at all.")
                 else:
                     print(f"                     holding up across windows "
                           f"means this is real stepping, not sampling noise")
