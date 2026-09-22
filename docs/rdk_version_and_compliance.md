@@ -158,6 +158,76 @@ enough to demonstrate (10 N gives 20 mm) but not soft enough for insertion.
 `press` and `pih` command a force the bias corrupts directly, and require
 `--i-know-the-bias` to run at all.
 
+### Joint impedance through the ROS driver, and why a blocked arm faults
+
+Everything above is Cartesian. The `aico2_*_arm_driver` path is joint
+impedance instead: `joint_control_mode:=impedance` puts the controller in
+`NRT_JOINT_IMPEDANCE` and keeps streaming the same `SendJointPosition`
+setpoints, so MoveIt trajectories and servo teleop are unchanged — the arm
+simply yields to a push instead of fighting it. `joint_stiffness_ratio`
+scales `K_q_nom` on the arm axes only (the waist entries are `+inf` and pass
+through untouched).
+
+Stiffness alone is not enough, and this is the trap. The impedance law
+demands `K_q x deflection` with nothing bounding it, so an arm that is held
+still keeps raising torque as the setpoint stream walks away from where the
+arm actually is. Measured on this robot at `joint_stiffness_ratio:=0.15`
+(K_q = 630 Nm/rad on arm joint 4), with the forearm blocked by hand:
+
+| quantity | measured | torque demanded |
+|---|---|---|
+| RMS tracking lag | 3.500 deg | 38.5 Nm |
+| peak tracking lag | 5.562 deg | 61.2 Nm |
+| joint 4 limit | — | 64 Nm |
+
+So it never saturates — it stops just short, and what actually trips is the
+controller's collision detection, reported back as
+`SendJointPosition failed: ... Minor fault occurred` and a `CONTROL_FAILED`
+goal. Lowering the stiffness further does not fix it: it lowers the torque per
+degree, but the setpoint stream keeps walking, so the deflection grows until
+the same threshold is crossed.
+
+`SetMaxContactTorque` is the knob that does fix it. RDK: *"the controller will
+regulate its output to maintain contact torques with the environment under the
+set values"* — it is a ceiling on applied torque, not an alarm level. It has
+the same applicable modes as `SetJointImpedance`
+(`RT_`/`NRT_JOINT_IMPEDANCE`), so the driver sets it immediately after the
+mode switch, never before.
+
+`max_contact_torque` (Nm, 0 = unset) exposes it:
+
+```bash
+ros2 launch flexiv_amr_bringup arms.launch.py \
+    joint_control_mode:=impedance joint_stiffness_ratio:=0.15 \
+    max_contact_torque:=10.0
+```
+
+10 Nm is roughly 25 N at the forearm — firm, but pushable. It is retunable
+live (`ros2 param set /left_arm/left_arm_driver max_contact_torque 10.0`), and
+the driver logs what actually landed:
+
+```
+joint stiffness set to 0.15 x K_q_nom on axes 2..8, max contact torque 10 Nm
+```
+
+A ceiling above an axis's own `tau_max` is clamped per axis rather than
+rejected — the arm limits are 123/123/64/64/39/39/39 and
+`SetMaxContactTorque` raises on anything above them, so a uniform request has
+to be trimmed or nothing lands at all. The clamp is named in the same log
+line. `torque UNBOUNDED` there means the parameter is still 0 and the fault
+above is what to expect.
+
+Two more things the same experiment showed:
+
+- `joint_stiffness_ratio >= 0.8` is not compliance. At nominal `K_q` the arm
+  is as stiff as position mode and reaches its torque limit in about a
+  degree. The driver warns on configure if impedance mode is asked for at
+  that ratio.
+- Impedance tracking carries a steady-state error proportional to the
+  unmodelled load — 1.7 deg of gravity sag was measured against a 1.15 deg
+  position-mode goal tolerance, which makes convergence impossible by
+  construction. Hence the separate `goal_joint_tolerance_impedance` (0.05 rad).
+
 ## 5. Order of operations
 
 1. `rdk_primitive_pih.py <sn> check` — resting wrench and `info()`. No enable,

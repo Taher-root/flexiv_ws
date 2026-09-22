@@ -410,6 +410,30 @@ class ArmDriverNode(LifecycleNode):
                     f"{param.name} set to {value} on {size} axes "
                     f"(applies to the next SendJointPosition)")
                 continue
+            if param.name == "max_contact_torque":
+                try:
+                    value = float(param.value)
+                except (TypeError, ValueError):
+                    return SetParametersResult(
+                        successful=False,
+                        reason="max_contact_torque must be a float")
+                if value < 0.0:
+                    return SetParametersResult(
+                        successful=False,
+                        reason="max_contact_torque must be >= 0 "
+                               "(0 means leave the ceiling unset)")
+                self._max_contact_torque = value
+                if self._joint_control_mode != "impedance":
+                    self.get_logger().warn(
+                        f"max_contact_torque set to {value}, but "
+                        "joint_control_mode is 'position' so it has no effect."
+                    )
+                    continue
+                # Per-axis clamping and the log line live in
+                # _apply_joint_stiffness; not quiet, because the whole point of
+                # setting this live is seeing what actually landed.
+                self._apply_joint_stiffness()
+                continue
             if param.name != "joint_stiffness_ratio":
                 continue
             try:
@@ -483,23 +507,43 @@ class ArmDriverNode(LifecycleNode):
             for i in range(start, len(nominal)):
                 K_q[i] = nominal[i] * self._joint_stiffness_ratio
             self._session.set_joint_impedance(K_q)
+            torque_note = ", torque UNBOUNDED"
             if self._max_contact_torque > 0.0:
                 # Same applicable modes as SetJointImpedance, so it goes here:
                 # after the mode switch, never before.
-                self._session.robot.SetMaxContactTorque(
-                    [self._max_contact_torque] * len(nominal)
-                )
-            if not quiet:
+                tau_max = self._session.joint_torque_max()
+                # Waist axes keep their own limit: they are positionally rigid,
+                # +inf stiffness, and bounding their contact torque would only
+                # let the column sag. Arm axes take the requested ceiling,
+                # clamped to what each axis allows -- the limits are not
+                # uniform (123/123/64/64/39/39/39), and SetMaxContactTorque
+                # raises on anything above tau_max.
+                if len(tau_max) != len(nominal):
+                    raise ValueError(
+                        f"tau_max has {len(tau_max)} axes but K_q_nom has "
+                        f"{len(nominal)}; refusing to guess the mapping"
+                    )
+                tau = list(tau_max)
+                clamped = []
+                for i in range(start, len(tau)):
+                    tau[i] = min(self._max_contact_torque, tau_max[i])
+                    if tau[i] < self._max_contact_torque:
+                        clamped.append(f"{i}:{tau[i]:.0f}")
+                self._session.set_max_contact_torque(tau)
                 torque_note = (
                     f", max contact torque {self._max_contact_torque:.0f} Nm"
-                    if self._max_contact_torque > 0.0 else ", torque UNBOUNDED"
                 )
+                if clamped:
+                    torque_note += f" (clamped to tau_max on {', '.join(clamped)})"
+            if not quiet:
                 self.get_logger().info(
                     f"joint stiffness set to {self._joint_stiffness_ratio} x "
                     f"K_q_nom on axes {start}..{len(nominal) - 1}{torque_note}"
                 )
         except Exception as exc:  # noqa: BLE001
-            self.get_logger().error(f"SetJointImpedance failed: {exc}")
+            # Either call can raise; the arm stays in impedance mode either
+            # way, so say which knob did not land rather than implying both.
+            self.get_logger().error(f"setting joint compliance failed: {exc}")
 
     def _load_timestamp_config(self) -> None:
         """Read stamping params in configure (launch YAML may not apply at __init__)."""

@@ -9,6 +9,9 @@ Usage:
   ros2 launch flexiv_amr_bringup arms.launch.py
   ros2 launch flexiv_amr_bringup arms.launch.py mock_hardware:=true
   ros2 launch flexiv_amr_bringup arms.launch.py enable_waist_driver:=true
+  ros2 launch flexiv_amr_bringup arms.launch.py \
+      joint_control_mode:=impedance joint_stiffness_ratio:=0.15 \
+      max_contact_torque:=10.0
 """
 
 from launch import LaunchDescription
@@ -114,6 +117,8 @@ def generate_launch_description():
     # driver's double parameter rejects it as a type mismatch.
     joint_stiffness_ratio = ParameterValue(
         LaunchConfiguration("joint_stiffness_ratio"), value_type=float)
+    max_contact_torque = ParameterValue(
+        LaunchConfiguration("max_contact_torque"), value_type=float)
 
     # joint_state_architecture.md sec 3 / sec 8 step 6: the target state is
     # every driver publishing its own joints straight to /joint_states, with
@@ -155,6 +160,7 @@ def generate_launch_description():
                 #       joint_stiffness_ratio 0.3
                 "joint_control_mode": joint_control_mode,
                 "joint_stiffness_ratio": joint_stiffness_ratio,
+                "max_contact_torque": max_contact_torque,
             },
         ],
     )
@@ -176,6 +182,7 @@ def generate_launch_description():
                 "tcp_frame_id": "Right_flange",
                 "joint_control_mode": joint_control_mode,
                 "joint_stiffness_ratio": joint_stiffness_ratio,
+                "max_contact_torque": max_contact_torque,
             },
         ],
     )
@@ -244,6 +251,20 @@ def generate_launch_description():
                             "are +inf nominal and pass through untouched). "
                             "Retunable live: ros2 param set "
                             "/left_arm/left_arm_driver joint_stiffness_ratio 0.3",
+            ),
+            DeclareLaunchArgument(
+                "max_contact_torque",
+                default_value="0.0",
+                description="Nm ceiling on the torque each arm axis will apply "
+                            "against the environment in impedance mode, clamped "
+                            "per axis to tau_max. Without it the impedance law "
+                            "demands stiffness x deflection unbounded, so a "
+                            "blocked arm pushes until the controller's collision "
+                            "detection faults it -- which is what a compliance "
+                            "test looks like when it goes wrong. 10 Nm is "
+                            "roughly 25 N at the forearm. 0 leaves it unset. "
+                            "Retunable live: ros2 param set "
+                            "/left_arm/left_arm_driver max_contact_torque 10.0",
             ),
             left_driver,
             right_driver,

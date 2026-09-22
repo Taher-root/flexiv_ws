@@ -18,6 +18,13 @@ left_arm_driver:
     #   ros2 param set /<ns>/<node> joint_stiffness_ratio 0.3
     joint_control_mode: "position"
     joint_stiffness_ratio: 1.0
+    # Nm ceiling on the torque each arm axis applies against the environment in
+    # impedance mode, clamped per axis to RobotInfo.tau_max. Leave it at 0 and
+    # nothing bounds the impedance law: a blocked arm demands
+    # stiffness x deflection until the controller's collision detection faults
+    # it. 10 Nm is roughly 25 N at the forearm. Retunable live:
+    #   ros2 param set /<ns>/<node> max_contact_torque 10.0
+    max_contact_torque: 0.0
     tcp_frame_id: "Left_flange"
     teleop_backend: cartesian
     cartesian_max_linear_vel: 0.3

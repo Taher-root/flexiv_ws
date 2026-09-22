@@ -152,6 +152,26 @@ class FlexivSession:
         """
         return [float(x) for x in self._robot.info().K_q_nom]
 
+    def joint_torque_max(self) -> List[float]:
+        """RobotInfo.tau_max, length = robot DoF (9 here: 2 waist + 7 arm).
+
+        SetMaxContactTorque validates each entry against [0, tau_max], so a
+        uniform ceiling has to be clamped per axis before it is sent: on this
+        robot the arm limits are not uniform (123/123/64/64/39/39/39 in the
+        URDF), and asking for more than an axis allows raises.
+        """
+        return [float(x) for x in self._robot.info().tau_max]
+
+    def set_max_contact_torque(self, tau: List[float]) -> None:
+        """Bound the torque the controller will apply against the environment.
+
+        RDK: "the controller will regulate its output to maintain contact
+        torques with the environment under the set values". Same applicable
+        modes as SetJointImpedance (RT_/NRT_JOINT_IMPEDANCE), so callers must
+        have switched mode first.
+        """
+        self._robot.SetMaxContactTorque(tau)
+
     def set_joint_impedance(
         self, K_q: List[float], Z_q: Optional[List[float]] = None
     ) -> None:

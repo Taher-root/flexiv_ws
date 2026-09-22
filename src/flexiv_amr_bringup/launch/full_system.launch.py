@@ -138,6 +138,11 @@ def generate_launch_description():
         DeclareLaunchArgument("joint_stiffness_ratio", default_value="1.0",
                               description="fraction of K_q_nom on the arm axes "
                                           "when joint_control_mode:=impedance"),
+        DeclareLaunchArgument("max_contact_torque", default_value="0.0",
+                              description="Nm ceiling on the torque each arm axis "
+                                          "applies against the environment in "
+                                          "impedance mode; 0 leaves it unbounded "
+                                          "(see arms.launch.py)"),
         DeclareLaunchArgument("use_moveit", default_value="false",
                               description="Launch move_group for arm motion "
                                           "planning (aico2_moveit_config)"),
@@ -164,6 +169,7 @@ def generate_launch_description():
             "direct_joint_states": LaunchConfiguration("direct_joint_states"),
             "joint_control_mode": LaunchConfiguration("joint_control_mode"),
             "joint_stiffness_ratio": LaunchConfiguration("joint_stiffness_ratio"),
+            "max_contact_torque": LaunchConfiguration("max_contact_torque"),
         }),
 
         # ============================================================
