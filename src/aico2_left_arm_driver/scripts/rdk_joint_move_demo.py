@@ -60,9 +60,30 @@ import rdk_common as rc
 _SCRIPT = "rdk_joint_move_demo.py"
 
 
-def _wait_until_reached(robot, target, index, tol_deg, timeout_sec, label):
-    """Poll q until the moved joint is within tol_deg of its target."""
+def args_joint_hint(label):
+    """Pull the user-facing joint number back out of the label for messages."""
+    return label.split()[2] if label.startswith("arm joint") else "?"
+
+
+def _tcp_xyz(robot):
+    return [float(x) for x in robot.states().tcp_pose[:3]]
+
+
+def _dist_mm(a, b):
+    return 1000.0 * math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
+
+
+def _wait_until_reached(robot, target, index, tol_deg, timeout_sec, label,
+                       hint=False):
+    """Poll q until the moved joint is within tol_deg of its target.
+
+    Also reports how far the TCP has travelled, because the joint angle alone
+    does not answer "did it move visibly". Ten degrees on the last wrist joint
+    is a real motion worth a couple of millimetres at the flange, which looks
+    like nothing at all.
+    """
     tol = math.radians(tol_deg)
+    tcp0 = _tcp_xyz(robot)
     t0 = time.monotonic()
     last_report = -1.0
     while True:
@@ -73,9 +94,19 @@ def _wait_until_reached(robot, target, index, tol_deg, timeout_sec, label):
             last_report = elapsed
             print(f"t={elapsed:5.1f}s  {label} at "
                   f"{math.degrees(q[index]):8.2f}°  "
-                  f"error {math.degrees(err):6.2f}°", flush=True)
+                  f"error {math.degrees(err):6.2f}°  "
+                  f"TCP moved {_dist_mm(_tcp_xyz(robot), tcp0):6.1f} mm",
+                  flush=True)
         if err <= tol:
-            print(f"reached target within {tol_deg}° after {elapsed:.1f}s")
+            travel = _dist_mm(_tcp_xyz(robot), tcp0)
+            print(f"reached target within {tol_deg}° after {elapsed:.1f}s — "
+                  f"TCP travelled {travel:.1f} mm")
+            if hint and travel < 5.0:
+                print(f"  {travel:.1f} mm is why you may not have seen it. "
+                      f"Joint {args_joint_hint(label)} barely displaces the "
+                      "flange;")
+                print("  try --joint 4 (elbow) or --joint 1 (base) with "
+                      "--degrees 20 for obvious motion.")
             return q
         if robot.fault():
             raise RuntimeError("fault during motion — check the event log")
@@ -184,7 +215,7 @@ def stage_position(args, rdk, robot):
     print(f"\nmoving {args.degrees:+.1f}° at {args.vel_deg:.0f}°/s")
     _send(robot, target, max_vel, max_acc)
     _wait_until_reached(robot, target, index, args.tol_deg, args.move_timeout,
-                        label)
+                        label, hint=True)
 
     _stream_hold(robot, target, index, args.hold, args.rate,
                  f"PUSH THE ARM — {args.hold:.0f}s of stiff position hold")
@@ -223,7 +254,7 @@ def stage_impedance(args, rdk, robot):
           f"(impedance tracking)")
     _send(robot, target, max_vel, max_acc)
     _wait_until_reached(robot, target, index, args.tol_deg, args.move_timeout,
-                        label)
+                        label, hint=True)
 
     k_joint = K_q[index]
     give = (math.degrees(args.probe_torque / k_joint) if k_joint else
