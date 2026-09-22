@@ -289,13 +289,41 @@ class ArmDriverNode(LifecycleNode):
         return max(0.0, min(1.0, ratio))
 
     def _on_set_parameters(self, params):
-        """Allow joint_stiffness_ratio to be retuned live.
+        """Allow the motion-tuning parameters to be retuned live.
 
-        Retuning is why this is a parameter rather than a service: finding a
-        usable stiffness is an interactive process, and `ros2 param set` needs
-        no new message definition.
+        Retuning is why these are parameters rather than services: finding a
+        usable stiffness or velocity cap is an interactive process, and
+        `ros2 param set` needs no new message definition.
+
+        default_max_joint_vel / default_max_joint_acc are the caps handed to
+        SendJointPosition on every send. They matter for smoothness: each send
+        triggers an online re-plan inside the controller (see RDK's warning on
+        SendJointPosition), so a cap far above what the commanded trajectory
+        actually needs makes every re-plan sprint at the cap and then get
+        aborted by the next send. Lowering them toward the trajectory's own
+        profile is the first thing to try when motion looks rough.
         """
         for param in params:
+            if param.name in ("default_max_joint_vel", "default_max_joint_acc"):
+                try:
+                    value = float(param.value)
+                except (TypeError, ValueError):
+                    return SetParametersResult(
+                        successful=False,
+                        reason=f"{param.name} must be a float")
+                if value <= 0.0:
+                    return SetParametersResult(
+                        successful=False,
+                        reason=f"{param.name} must be positive")
+                size = self._rdk_dof or self._dof
+                if param.name == "default_max_joint_vel":
+                    self._max_vel = [value] * size
+                else:
+                    self._max_acc = [value] * size
+                self.get_logger().info(
+                    f"{param.name} set to {value} on {size} axes "
+                    f"(applies to the next SendJointPosition)")
+                continue
             if param.name != "joint_stiffness_ratio":
                 continue
             try:
