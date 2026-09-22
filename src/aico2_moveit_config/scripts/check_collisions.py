@@ -12,6 +12,10 @@ contacts come back as data:
     # check where the arm is now, and where a named state would put it
     python3 .../check_collisions.py --named ready
 
+    # check a relative move BEFORE executing it -- same arguments as
+    # moveit_goal.py, so the answer applies to the move you are about to make
+    python3 .../check_collisions.py --joint 4 --degrees -15
+
     # ready-to-paste SRDF lines for whatever it found
     python3 .../check_collisions.py --emit-srdf
 
@@ -157,6 +161,11 @@ def main():
     ap.add_argument("--named",
                     help="also check this SRDF named state (the goal), not just "
                          "the current pose")
+    ap.add_argument("--joint", type=int,
+                    help="also check the target of a relative move on this arm "
+                         "joint (1-7), the way moveit_goal.py would command it")
+    ap.add_argument("--degrees", type=float, default=-15.0,
+                    help="size of that relative move")
     ap.add_argument("--emit-srdf", action="store_true",
                     help="print disable_collisions lines for pairs found")
     ap.add_argument("--timeout", type=float, default=5.0)
@@ -168,6 +177,21 @@ def main():
         current = node.wait_for_state(args.timeout)
         valid, pairs = node.check(args.group, current, "CURRENT POSE",
                                   args.timeout)
+
+        if args.joint is not None:
+            if not 1 <= args.joint <= 7:
+                raise SystemExit("--joint must be 1..7")
+            prefix = "Right" if "right" in args.group else "Left"
+            name = f"{prefix}_joint{args.joint}"
+            if name not in current:
+                raise SystemExit(f"{name} is not in /joint_states")
+            moved = dict(current)
+            moved[name] = current[name] + math.radians(args.degrees)
+            move_valid, move_pairs = node.check(
+                args.group, moved,
+                f"TARGET after {args.degrees:+.1f}° on {name}", args.timeout)
+            valid = valid and move_valid
+            pairs = pairs + [p for p in move_pairs if p not in pairs]
 
         if args.named:
             target = load_named_state(args.group, args.named)
@@ -186,8 +210,14 @@ def main():
 
         print()
         if valid and not pairs:
-            print("Both states are collision-free as far as move_group is")
-            print("concerned. If planning still fails, move_group is running")
+            print("Every state checked is collision-free as far as move_group")
+            print("is concerned. Note that MoveIt checks this itself on every")
+            print("plan, so a move that would collide is refused at planning")
+            print("time rather than executed — planning success is already the")
+            print("collision guarantee. This script is for when it refuses and")
+            print("you want to know which pair.")
+            print()
+            print("If planning still fails, move_group is running")
             print("against a stale SRDF — it reads it once at startup, so")
             print("restart it after regenerating aico2.srdf.")
             return 0
