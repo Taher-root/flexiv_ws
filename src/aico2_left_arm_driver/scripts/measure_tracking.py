@@ -9,6 +9,21 @@ other:
     source /opt/ros/jazzy/setup.bash
     python3 measure_tracking.py --joint 4 --degrees -15 --yes-move
     python3 measure_tracking.py --joint 4 --degrees -15 --yes-move --csv run.csv
+    python3 measure_tracking.py --joint 4 --degrees -15 --yes-move --plot run.html
+
+--plot writes a self-contained HTML page (no matplotlib, nothing to install)
+with every joint's speed over time, so cross-talk into joints that were not
+commanded is visible alongside the commanded one. Open it in any browser, or
+scp it to a machine that has one.
+
+READ THE REPEATED-SAMPLE FIGURE FIRST. /joint_states is published at
+publish_rate_hz, but the value it carries only changes when the poll thread has
+a fresh reading. When a fifth to a third of consecutive samples repeat, the
+finest wiggles in any velocity computed from them are the measurement, not the
+arm: a repeat gives velocity zero, the next sample gives a double-size step, and
+that pair looks exactly like a stutter. This script therefore differentiates
+over a window wide enough to span the repeats, and tells you what fraction
+repeated so the fine detail can be discounted honestly.
 
 WHAT IT REPORTS, AND WHAT EACH ONE MEANS
 
@@ -52,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import math
 import statistics
 import sys
@@ -159,6 +175,29 @@ class TrackingRun(Node):
                 name, target[name])
 
 
+def _repeat_fraction(values):
+    """Fraction of consecutive samples identical to their predecessor."""
+    if len(values) < 2:
+        return 0.0
+    repeats = sum(1 for i in range(1, len(values)) if values[i] == values[i - 1])
+    return repeats / (len(values) - 1)
+
+
+def _smooth_velocity(times, values, half_window):
+    """Central difference over +/-half_window samples.
+
+    A one-sample difference is useless here: with repeated samples it alternates
+    between zero and a double step. The window has to span the repeats.
+    """
+    out = []
+    for i in range(half_window, len(values) - half_window):
+        dt = times[i + half_window] - times[i - half_window]
+        if dt > 0:
+            out.append((times[i],
+                        (values[i + half_window] - values[i - half_window]) / dt))
+    return out
+
+
 def _derivatives(times, values):
     """Finite-difference velocity and acceleration, unevenly sampled."""
     vel, acc = [], []
@@ -183,7 +222,103 @@ def _sign_reversals(series, deadband):
     return reversals
 
 
-def report(run, name, target, result, status, csv_path):
+_PLOT_TEMPLATE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Joint speeds</title><style>
+:root{color-scheme:light;--s0:#f6f6f4;--s1:#fcfcfb;--bd:#dddcd6;--gr:#e8e7e1;
+--tp:#0b0b0b;--ts:#52514e;--tm:#7a7973}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;
+--s0:#121211;--s1:#1a1a19;--bd:#35342f;--gr:#2a2a26;--tp:#fff;--ts:#c3c2b7;--tm:#8f8e84}}
+:root[data-theme="dark"]{color-scheme:dark;--s0:#121211;--s1:#1a1a19;--bd:#35342f;
+--gr:#2a2a26;--tp:#fff;--ts:#c3c2b7;--tm:#8f8e84}
+*{box-sizing:border-box}body{margin:0;padding:26px 16px 44px;background:var(--s0);
+color:var(--tp);font:15px/1.55 ui-sans-serif,system-ui,-apple-system,sans-serif}
+.wrap{max-width:900px;margin:0 auto}h1{font-size:20px;margin:0 0 6px}
+.sub{color:var(--ts);font-size:13.5px;margin:0 0 20px}
+.card{background:var(--s1);border:1px solid var(--bd);border-radius:10px;
+padding:18px 18px 10px;margin-bottom:18px}
+.lg{display:flex;flex-wrap:wrap;gap:14px;margin:0 0 12px}
+.lg div{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ts)}
+.sw{width:13px;height:3px;border-radius:2px;flex:none}
+svg{display:block;width:100%;height:auto;overflow:visible}
+.g{stroke:var(--gr);stroke-width:1}.ax{stroke:var(--bd);stroke-width:1}
+.tk{fill:var(--tm);font-size:11px}.at{fill:var(--ts);font-size:12px}
+.sr{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
+caption{text-align:left;color:var(--ts);font-size:13px;padding:0 0 10px}
+th,td{text-align:right;padding:6px 10px;border-bottom:1px solid var(--bd)}
+th:first-child,td:first-child{text-align:left}th{color:var(--ts);font-weight:600}
+.note{color:var(--ts);font-size:13.5px}.note b{color:var(--tp)}
+</style></head><body><div class="wrap">
+<h1>__TITLE__</h1><p class="sub">__SUB__</p>
+<div class="card"><div class="lg" id="lg"></div>
+<svg id="c" viewBox="0 0 900 380" role="img" aria-label="joint speed over time"></svg></div>
+<div class="card"><table><caption>Peak speed per joint. Only the commanded joint
+should be far from zero; anything else is cross-talk.</caption>
+<thead><tr><th>Joint</th><th>Peak speed</th><th>Travelled</th></tr></thead>
+<tbody id="tb"></tbody></table></div>
+<p class="note"><b>Repeated samples: __DUP__%.</b> Speed is a central difference
+over __WIN__ ms, wide enough to span them. Trust the envelope, not single spikes.</p>
+</div><script>
+const D=__DATA__;
+const C=['#2a78d6','#eb6834','#1baf7a','#eda100','#e87ba4','#008300','#4a3aa7'];
+const W=900,H=380,M={t:18,r:86,b:46,l:56},iw=W-M.l-M.r,ih=H-M.t-M.b;
+const xM=Math.max(...D.series.flatMap(s=>s.pts.map(p=>p[0])))||1;
+const yM=Math.max(1,Math.ceil(Math.max(...D.series.flatMap(s=>s.pts.map(p=>Math.abs(p[1]))))));
+const X=v=>M.l+v/xM*iw,Y=v=>M.t+ih-v/yM*ih;
+const ns='http://www.w3.org/2000/svg',sv=document.getElementById('c');
+const E=(n,a)=>{const e=document.createElementNS(ns,n);for(const k in a)e.setAttribute(k,a[k]);return e};
+for(let i=0;i<=5;i++){const v=yM/5*i,y=Y(v);
+sv.appendChild(E('line',{class:'g',x1:M.l,x2:M.l+iw,y1:y,y2:y}));
+const t=E('text',{class:'tk',x:M.l-9,y:y+4,'text-anchor':'end'});t.textContent=v.toFixed(1);sv.appendChild(t)}
+sv.appendChild(E('line',{class:'ax',x1:M.l,x2:M.l+iw,y1:M.t+ih,y2:M.t+ih}));
+for(let v=0;v<=xM+1e-9;v+=1){const t=E('text',{class:'tk',x:X(v),y:M.t+ih+18,'text-anchor':'middle'});
+t.textContent=v.toFixed(0)+'s';sv.appendChild(t)}
+let a=E('text',{class:'at',x:M.l+iw/2,y:H-6,'text-anchor':'middle'});a.textContent='time from start of motion';sv.appendChild(a);
+a=E('text',{class:'at',x:M.l-42,y:M.t+ih/2,'text-anchor':'middle',transform:`rotate(-90 ${M.l-42} ${M.t+ih/2})`});
+a.textContent='speed (deg/s)';sv.appendChild(a);
+D.series.forEach((s,i)=>{const col=C[i%C.length];
+sv.appendChild(E('path',{class:'sr',d:s.pts.map((p,j)=>(j?'L':'M')+X(p[0]).toFixed(1)+' '+Y(Math.abs(p[1])).toFixed(1)).join(' '),stroke:col}));
+if(s.commanded){const l=E('text',{x:M.l+iw+8,y:Y(Math.abs(s.pts[s.pts.length-1][1]))+4,fill:col,'font-size':'12','font-weight':'600'});
+l.textContent=s.name.replace(/^(Left|Right)_/,'');sv.appendChild(l)}});
+document.getElementById('lg').innerHTML=D.series.map((s,i)=>
+`<div><span class="sw" style="background:${C[i%C.length]}"></span>${s.name}${s.commanded?' (commanded)':''}</div>`).join('');
+document.getElementById('tb').innerHTML=D.series.map(s=>
+`<tr><td>${s.name}${s.commanded?' <b>(commanded)</b>':''}</td><td>${Math.max(...s.pts.map(p=>Math.abs(p[1]))).toFixed(2)} deg/s</td><td>${s.travelled.toFixed(2)}&deg;</td></tr>`).join('');
+</script></body></html>"""
+
+
+def write_plot(path, run, commanded, half_window, dup_pct):
+    """Self-contained HTML: every joint's speed over time. No dependencies."""
+    samples = run._samples
+    times = [t for t, _ in samples]
+    t0 = times[half_window] if len(times) > half_window else times[0]
+    series = []
+    for jname in run._joint_names:
+        values = [q[jname] for _, q in samples]
+        vel = _smooth_velocity(times, values, half_window)
+        series.append({
+            "name": jname,
+            "commanded": jname == commanded,
+            "travelled": math.degrees(values[-1] - values[0]),
+            "pts": [[round(t - t0, 3), round(math.degrees(v), 3)] for t, v in vel],
+        })
+    window_ms = 2 * half_window * (times[-1] - times[0]) / max(len(times) - 1, 1) * 1000
+    html = (_PLOT_TEMPLATE
+            .replace("__TITLE__", f"Joint speeds during a move of {commanded}")
+            .replace("__SUB__", "Every joint in the group, so cross-talk into "
+                                "joints that were not commanded is visible.")
+            .replace("__DUP__", f"{dup_pct:.0f}")
+            .replace("__WIN__", f"{window_ms:.0f}")
+            .replace("__DATA__", json.dumps({"series": series},
+                                            separators=(",", ":"))))
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(html)
+    return path
+
+
+def report(run, name, target, result, status, csv_path, plot_path=None,
+           half_window=3):
     samples, feedback = run._samples, run._feedback
     if len(samples) < 5:
         print(f"only {len(samples)} samples recorded — nothing to analyse")
@@ -193,12 +328,16 @@ def report(run, name, target, result, status, csv_path):
     values = [q[name] for _, q in samples]
     vel, acc = _derivatives(times, values)
     span = times[-1] - times[0]
+    dup_pct = 100.0 * _repeat_fraction(values)
 
     print("=" * 66)
     print(f"MOTION OF {name}")
     print("=" * 66)
     print(f"  samples            {len(samples)} over {span:.2f}s "
           f"({len(samples) / span:.1f} Hz)")
+    print(f"  repeated samples   {dup_pct:.0f}%   "
+          f"(identical to the previous one; above ~10% the fine detail below "
+          f"is measurement, not motion)")
     print(f"  travelled          {math.degrees(values[-1] - values[0]):+.2f}°")
     print(f"  peak |velocity|    {math.degrees(max(abs(v) for v in vel)):.1f} °/s")
     if acc:
@@ -210,6 +349,21 @@ def report(run, name, target, result, status, csv_path):
         print(f"  accel reversals    {reversals}   "
               f"(1 = one smooth accelerate-coast-decelerate; "
               f"each extra one is a stutter)")
+        if dup_pct > 10.0:
+            print(f"                     ^ inflated by the {dup_pct:.0f}% "
+                  f"repeated samples — compare runs, do not read absolutely")
+        # The honest number: differentiate over a window that spans the repeats.
+        smooth = _smooth_velocity(times, values, half_window)
+        if len(smooth) > 3:
+            speeds = [abs(v) for _, v in smooth]
+            peak = max(speeds)
+            cruise = [v for v in speeds if v > 0.5 * peak]
+            mean = sum(cruise) / len(cruise)
+            spread = (max(cruise) - min(cruise)) / mean * 100.0
+            print(f"  smoothed peak      {math.degrees(peak):.1f} °/s")
+            print(f"  cruise spread      {spread:.0f}% of mean   "
+                  f"(0% is a perfectly steady cruise; this is the number to "
+                  f"compare between configurations)")
 
     print()
     print("=" * 66)
@@ -250,6 +404,10 @@ def report(run, name, target, result, status, csv_path):
               + (f", {result.error_string!r}" if result.error_string else ""))
     print(f"  goal status        {status}")
 
+    if plot_path:
+        write_plot(plot_path, run, name, half_window, dup_pct)
+        print(f"\nwrote {plot_path} — open it in a browser")
+
     if csv_path:
         with open(csv_path, "w", newline="", encoding="utf-8") as fh:
             writer = csv.writer(fh)
@@ -274,6 +432,11 @@ def main():
     ap.add_argument("--duration", type=float, default=4.0)
     ap.add_argument("--timeout", type=float, default=10.0)
     ap.add_argument("--csv", help="write the raw samples here")
+    ap.add_argument("--plot", help="write a self-contained HTML plot of every "
+                                   "joint's speed here")
+    ap.add_argument("--smooth-window", type=int, default=3,
+                    help="half-width in samples for the smoothed velocity; "
+                         "must span the repeated samples")
     ap.add_argument("--yes-move", action="store_true", help="required: it moves")
     args = ap.parse_args()
 
@@ -291,7 +454,8 @@ def main():
     try:
         result, status, name, target = run.run(
             args.joint - 1, args.degrees, args.duration, args.timeout)
-        return report(run, name, target, result, status, args.csv)
+        return report(run, name, target, result, status, args.csv,
+                      args.plot, args.smooth_window)
     except (RuntimeError, TimeoutError) as exc:
         print(f"\nFAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
