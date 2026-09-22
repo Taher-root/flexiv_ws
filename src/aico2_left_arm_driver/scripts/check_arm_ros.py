@@ -145,7 +145,12 @@ class ArmChecker(Node):
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline and self._fault is None:
             rclpy.spin_once(self, timeout_sec=0.05)
-        node = f"/{self._ns}/{self._node_name}" if self._ns else f"/{self._node_name}"
+        # Services are created with a relative name, which rclpy resolves
+        # against the node's NAMESPACE, not its name: /left_arm/clear_fault,
+        # never /left_arm/left_arm_driver/clear_fault. Getting this wrong sends
+        # the reader to a service that does not exist, where `ros2 service call`
+        # waits forever.
+        node = f"/{self._ns}" if self._ns else ""
         if self._fault is None:
             return self.record(
                 _WARN, "arm is not in fault",

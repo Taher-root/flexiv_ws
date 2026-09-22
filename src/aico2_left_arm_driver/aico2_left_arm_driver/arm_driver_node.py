@@ -119,6 +119,7 @@ class ArmDriverNode(LifecycleNode):
         self._joint_stiffness_ratio = 1.0
         self._goal_settle_timeout = 3.0
         self._goal_tol_impedance = 0.05
+        self._max_contact_torque = 0.0
         self._traj_send_rate = 50.0
         self._cartesian_max_lin = 0.3
         self._cartesian_max_ang = 1.047
@@ -248,6 +249,15 @@ class ArmDriverNode(LifecycleNode):
         # is a matter of declaring the tool in Flexiv Elements, not of tuning
         # this number.
         self.declare_parameter("goal_joint_tolerance_impedance", 0.05)
+        # Torque ceiling per arm axis in impedance mode. Without it the
+        # impedance law demands stiffness x deflection with no bound and the
+        # joint simply saturates: at nominal K_q, arm joint 4 (4200 Nm/rad)
+        # demands 294 Nm for 4 degrees of deflection against its 64 Nm limit,
+        # so a blocked arm pushes with everything it has until the controller's
+        # collision detection trips. SetMaxContactTorque makes it yield at a
+        # chosen torque instead. 0 or less leaves it unset (previous
+        # behaviour); the URDF's own effort limits are 123/123/64/64/39/39/39.
+        self.declare_parameter("max_contact_torque", 0.0)
         # Rate at which trajectory samples are pushed to the controller. Was
         # welded to publish_rate_hz, which conflated two unrelated things: how
         # often state is published, and how often the arm is re-commanded.
@@ -319,6 +329,23 @@ class ArmDriverNode(LifecycleNode):
         self._goal_tol_impedance = float(
             self.get_parameter("goal_joint_tolerance_impedance").value
         )
+        self._max_contact_torque = float(
+            self.get_parameter("max_contact_torque").value
+        )
+        if (self._joint_control_mode == "impedance"
+                and self._joint_stiffness_ratio >= 0.8):
+            self.get_logger().warn(
+                f"joint_control_mode is 'impedance' but joint_stiffness_ratio "
+                f"is {self._joint_stiffness_ratio}: at nominal K_q the arm is "
+                f"as stiff as position mode and will NOT yield to a push — it "
+                f"saturates its joint torque instead. Use 0.1-0.3 for "
+                f"compliance, and never test it with a hand or arm in the path."
+            )
+        if self._joint_control_mode == "impedance" and self._max_contact_torque <= 0.0:
+            self.get_logger().warn(
+                "max_contact_torque is unset, so nothing bounds the torque the "
+                "impedance law will demand when the arm is obstructed."
+            )
         send_rate = float(self.get_parameter("trajectory_send_rate_hz").value)
         self._traj_send_rate = send_rate if send_rate > 0.0 else self._rate_hz
 
@@ -382,6 +409,30 @@ class ArmDriverNode(LifecycleNode):
                 self.get_logger().info(
                     f"{param.name} set to {value} on {size} axes "
                     f"(applies to the next SendJointPosition)")
+                continue
+            if param.name == "max_contact_torque":
+                try:
+                    value = float(param.value)
+                except (TypeError, ValueError):
+                    return SetParametersResult(
+                        successful=False,
+                        reason="max_contact_torque must be a float")
+                if value < 0.0:
+                    return SetParametersResult(
+                        successful=False,
+                        reason="max_contact_torque must be >= 0 "
+                               "(0 means leave the ceiling unset)")
+                self._max_contact_torque = value
+                if self._joint_control_mode != "impedance":
+                    self.get_logger().warn(
+                        f"max_contact_torque set to {value}, but "
+                        "joint_control_mode is 'position' so it has no effect."
+                    )
+                    continue
+                # Per-axis clamping and the log line live in
+                # _apply_joint_stiffness; not quiet, because the whole point of
+                # setting this live is seeing what actually landed.
+                self._apply_joint_stiffness()
                 continue
             if param.name != "joint_stiffness_ratio":
                 continue
@@ -456,13 +507,43 @@ class ArmDriverNode(LifecycleNode):
             for i in range(start, len(nominal)):
                 K_q[i] = nominal[i] * self._joint_stiffness_ratio
             self._session.set_joint_impedance(K_q)
+            torque_note = ", torque UNBOUNDED"
+            if self._max_contact_torque > 0.0:
+                # Same applicable modes as SetJointImpedance, so it goes here:
+                # after the mode switch, never before.
+                tau_max = self._session.joint_torque_max()
+                # Waist axes keep their own limit: they are positionally rigid,
+                # +inf stiffness, and bounding their contact torque would only
+                # let the column sag. Arm axes take the requested ceiling,
+                # clamped to what each axis allows -- the limits are not
+                # uniform (123/123/64/64/39/39/39), and SetMaxContactTorque
+                # raises on anything above tau_max.
+                if len(tau_max) != len(nominal):
+                    raise ValueError(
+                        f"tau_max has {len(tau_max)} axes but K_q_nom has "
+                        f"{len(nominal)}; refusing to guess the mapping"
+                    )
+                tau = list(tau_max)
+                clamped = []
+                for i in range(start, len(tau)):
+                    tau[i] = min(self._max_contact_torque, tau_max[i])
+                    if tau[i] < self._max_contact_torque:
+                        clamped.append(f"{i}:{tau[i]:.0f}")
+                self._session.set_max_contact_torque(tau)
+                torque_note = (
+                    f", max contact torque {self._max_contact_torque:.0f} Nm"
+                )
+                if clamped:
+                    torque_note += f" (clamped to tau_max on {', '.join(clamped)})"
             if not quiet:
                 self.get_logger().info(
                     f"joint stiffness set to {self._joint_stiffness_ratio} x "
-                    f"K_q_nom on axes {start}..{len(nominal) - 1}"
+                    f"K_q_nom on axes {start}..{len(nominal) - 1}{torque_note}"
                 )
         except Exception as exc:  # noqa: BLE001
-            self.get_logger().error(f"SetJointImpedance failed: {exc}")
+            # Either call can raise; the arm stays in impedance mode either
+            # way, so say which knob did not land rather than implying both.
+            self.get_logger().error(f"setting joint compliance failed: {exc}")
 
     def _load_timestamp_config(self) -> None:
         """Read stamping params in configure (launch YAML may not apply at __init__)."""
