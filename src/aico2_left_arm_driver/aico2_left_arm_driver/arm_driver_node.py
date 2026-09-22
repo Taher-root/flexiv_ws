@@ -1240,6 +1240,9 @@ class ArmDriverNode(LifecycleNode):
         feedback = FollowJointTrajectory.Feedback()
         rate = 1.0 / self._traj_send_rate
         start = time.monotonic()
+        # Counted so the achieved rate can be compared against the configured
+        # one: they diverged badly and nothing reported it.
+        iterations = 0
 
         try:
             while rclpy.ok():
@@ -1262,6 +1265,7 @@ class ArmDriverNode(LifecycleNode):
                     return result
 
                 elapsed = time.monotonic() - start
+                iterations += 1
                 q_cmd, dq_cmd = sample_trajectory(traj, elapsed, self._dof)
 
                 if not self._mock and self._session:
@@ -1288,13 +1292,21 @@ class ArmDriverNode(LifecycleNode):
                         self._traj_goal_handle = None
                         return result
 
-                feedback.actual.positions = (
-                    self._extract_arm_q(
-                        [float(x) for x in self._session.states().q[: self._rdk_dof]]
+                # Read the poll thread's slot rather than making a second
+                # blocking RDK call: feedback is informational, and the extra
+                # round trip per iteration is what caps this loop near 25 Hz
+                # however high trajectory_send_rate_hz is set. The convergence
+                # check below still takes a fresh reading, because that one
+                # decides when the goal succeeds.
+                sample = self._sample
+                if self._mock or not self._session:
+                    feedback.actual.positions = q_cmd
+                elif sample is not None:
+                    feedback.actual.positions = self._extract_arm_q(
+                        list(sample.q[: self._rdk_dof])
                     )
-                    if not self._mock and self._session
-                    else q_cmd
-                )
+                else:
+                    feedback.actual.positions = q_cmd
                 feedback.desired.positions = q_cmd
                 feedback.desired.time_from_start.sec = int(elapsed)
                 feedback.desired.time_from_start.nanosec = int(
@@ -1356,6 +1368,16 @@ class ArmDriverNode(LifecycleNode):
                     at_goal = True
 
                 if at_goal:
+                    if elapsed > 0:
+                        achieved = iterations / elapsed
+                        note = ("" if achieved >= 0.9 * self._traj_send_rate
+                                else "  <- loop is saturated; the configured "
+                                     "rate is not being reached")
+                        self.get_logger().info(
+                            f"trajectory sent {iterations} setpoints in "
+                            f"{elapsed:.2f}s = {achieved:.0f} Hz "
+                            f"(configured {self._traj_send_rate:.0f} Hz){note}"
+                        )
                     if self._mock:
                         q_final, _ = sample_trajectory(traj, duration, self._dof)
                         self._mock_hold_q = list(q_final[: self._dof])
