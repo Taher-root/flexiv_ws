@@ -989,6 +989,17 @@ class ArmDriverNode(LifecycleNode):
         rather than an aperiodic sampler of a 1 kHz signal (sec 2a/4.1).
         """
         last_ts: Optional[Tuple[int, int]] = None
+        # Instrumented because the 1 kHz claim above is not what /joint_states
+        # shows: during a trajectory a third of consecutive published samples
+        # repeat, which means this slot is not being refreshed between
+        # publishes. Two candidate causes, and these counters tell them apart:
+        # polls/s far below 1 kHz means this thread is starved (it spins with
+        # no sleep, so it is CPU-bound and loses GIL slices to every thread
+        # doing blocking work), while polls/s high with updates/s low means the
+        # device stream itself is slower than expected.
+        polls = 0
+        updates = 0
+        window_t0 = time.monotonic()
         while not self._poll_stop.is_set():
             try:
                 st = self._session.states()
@@ -999,9 +1010,11 @@ class ArmDriverNode(LifecycleNode):
                 time.sleep(0.05)
                 continue
             # (sec, nanosec) tuple — compare exactly, don't cast to float here.
+            polls += 1
             ts = st.timestamp
             if ts != last_ts:
                 last_ts = ts
+                updates += 1
                 self._sample = _ArmSample(
                     device_timestamp=ts,
                     host_mono=time.monotonic(),
@@ -1012,6 +1025,19 @@ class ArmDriverNode(LifecycleNode):
                     ext_wrench=[float(x) for x in st.ext_wrench_in_tcp],
                 )
             # No sleep: states() is a cached read (~4 us, sec 1).
+            if self._log_rdk_send_rate:
+                elapsed = time.monotonic() - window_t0
+                if elapsed >= self._log_rdk_send_interval:
+                    self.get_logger().info(
+                        f"acquisition: {polls / elapsed:.0f} polls/s, "
+                        f"{updates / elapsed:.0f} new samples/s "
+                        f"(design assumes ~1000; a publish at "
+                        f"{self._rate_hz:.0f} Hz repeats a sample whenever "
+                        f"this drops below it)"
+                    )
+                    polls = 0
+                    updates = 0
+                    window_t0 = time.monotonic()
 
     def _maybe_refresh_offset(self) -> None:
         if (
