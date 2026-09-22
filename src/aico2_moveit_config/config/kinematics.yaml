@@ -1,0 +1,30 @@
+# IK solvers, one entry per planning group in aico2.srdf.
+#
+# KDL is used because it ships with MoveIt and needs nothing installed. It is
+# a numeric Newton solver and does NOT exploit the arms' 7th joint: on a
+# redundant arm it can fail to find a solution that a redundancy-aware solver
+# would. If IK failures become the limiting factor, install pick_ik and swap
+# the commented block in -- same file, no other change.
+left_arm:
+  kinematics_solver: kdl_kinematics_plugin/KDLKinematicsPlugin
+  kinematics_solver_search_resolution: 0.005
+  kinematics_solver_timeout: 0.05
+  kinematics_solver_attempts: 3
+
+right_arm:
+  kinematics_solver: kdl_kinematics_plugin/KDLKinematicsPlugin
+  kinematics_solver_search_resolution: 0.005
+  kinematics_solver_timeout: 0.05
+  kinematics_solver_attempts: 3
+
+# left_arm:
+#   kinematics_solver: pick_ik/PickIkPlugin
+#   kinematics_solver_timeout: 0.05
+#   mode: global
+#   position_scale: 1.0
+#   rotation_scale: 0.5
+#   position_threshold: 0.001
+#   orientation_threshold: 0.01
+#   cost_threshold: 0.001
+#   minimal_displacement_weight: 0.0
+#   gd_step_size: 0.0001

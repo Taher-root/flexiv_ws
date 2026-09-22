@@ -1,0 +1,50 @@
+# How MoveIt hands trajectories to the arm drivers.
+#
+# No ros2_control here: aico2_left_arm_driver serves FollowJointTrajectory
+# itself (arm_driver_node.py:600) and streams to the Rizon over RDK. So the
+# simple controller manager is the right one, and moveit_manage_controllers is
+# false -- there is no controller_manager to switch anything.
+#
+# CRITICAL: MoveIt builds the action name as <controller_name>/<action_ns>.
+# The drivers run in namespaces /left_arm and /right_arm and serve
+# "follow_joint_trajectory" relative to the node's namespace, so the controller
+# names below MUST be left_arm and right_arm -- not left_arm_controller.
+moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
+moveit_manage_controllers: false
+
+trajectory_execution:
+  allowed_execution_duration_scaling: 2.0
+  allowed_goal_duration_margin: 1.0
+  allowed_start_tolerance: 0.05
+  execution_duration_monitoring: true
+
+moveit_simple_controller_manager:
+  controller_names:
+    - left_arm
+    - right_arm
+
+  left_arm:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory
+    default: true
+    joints:
+      - Left_joint1
+      - Left_joint2
+      - Left_joint3
+      - Left_joint4
+      - Left_joint5
+      - Left_joint6
+      - Left_joint7
+
+  right_arm:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory
+    default: true
+    joints:
+      - Right_joint1
+      - Right_joint2
+      - Right_joint3
+      - Right_joint4
+      - Right_joint5
+      - Right_joint6
+      - Right_joint7

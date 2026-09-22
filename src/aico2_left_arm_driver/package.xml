@@ -17,6 +17,7 @@
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>control_msgs</depend>
+  <depend>rcl_interfaces</depend>
   <depend>trajectory_msgs</depend>
   <depend>aico2_grippers</depend>
   <depend>aico2_msgs</depend>

@@ -13,6 +13,7 @@ from aico2_msgs.msg import ArmStatus
 from aico2_msgs.srv import ExecutePrimitive
 from control_msgs.action import FollowJointTrajectory
 from geometry_msgs.msg import PoseStamped, TwistStamped, WrenchStamped
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
@@ -113,6 +114,8 @@ class ArmDriverNode(LifecycleNode):
         self._tcp_frame = str(self.get_parameter("tcp_frame_id").value)
         # Filled in on_configure when launch YAML params are fully applied.
         self._teleop_backend = "servo"
+        self._joint_control_mode = "position"
+        self._joint_stiffness_ratio = 1.0
         self._cartesian_max_lin = 0.3
         self._cartesian_max_ang = 1.047
         self._use_device_timestamp = False
@@ -215,6 +218,14 @@ class ArmDriverNode(LifecycleNode):
         self.declare_parameter("offset_slew_limit", 0.001)
         self.declare_parameter("stale_threshold_sec", 0.05)
         self.declare_parameter("publish_effort", True)
+        # Joint control mode for trajectories and servo teleop. "position" is
+        # NRT_JOINT_POSITION, the historical behaviour. "impedance" is
+        # NRT_JOINT_IMPEDANCE, which tracks the same SendJointPosition stream
+        # (RDK lists both modes as applicable) but lets the arm yield to
+        # external force by joint_stiffness_ratio * K_q_nom. Default stays
+        # "position" so this is opt-in.
+        self.declare_parameter("joint_control_mode", "position")
+        self.declare_parameter("joint_stiffness_ratio", 1.0)
 
     def _validate_joint_names(self) -> None:
         """Catch mis-loaded params (e.g. Right driver publishing Left_joint*)."""
@@ -254,6 +265,106 @@ class ArmDriverNode(LifecycleNode):
         self._cartesian_max_ang = float(
             self.get_parameter("cartesian_max_angular_vel").value
         )
+
+    def _load_joint_control_config(self) -> None:
+        """Read the joint control mode / stiffness params in configure."""
+        mode = str(self.get_parameter("joint_control_mode").value).lower()
+        if mode not in ("position", "impedance"):
+            self.get_logger().warn(
+                f"joint_control_mode={mode!r} is not 'position' or 'impedance'; "
+                "falling back to 'position'"
+            )
+            mode = "position"
+        self._joint_control_mode = mode
+        self._joint_stiffness_ratio = self._clamp_stiffness_ratio(
+            float(self.get_parameter("joint_stiffness_ratio").value)
+        )
+
+    def _clamp_stiffness_ratio(self, ratio: float) -> float:
+        """K_q is valid in [0, K_q_nom], so the ratio is valid in [0, 1]."""
+        if ratio < 0.0 or ratio > 1.0:
+            self.get_logger().warn(
+                f"joint_stiffness_ratio {ratio} outside [0, 1]; clamping"
+            )
+        return max(0.0, min(1.0, ratio))
+
+    def _on_set_parameters(self, params):
+        """Allow joint_stiffness_ratio to be retuned live.
+
+        Retuning is why this is a parameter rather than a service: finding a
+        usable stiffness is an interactive process, and `ros2 param set` needs
+        no new message definition.
+        """
+        for param in params:
+            if param.name != "joint_stiffness_ratio":
+                continue
+            try:
+                ratio = float(param.value)
+            except (TypeError, ValueError):
+                return SetParametersResult(
+                    successful=False,
+                    reason="joint_stiffness_ratio must be a float",
+                )
+            if ratio < 0.0 or ratio > 1.0:
+                return SetParametersResult(
+                    successful=False,
+                    reason="joint_stiffness_ratio must be in [0, 1] "
+                           "(K_q is valid in [0, K_q_nom])",
+                )
+            self._joint_stiffness_ratio = ratio
+            if self._joint_control_mode != "impedance":
+                # Accepted but inert: nothing reads this in position mode, and
+                # silently storing it would look like it had taken effect.
+                self.get_logger().warn(
+                    f"joint_stiffness_ratio set to {ratio}, but "
+                    "joint_control_mode is 'position' so it has no effect. Set "
+                    "joint_control_mode:=impedance in the driver YAML."
+                )
+                continue
+            # Applies now if already in NRT_JOINT_IMPEDANCE, otherwise the next
+            # mode entry (trajectory start or teleop enable) picks it up.
+            self._apply_joint_stiffness(quiet=True)
+        return SetParametersResult(successful=True)
+
+    def _joint_rdk_mode(self):
+        """The RDK joint mode this driver commands in, per joint_control_mode."""
+        rdk = self._session.rdk
+        if self._joint_control_mode == "impedance":
+            return rdk.Mode.NRT_JOINT_IMPEDANCE
+        return rdk.Mode.NRT_JOINT_POSITION
+
+    def _joint_rdk_mode_name(self) -> str:
+        return ("NRT_JOINT_IMPEDANCE" if self._joint_control_mode == "impedance"
+                else "NRT_JOINT_POSITION")
+
+    def _apply_joint_stiffness(self, quiet: bool = False) -> None:
+        """Push joint_stiffness_ratio * K_q_nom, scaling only the arm axes.
+
+        No-op unless we are in impedance mode and actually in the RDK's
+        NRT_JOINT_IMPEDANCE mode -- SetJointImpedance raises otherwise.
+        """
+        if self._mock or not self._session:
+            return
+        if self._joint_control_mode != "impedance":
+            return
+        try:
+            if mode_to_str(self._session.robot.mode()) != "NRT_JOINT_IMPEDANCE":
+                return
+            nominal = self._session.joint_stiffness_nominal()
+            # Waist entries are +inf nominal and must pass through untouched;
+            # only the trailing arm axes are scaled.
+            start = max(0, len(nominal) - self._arm_dof)
+            K_q = list(nominal)
+            for i in range(start, len(nominal)):
+                K_q[i] = nominal[i] * self._joint_stiffness_ratio
+            self._session.set_joint_impedance(K_q)
+            if not quiet:
+                self.get_logger().info(
+                    f"joint stiffness set to {self._joint_stiffness_ratio} x "
+                    f"K_q_nom on axes {start}..{len(nominal) - 1}"
+                )
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(f"SetJointImpedance failed: {exc}")
 
     def _load_timestamp_config(self) -> None:
         """Read stamping params in configure (launch YAML may not apply at __init__)."""
@@ -464,7 +575,7 @@ class ArmDriverNode(LifecycleNode):
         return dq
 
     def _enter_servo_rdk_mode(self) -> str:
-        """Stop + NRT_JOINT_POSITION; unlock waist external axes on the left arm."""
+        """Stop + the configured joint mode; unlock waist axes on the left arm."""
         if self._mock or not self._session:
             return "MOCK"
         self._session.stop()
@@ -472,7 +583,9 @@ class ArmDriverNode(LifecycleNode):
         # LockExternalAxes requires IDLE; must run before SwitchMode (same as rdk_joint_jog_gui).
         if self._ext_dof > 0 and "left" in self._namespace.lower():
             self._session.robot.LockExternalAxes(False)
-        self._session.switch_mode(self._session.rdk.Mode.NRT_JOINT_POSITION)
+        self._session.switch_mode(self._joint_rdk_mode())
+        # Stiffness has to be set after the mode switch, not before.
+        self._apply_joint_stiffness()
         return mode_to_str(self._session.robot.mode())
 
     def _reset_cartesian_stream_state(self) -> None:
@@ -538,11 +651,15 @@ class ArmDriverNode(LifecycleNode):
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
         self._load_teleop_config()
+        self._load_joint_control_config()
         self._load_timestamp_config()
         self._load_gripper_config()
+        self.add_on_set_parameters_callback(self._on_set_parameters)
         self.get_logger().info(
             f"configure: mock={self._mock} sn={self._robot_sn or '(unset)'} "
             f"joints={self._joint_names} teleop_backend={self._teleop_backend} "
+            f"joint_control_mode={self._joint_control_mode} "
+            f"stiffness_ratio={self._joint_stiffness_ratio} "
             f"gripper={'on' if self._gripper_enabled else 'off'}"
         )
         self._hw_ready = False
@@ -969,12 +1086,15 @@ class ArmDriverNode(LifecycleNode):
             self._session.stop()
             time.sleep(0.05)
             try:
-                self._session.switch_mode(self._session.rdk.Mode.NRT_JOINT_POSITION)
+                self._session.switch_mode(self._joint_rdk_mode())
+                # After the switch, never before: SetJointImpedance is only
+                # applicable in NRT_JOINT_IMPEDANCE.
+                self._apply_joint_stiffness()
             except Exception as exc:  # noqa: BLE001
                 fault, operational, _, mode, detail = self._session.status_snapshot()
                 detail_suffix = f", detail={detail}" if detail else ""
                 msg = (
-                    "SwitchMode(NRT_JOINT_POSITION) failed: "
+                    f"SwitchMode({self._joint_rdk_mode_name()}) failed: "
                     f"{exc}; fault={fault}, operational={operational}, mode={mode}"
                     f"{detail_suffix}"
                 )
@@ -1104,7 +1224,8 @@ class ArmDriverNode(LifecycleNode):
         """Enable/disable VR teleop (servo joint stream or Cartesian RDK)."""
         enable = bool(request.data)
         cartesian = self._teleop_backend == "cartesian"
-        mode_name = "NRT_CARTESIAN_MOTION_FORCE" if cartesian else "NRT_JOINT_POSITION"
+        mode_name = ("NRT_CARTESIAN_MOTION_FORCE" if cartesian
+                     else self._joint_rdk_mode_name())
         if enable:
             if self._active_traj is not None:
                 response.success = False

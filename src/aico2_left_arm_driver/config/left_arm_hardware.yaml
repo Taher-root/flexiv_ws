@@ -9,6 +9,15 @@ left_arm_driver:
     default_max_joint_vel: 1.5
     default_max_joint_acc: 3.0
     goal_joint_tolerance: 0.02
+    # Joint control mode for trajectories and servo teleop:
+    #   position  -> NRT_JOINT_POSITION  (stiff, historical behaviour)
+    #   impedance -> NRT_JOINT_IMPEDANCE (same SendJointPosition stream, but
+    #                the arm yields to external force)
+    # joint_stiffness_ratio scales K_q_nom on the arm axes only; the waist
+    # entries are +inf nominal and pass through untouched. Retunable live:
+    #   ros2 param set /<ns>/<node> joint_stiffness_ratio 0.3
+    joint_control_mode: "position"
+    joint_stiffness_ratio: 1.0
     tcp_frame_id: "Left_flange"
     teleop_backend: cartesian
     cartesian_max_linear_vel: 0.3

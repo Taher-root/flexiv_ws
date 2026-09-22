@@ -1,0 +1,31 @@
+# MoveIt velocity/acceleration limits.
+#
+# The URDF carries velocity and effort limits but no accelerations, and MoveIt
+# needs accelerations for time parameterisation. The velocities below match the
+# URDF; the accelerations are conservative (roughly half the velocity limit per
+# second) and deliberately slower than the driver's own
+# default_max_joint_acc: 3.0 rad/s^2, so MoveIt is never the thing that
+# saturates the arm.
+#
+# default_velocity_scaling_factor / default_acceleration_scaling_factor scale
+# these again at plan time; MoveGroupInterface and RViz both expose them.
+default_velocity_scaling_factor: 0.3
+default_acceleration_scaling_factor: 0.3
+
+joint_limits:
+  Left_joint1: {has_velocity_limits: true, max_velocity: 2.0944, has_acceleration_limits: true, max_acceleration: 1.0}
+  Left_joint2: {has_velocity_limits: true, max_velocity: 2.0944, has_acceleration_limits: true, max_acceleration: 1.0}
+  Left_joint3: {has_velocity_limits: true, max_velocity: 2.4435, has_acceleration_limits: true, max_acceleration: 1.2}
+  Left_joint4: {has_velocity_limits: true, max_velocity: 2.4435, has_acceleration_limits: true, max_acceleration: 1.2}
+  Left_joint5: {has_velocity_limits: true, max_velocity: 4.8869, has_acceleration_limits: true, max_acceleration: 2.4}
+  Left_joint6: {has_velocity_limits: true, max_velocity: 4.8869, has_acceleration_limits: true, max_acceleration: 2.4}
+  Left_joint7: {has_velocity_limits: true, max_velocity: 4.8869, has_acceleration_limits: true, max_acceleration: 2.4}
+  Right_joint1: {has_velocity_limits: true, max_velocity: 2.0944, has_acceleration_limits: true, max_acceleration: 1.0}
+  Right_joint2: {has_velocity_limits: true, max_velocity: 2.0944, has_acceleration_limits: true, max_acceleration: 1.0}
+  Right_joint3: {has_velocity_limits: true, max_velocity: 2.4435, has_acceleration_limits: true, max_acceleration: 1.2}
+  Right_joint4: {has_velocity_limits: true, max_velocity: 2.4435, has_acceleration_limits: true, max_acceleration: 1.2}
+  Right_joint5: {has_velocity_limits: true, max_velocity: 4.8869, has_acceleration_limits: true, max_acceleration: 2.4}
+  Right_joint6: {has_velocity_limits: true, max_velocity: 4.8869, has_acceleration_limits: true, max_acceleration: 2.4}
+  Right_joint7: {has_velocity_limits: true, max_velocity: 4.8869, has_acceleration_limits: true, max_acceleration: 2.4}
+  AGV_Joint1: {has_velocity_limits: true, max_velocity: 1.0, has_acceleration_limits: true, max_acceleration: 0.5}
+  AGV_Joint2: {has_velocity_limits: true, max_velocity: 1.0, has_acceleration_limits: true, max_acceleration: 0.5}

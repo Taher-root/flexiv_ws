@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>aico2_moveit_config</name>
+  <version>0.1.0</version>
+  <description>MoveIt configuration for AICO2: planning groups for the two Rizon 4 arms, executing through the arm drivers' own FollowJointTrajectory actions (no ros2_control).</description>
+  <maintainer email="oelinux@todo.todo">oelinux</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- The URDF lives in flexiv_amr_description; this package loads it by
+       absolute path from that package's share directory. -->
+  <exec_depend>flexiv_amr_description</exec_depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
+  <exec_depend>moveit_ros_move_group</exec_depend>
+  <exec_depend>moveit_planners_ompl</exec_depend>
+  <exec_depend>moveit_simple_controller_manager</exec_depend>
+  <exec_depend>moveit_kinematics</exec_depend>
+  <exec_depend>moveit_ros_visualization</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <!-- Execution targets these, served by the arm drivers themselves. -->
+  <exec_depend>aico2_left_arm_driver</exec_depend>
+  <exec_depend>aico2_right_arm_driver</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
