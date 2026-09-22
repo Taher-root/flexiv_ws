@@ -119,6 +119,7 @@ class ArmDriverNode(LifecycleNode):
         self._joint_stiffness_ratio = 1.0
         self._goal_settle_timeout = 3.0
         self._goal_tol_impedance = 0.05
+        self._traj_send_rate = 50.0
         self._cartesian_max_lin = 0.3
         self._cartesian_max_ang = 1.047
         self._use_device_timestamp = False
@@ -247,6 +248,18 @@ class ArmDriverNode(LifecycleNode):
         # is a matter of declaring the tool in Flexiv Elements, not of tuning
         # this number.
         self.declare_parameter("goal_joint_tolerance_impedance", 0.05)
+        # Rate at which trajectory samples are pushed to the controller. Was
+        # welded to publish_rate_hz, which conflated two unrelated things: how
+        # often state is published, and how often the arm is re-commanded.
+        #
+        # It matters for smoothness. RDK's SendJointPosition re-plans inside the
+        # controller on every call, aborting the previous plan, so a high send
+        # rate means the internal motion generator never finishes a segment --
+        # at 50 Hz it is restarted every 20 ms. Sending fewer, farther-apart
+        # setpoints and letting the generator interpolate is often smoother,
+        # which is counterintuitive but follows directly from the re-planning
+        # behaviour. 0 or less means "use publish_rate_hz", the old behaviour.
+        self.declare_parameter("trajectory_send_rate_hz", 0.0)
 
     def _validate_joint_names(self) -> None:
         """Catch mis-loaded params (e.g. Right driver publishing Left_joint*)."""
@@ -306,6 +319,8 @@ class ArmDriverNode(LifecycleNode):
         self._goal_tol_impedance = float(
             self.get_parameter("goal_joint_tolerance_impedance").value
         )
+        send_rate = float(self.get_parameter("trajectory_send_rate_hz").value)
+        self._traj_send_rate = send_rate if send_rate > 0.0 else self._rate_hz
 
     def _clamp_stiffness_ratio(self, ratio: float) -> float:
         """K_q is valid in [0, K_q_nom], so the ratio is valid in [0, 1]."""
@@ -331,6 +346,23 @@ class ArmDriverNode(LifecycleNode):
         profile is the first thing to try when motion looks rough.
         """
         for param in params:
+            if param.name == "trajectory_send_rate_hz":
+                try:
+                    value = float(param.value)
+                except (TypeError, ValueError):
+                    return SetParametersResult(
+                        successful=False,
+                        reason="trajectory_send_rate_hz must be a float")
+                if not 0.0 <= value <= 200.0:
+                    return SetParametersResult(
+                        successful=False,
+                        reason="trajectory_send_rate_hz must be 0..200 "
+                               "(0 means use publish_rate_hz)")
+                self._traj_send_rate = value if value > 0.0 else self._rate_hz
+                self.get_logger().info(
+                    f"trajectory send rate set to {self._traj_send_rate:.1f} Hz "
+                    f"(applies to the next trajectory)")
+                continue
             if param.name in ("default_max_joint_vel", "default_max_joint_acc"):
                 try:
                     value = float(param.value)
@@ -727,6 +759,7 @@ class ArmDriverNode(LifecycleNode):
             f"joint_control_mode={self._joint_control_mode} "
             f"stiffness_ratio={self._joint_stiffness_ratio} "
             f"goal_tol={math.degrees(self._active_goal_tolerance()):.2f}deg "
+            f"traj_send={self._traj_send_rate:.0f}Hz "
             f"gripper={'on' if self._gripper_enabled else 'off'}"
         )
         self._hw_ready = False
@@ -1179,7 +1212,7 @@ class ArmDriverNode(LifecycleNode):
                 return result
 
         feedback = FollowJointTrajectory.Feedback()
-        rate = 1.0 / self._rate_hz
+        rate = 1.0 / self._traj_send_rate
         start = time.monotonic()
 
         try:
