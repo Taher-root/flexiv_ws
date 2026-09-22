@@ -31,6 +31,24 @@ ros2 launch aico2_moveit_config move_group.launch.py   # planning
 ros2 launch aico2_moveit_config moveit_rviz.launch.py  # optional GUI
 ```
 
+RViz needs an X display, which an SSH session into the robot usually has not
+got. `scripts/moveit_goal.py` drives `/move_action` from the command line
+instead, so the MoveIt layer can be tested headless:
+
+```bash
+python3 scripts/moveit_goal.py --list                      # named states
+python3 scripts/moveit_goal.py --named ready --plan-only    # no motion
+python3 scripts/moveit_goal.py --joint 4 --degrees 15 --yes-move
+```
+
+Goals are joint-space, which isolates planning and execution from IK — the
+other thing most likely to fail on a 7-DoF arm with the KDL solver. `--plan-only`
+is the rung to climb first: it exercises the SRDF, the planning pipeline, joint
+limits and collision checking, and touches no hardware.
+
+Note that `--named ready` is a large multi-joint sweep from most poses. Fine for
+`--plan-only`; for a first execution prefer `--joint 4 --degrees 15`.
+
 Before trusting MoveIt, confirm the layer underneath it works:
 
 ```bash
