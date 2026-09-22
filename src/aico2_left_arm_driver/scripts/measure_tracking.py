@@ -353,17 +353,44 @@ def report(run, name, target, result, status, csv_path, plot_path=None,
             print(f"                     ^ inflated by the {dup_pct:.0f}% "
                   f"repeated samples — compare runs, do not read absolutely")
         # The honest number: differentiate over a window that spans the repeats.
-        smooth = _smooth_velocity(times, values, half_window)
-        if len(smooth) > 3:
+        # Reported at two widths, because that is what separates real stepping
+        # from sampling noise: noise shrinks as the window grows, real stepping
+        # does not. Comparing a single width between runs at different speeds
+        # is misleading -- the same absolute sampling noise is a smaller
+        # fraction of a faster cruise.
+        def _spread(hw):
+            smooth = _smooth_velocity(times, values, hw)
+            if len(smooth) <= 3:
+                return None
             speeds = [abs(v) for _, v in smooth]
             peak = max(speeds)
             cruise = [v for v in speeds if v > 0.5 * peak]
             mean = sum(cruise) / len(cruise)
-            spread = (max(cruise) - min(cruise)) / mean * 100.0
-            print(f"  smoothed peak      {math.degrees(peak):.1f} °/s")
-            print(f"  cruise spread      {spread:.0f}% of mean   "
-                  f"(0% is a perfectly steady cruise; this is the number to "
-                  f"compare between configurations)")
+            return (math.degrees(peak), math.degrees(mean),
+                    (max(cruise) - min(cruise)) / mean * 100.0)
+
+        narrow = _spread(half_window)
+        wide = _spread(half_window * 3)
+        if narrow:
+            sample_dt = span / max(len(times) - 1, 1)
+            print(f"  smoothed peak      {narrow[0]:.1f} °/s")
+            print(f"  mean cruise speed  {narrow[1]:.1f} °/s   "
+                  f"(compare spreads only between runs at a similar speed)")
+            print(f"  cruise spread      {narrow[2]:.0f}% over "
+                  f"{2 * half_window * sample_dt * 1000:.0f}ms", end="")
+            if wide:
+                print(f"   -> {wide[2]:.0f}% over "
+                      f"{6 * half_window * sample_dt * 1000:.0f}ms")
+                drop = narrow[2] - wide[2]
+                if drop > 15.0:
+                    print(f"                     the {drop:.0f}-point drop with "
+                          f"a wider window means much of the narrow figure is "
+                          f"sampling noise; {wide[2]:.0f}% is the real stepping")
+                else:
+                    print(f"                     holding up across windows "
+                          f"means this is real stepping, not sampling noise")
+            else:
+                print()
 
     print()
     print("=" * 66)
