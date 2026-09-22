@@ -1,21 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Semantic description for AICO2 (two Rizon 4 arms on a 2-DoF waist).
+  Semantic description for AICO2-Rizon4 (two Rizon 4 arms on a 2-DoF waist).
 
   GENERATED from flexiv_amr_description/urdf/AICO2-Rizon4.urdf by
   scripts/generate_srdf.py. The disable_collisions entries below cover
-  only the pairs derivable from the kinematic tree:
-    Adjacent - parent/child across a joint, always touching
-    Welded   - rigidly connected through fixed joints
+  only the pairs derivable from the kinematic tree, after collapsing
+  fixed joints into rigid bodies:
+    Welded   - same rigid body, cannot move relative to each other
+    Adjacent - rigid bodies joined by one actuated joint
 
   NOT covered: pairs that never collide across the reachable workspace,
-  or that already collide in the zero pose. Those need geometric
-  sampling against the meshes, i.e. a pass with the MoveIt Setup
-  Assistant on this URDF. Without them planning still works but is
-  slower, and self-collision checks between the two arms and the AMR
-  body stay conservative. See docs/moveit_status.md.
+  and the remaining pairs that already collide in some pose. Those need
+  geometric sampling against the meshes, i.e. a pass with the MoveIt
+  Setup Assistant on this URDF. Without them planning still works but
+  is slower and cross-arm checking stays conservative.
+  See docs/moveit_status.md.
 -->
-<robot name="AICO2">
+<robot name="AICO2-Rizon4">
   <group name="left_arm">
     <chain base_link="Left_link0" tip_link="Left_flange"/>
   </group>
@@ -74,19 +75,36 @@
   <passive_joint name="AGV_Joint2"/>
 
   <disable_collisions link1="AGV_Pitch" link2="AGV_Yaw" reason="Adjacent"/>
-  <disable_collisions link1="AGV_Pitch" link2="Left_link0" reason="Adjacent"/>
-  <disable_collisions link1="AGV_Pitch" link2="Right_link0" reason="Adjacent"/>
+  <disable_collisions link1="AGV_Pitch" link2="Left_link0" reason="Welded"/>
+  <disable_collisions link1="AGV_Pitch" link2="Left_link1" reason="Adjacent"/>
+  <disable_collisions link1="AGV_Pitch" link2="Right_link0" reason="Welded"/>
+  <disable_collisions link1="AGV_Pitch" link2="Right_link1" reason="Adjacent"/>
+  <disable_collisions link1="AGV_Yaw" link2="Left_link0" reason="Adjacent"/>
+  <disable_collisions link1="AGV_Yaw" link2="Right_link0" reason="Adjacent"/>
   <disable_collisions link1="AGV_Yaw" link2="base_link" reason="Adjacent"/>
-  <disable_collisions link1="Left_flange" link2="Left_link7" reason="Adjacent"/>
+  <disable_collisions link1="AGV_Yaw" link2="camera_color_frame" reason="Adjacent"/>
+  <disable_collisions link1="AGV_Yaw" link2="camera_depth_frame" reason="Adjacent"/>
+  <disable_collisions link1="AGV_Yaw" link2="camera_link" reason="Adjacent"/>
+  <disable_collisions link1="AGV_Yaw" link2="camera_top_color_optical_frame" reason="Adjacent"/>
+  <disable_collisions link1="AGV_Yaw" link2="camera_top_depth_optical_frame" reason="Adjacent"/>
+  <disable_collisions link1="AGV_Yaw" link2="camera_top_link" reason="Adjacent"/>
+  <disable_collisions link1="AGV_Yaw" link2="imu_link" reason="Adjacent"/>
+  <disable_collisions link1="AGV_Yaw" link2="lidar_avoid_link" reason="Adjacent"/>
+  <disable_collisions link1="AGV_Yaw" link2="lidar_nav_link" reason="Adjacent"/>
+  <disable_collisions link1="Left_flange" link2="Left_link6" reason="Adjacent"/>
+  <disable_collisions link1="Left_flange" link2="Left_link7" reason="Welded"/>
   <disable_collisions link1="Left_link0" link2="Left_link1" reason="Adjacent"/>
   <disable_collisions link1="Left_link0" link2="Right_link0" reason="Welded"/>
+  <disable_collisions link1="Left_link0" link2="Right_link1" reason="Adjacent"/>
   <disable_collisions link1="Left_link1" link2="Left_link2" reason="Adjacent"/>
+  <disable_collisions link1="Left_link1" link2="Right_link0" reason="Adjacent"/>
   <disable_collisions link1="Left_link2" link2="Left_link3" reason="Adjacent"/>
   <disable_collisions link1="Left_link3" link2="Left_link4" reason="Adjacent"/>
   <disable_collisions link1="Left_link4" link2="Left_link5" reason="Adjacent"/>
   <disable_collisions link1="Left_link5" link2="Left_link6" reason="Adjacent"/>
   <disable_collisions link1="Left_link6" link2="Left_link7" reason="Adjacent"/>
-  <disable_collisions link1="Right_flange" link2="Right_link7" reason="Adjacent"/>
+  <disable_collisions link1="Right_flange" link2="Right_link6" reason="Adjacent"/>
+  <disable_collisions link1="Right_flange" link2="Right_link7" reason="Welded"/>
   <disable_collisions link1="Right_link0" link2="Right_link1" reason="Adjacent"/>
   <disable_collisions link1="Right_link1" link2="Right_link2" reason="Adjacent"/>
   <disable_collisions link1="Right_link2" link2="Right_link3" reason="Adjacent"/>
@@ -96,22 +114,22 @@
   <disable_collisions link1="Right_link6" link2="Right_link7" reason="Adjacent"/>
   <disable_collisions link1="base_link" link2="camera_color_frame" reason="Welded"/>
   <disable_collisions link1="base_link" link2="camera_depth_frame" reason="Welded"/>
-  <disable_collisions link1="base_link" link2="camera_link" reason="Adjacent"/>
+  <disable_collisions link1="base_link" link2="camera_link" reason="Welded"/>
   <disable_collisions link1="base_link" link2="camera_top_color_optical_frame" reason="Welded"/>
   <disable_collisions link1="base_link" link2="camera_top_depth_optical_frame" reason="Welded"/>
-  <disable_collisions link1="base_link" link2="camera_top_link" reason="Adjacent"/>
-  <disable_collisions link1="base_link" link2="imu_link" reason="Adjacent"/>
-  <disable_collisions link1="base_link" link2="lidar_avoid_link" reason="Adjacent"/>
-  <disable_collisions link1="base_link" link2="lidar_nav_link" reason="Adjacent"/>
+  <disable_collisions link1="base_link" link2="camera_top_link" reason="Welded"/>
+  <disable_collisions link1="base_link" link2="imu_link" reason="Welded"/>
+  <disable_collisions link1="base_link" link2="lidar_avoid_link" reason="Welded"/>
+  <disable_collisions link1="base_link" link2="lidar_nav_link" reason="Welded"/>
   <disable_collisions link1="camera_color_frame" link2="camera_depth_frame" reason="Welded"/>
-  <disable_collisions link1="camera_color_frame" link2="camera_link" reason="Adjacent"/>
+  <disable_collisions link1="camera_color_frame" link2="camera_link" reason="Welded"/>
   <disable_collisions link1="camera_color_frame" link2="camera_top_color_optical_frame" reason="Welded"/>
   <disable_collisions link1="camera_color_frame" link2="camera_top_depth_optical_frame" reason="Welded"/>
   <disable_collisions link1="camera_color_frame" link2="camera_top_link" reason="Welded"/>
   <disable_collisions link1="camera_color_frame" link2="imu_link" reason="Welded"/>
   <disable_collisions link1="camera_color_frame" link2="lidar_avoid_link" reason="Welded"/>
   <disable_collisions link1="camera_color_frame" link2="lidar_nav_link" reason="Welded"/>
-  <disable_collisions link1="camera_depth_frame" link2="camera_link" reason="Adjacent"/>
+  <disable_collisions link1="camera_depth_frame" link2="camera_link" reason="Welded"/>
   <disable_collisions link1="camera_depth_frame" link2="camera_top_color_optical_frame" reason="Welded"/>
   <disable_collisions link1="camera_depth_frame" link2="camera_top_depth_optical_frame" reason="Welded"/>
   <disable_collisions link1="camera_depth_frame" link2="camera_top_link" reason="Welded"/>
@@ -125,11 +143,11 @@
   <disable_collisions link1="camera_link" link2="lidar_avoid_link" reason="Welded"/>
   <disable_collisions link1="camera_link" link2="lidar_nav_link" reason="Welded"/>
   <disable_collisions link1="camera_top_color_optical_frame" link2="camera_top_depth_optical_frame" reason="Welded"/>
-  <disable_collisions link1="camera_top_color_optical_frame" link2="camera_top_link" reason="Adjacent"/>
+  <disable_collisions link1="camera_top_color_optical_frame" link2="camera_top_link" reason="Welded"/>
   <disable_collisions link1="camera_top_color_optical_frame" link2="imu_link" reason="Welded"/>
   <disable_collisions link1="camera_top_color_optical_frame" link2="lidar_avoid_link" reason="Welded"/>
   <disable_collisions link1="camera_top_color_optical_frame" link2="lidar_nav_link" reason="Welded"/>
-  <disable_collisions link1="camera_top_depth_optical_frame" link2="camera_top_link" reason="Adjacent"/>
+  <disable_collisions link1="camera_top_depth_optical_frame" link2="camera_top_link" reason="Welded"/>
   <disable_collisions link1="camera_top_depth_optical_frame" link2="imu_link" reason="Welded"/>
   <disable_collisions link1="camera_top_depth_optical_frame" link2="lidar_avoid_link" reason="Welded"/>
   <disable_collisions link1="camera_top_depth_optical_frame" link2="lidar_nav_link" reason="Welded"/>

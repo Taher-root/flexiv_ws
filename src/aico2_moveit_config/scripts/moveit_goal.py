@@ -48,17 +48,21 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
 
 _ACTION = "/move_action"
-# moveit_msgs/MoveItErrorCodes, the values worth naming.
+# moveit_msgs/MoveItErrorCodes, transcribed from the ROS 2 message. Note that
+# this numbering is NOT MoveIt 1's: there, -1 was FAILURE and the codes below it
+# were shifted by one. Getting it wrong turns a clear diagnosis into a
+# misleading one, so these are copied from the .msg rather than remembered.
 _ERROR_CODES = {
     1: "SUCCESS",
-    -1: "FAILURE",
-    -2: "PLANNING_FAILED",
-    -3: "INVALID_MOTION_PLAN",
-    -4: "MOTION_PLAN_INVALIDATED_BY_ENVIRONMENT_CHANGE",
-    -5: "CONTROL_FAILED",
-    -6: "UNABLE_TO_AQUIRE_SENSOR_DATA",
-    -7: "TIMED_OUT",
-    -8: "PREEMPTED",
+    0: "UNDEFINED",
+    99999: "FAILURE",
+    -1: "PLANNING_FAILED",
+    -2: "INVALID_MOTION_PLAN",
+    -3: "MOTION_PLAN_INVALIDATED_BY_ENVIRONMENT_CHANGE",
+    -4: "CONTROL_FAILED",
+    -5: "UNABLE_TO_AQUIRE_SENSOR_DATA",
+    -6: "TIMED_OUT",
+    -7: "PREEMPTED",
     -10: "START_STATE_IN_COLLISION",
     -11: "START_STATE_VIOLATES_PATH_CONSTRAINTS",
     -12: "GOAL_IN_COLLISION",
@@ -74,7 +78,29 @@ _ERROR_CODES = {
     -23: "ROBOT_STATE_STALE",
     -24: "SENSOR_INFO_STALE",
     -25: "COMMUNICATION_FAILURE",
+    -26: "START_STATE_INVALID",
+    -27: "GOAL_STATE_INVALID",
+    -28: "UNRECOGNIZED_GOAL_TYPE",
+    -29: "CRASH",
+    -30: "ABORT",
     -31: "NO_IK_SOLUTION",
+}
+
+# What a code usually means for this robot, printed alongside it.
+_HINTS = {
+    99999: "FAILURE is the generic abort. A planning request adapter usually "
+           "rejected the request before planning began — move_group's own log "
+           "names which one and why. 'CheckStartStateCollision failed' means "
+           "the arm is in self-collision at its current pose according to the "
+           "SRDF, which most often means a collision pair is missing from "
+           "disable_collisions rather than a real contact.",
+    -4: "CONTROL_FAILED: planning worked, execution did not. The controller "
+        "name in moveit_controllers.yaml must match the driver's namespace — "
+        "check `ros2 action list | grep follow`.",
+    -10: "START_STATE_IN_COLLISION: same cause as above — usually a missing "
+         "disable_collisions pair, not a real contact.",
+    -15: "INVALID_GROUP_NAME: --group is not a group in the SRDF.",
+    -31: "NO_IK_SOLUTION on a joint-space goal is odd; check the group name.",
 }
 
 
@@ -136,6 +162,11 @@ class GoalSender(Node):
         goal.request.allowed_planning_time = args.planning_time
         goal.request.max_velocity_scaling_factor = args.velocity_scaling
         goal.request.max_acceleration_scaling_factor = args.acceleration_scaling
+        # is_diff means "start from the robot's current state". Without it the
+        # request carries an empty start state, and move_group logs
+        #   [conversions]: Found empty JointState message
+        # on every plan while quietly falling back to the current state.
+        goal.request.start_state.is_diff = True
         goal.planning_options.plan_only = plan_only
         goal.planning_options.planning_scene_diff.is_diff = True
         goal.planning_options.planning_scene_diff.robot_state.is_diff = True
@@ -163,9 +194,15 @@ class GoalSender(Node):
 
         result = result_future.result().result
         code = result.error_code.val
-        name = _ERROR_CODES.get(code, f"unknown({code})")
+        name = _ERROR_CODES.get(code, f"unrecognised({code})")
         planned = len(result.planned_trajectory.joint_trajectory.points)
         print(f"\nerror_code {code} ({name})")
+        # ROS 2 added message/source to MoveItErrorCodes; when populated they
+        # say more than the code does.
+        for field in ("message", "source"):
+            text = getattr(result.error_code, field, "")
+            if text:
+                print(f"  {field}: {text}")
         print(f"planned trajectory: {planned} points, "
               f"planning time {result.planning_time:.3f}s")
         if code == 1 and not plan_only:
@@ -175,15 +212,9 @@ class GoalSender(Node):
                 err = math.degrees(reached[jname] - position)
                 print(f"  {jname:14s} {math.degrees(reached[jname]):8.2f}°  "
                       f"error {err:+6.2f}°")
-        elif code == -31:
-            print("NO_IK_SOLUTION on a joint-space goal is odd — check that the "
-                  "group name matches the SRDF.")
-        elif code == -15:
-            print(f"INVALID_GROUP_NAME: {group!r} is not a group in the SRDF.")
-        elif code == -5:
-            print("CONTROL_FAILED: planning worked, execution did not. The "
-                  "controller name in moveit_controllers.yaml must match the "
-                  "driver's namespace — check `ros2 action list | grep follow`.")
+        elif code in _HINTS:
+            print()
+            print(_HINTS[code])
         return 0 if code == 1 else 1
 
 
