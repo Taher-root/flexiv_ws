@@ -49,6 +49,21 @@ limits and collision checking, and touches no hardware.
 Note that `--named ready` is a large multi-joint sweep from most poses. Fine for
 `--plan-only`; for a first execution prefer `--joint 4 --degrees 15`.
 
+When planning is refused with `error_code 99999 (FAILURE)`, the cause is in
+move_group's own log, not in the result. `scripts/check_collisions.py` asks
+move_group's `/check_state_validity` service instead, so the contact pairs come
+back as data with a penetration depth each:
+
+```bash
+python3 scripts/check_collisions.py --named ready --emit-srdf
+```
+
+Depth under a millimetre is geometry touching at a joint, which belongs in
+`disable_collisions` (`--emit-srdf` prints the lines). Centimetres is real
+interpenetration, and the fix is to move the arm. If it reports both states
+valid while planning still fails, move_group is holding a stale SRDF — it reads
+it once at startup.
+
 Before trusting MoveIt, confirm the layer underneath it works:
 
 ```bash

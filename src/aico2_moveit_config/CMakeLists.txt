@@ -19,6 +19,7 @@ install(PROGRAMS
   scripts/generate_srdf.py
   scripts/check_config.py
   scripts/moveit_goal.py
+  scripts/check_collisions.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -1101,6 +1101,11 @@ class ArmDriverNode(LifecycleNode):
                 self.get_logger().error(msg)
                 goal_handle.abort()
                 result = FollowJointTrajectory.Result()
+                # Must be set explicitly: the field defaults to 0, which is
+                # SUCCESSFUL, so an aborted goal would otherwise report success
+                # to any client that reads error_code without also checking the
+                # goal status.
+                result.error_code = FollowJointTrajectory.Result.INVALID_GOAL
                 result.error_string = msg
                 self._active_traj = None
                 self._traj_goal_handle = None
@@ -1128,9 +1133,18 @@ class ArmDriverNode(LifecycleNode):
                         )
                         self._note_rdk_send("SendJointPosition/trajectory")
                     except Exception as exc:  # noqa: BLE001
+                        msg = f"SendJointPosition failed: {exc}"
+                        self.get_logger().error(msg)
                         goal_handle.abort()
                         result = FollowJointTrajectory.Result()
-                        result.error_string = f"SendJointPosition failed: {exc}"
+                        # Mid-path hardware failure. Not literally a tolerance
+                        # violation, but it is the action's code for "the
+                        # trajectory stopped following the path", and any
+                        # non-zero value beats reporting SUCCESSFUL.
+                        result.error_code = (
+                            FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
+                        )
+                        result.error_string = msg
                         self._active_traj = None
                         self._traj_goal_handle = None
                         return result

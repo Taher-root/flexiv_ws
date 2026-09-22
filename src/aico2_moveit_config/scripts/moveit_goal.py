@@ -94,9 +94,16 @@ _HINTS = {
            "the arm is in self-collision at its current pose according to the "
            "SRDF, which most often means a collision pair is missing from "
            "disable_collisions rather than a real contact.",
-    -4: "CONTROL_FAILED: planning worked, execution did not. The controller "
-        "name in moveit_controllers.yaml must match the driver's namespace — "
-        "check `ros2 action list | grep follow`.",
+    -4: "CONTROL_FAILED: planning worked, execution did not. Check in this "
+        "order:\n"
+        "  1. Is the arm in fault? A faulted driver rejects every goal.\n"
+        "       ros2 topic echo --once /left_arm/fault\n"
+        "       ros2 service call /left_arm/clear_fault std_srvs/srv/Trigger\n"
+        "     A minor fault usually follows a command that hit a joint limit.\n"
+        "  2. Is teleop active? The driver refuses trajectories while it is.\n"
+        "  3. Only then suspect the wiring: the controller name in\n"
+        "     moveit_controllers.yaml must match the driver's namespace —\n"
+        "     ros2 action list | grep follow",
     -10: "START_STATE_IN_COLLISION: same cause as above — usually a missing "
          "disable_collisions pair, not a real contact.",
     -15: "INVALID_GROUP_NAME: --group is not a group in the SRDF.",
@@ -280,10 +287,14 @@ def main():
             name = joint_names[args.joint - 1]
             targets = {name: current[name] + math.radians(args.degrees)}
         # Populate current positions for the printout even on a named goal.
+        # Same timeout as the --joint path: a freshly started node needs a
+        # moment to discover /joint_states publishers, and 2s was short enough
+        # that this silently printed "?" for every joint.
         try:
-            node.wait_for_joint_states(joint_names, timeout=2.0)
-        except TimeoutError:
-            pass
+            node.wait_for_joint_states(joint_names, timeout=5.0)
+        except TimeoutError as exc:
+            print(f"note: {exc}\n      current positions unavailable; the goal "
+                  f"is still absolute so this is cosmetic")
         return node.send(args.group, targets, args.plan_only, args)
     except (RuntimeError, TimeoutError) as exc:
         print(f"\nFAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
