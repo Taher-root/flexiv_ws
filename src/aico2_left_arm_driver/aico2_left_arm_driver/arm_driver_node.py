@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from dataclasses import dataclass
@@ -116,6 +117,7 @@ class ArmDriverNode(LifecycleNode):
         self._teleop_backend = "servo"
         self._joint_control_mode = "position"
         self._joint_stiffness_ratio = 1.0
+        self._goal_settle_timeout = 3.0
         self._cartesian_max_lin = 0.3
         self._cartesian_max_ang = 1.047
         self._use_device_timestamp = False
@@ -226,6 +228,14 @@ class ArmDriverNode(LifecycleNode):
         # "position" so this is opt-in.
         self.declare_parameter("joint_control_mode", "position")
         self.declare_parameter("joint_stiffness_ratio", 1.0)
+        # How long past a trajectory's own duration to keep waiting for the arm
+        # to settle inside goal_joint_tolerance. Without a bound the execute
+        # loop spins until the client gives up, and the client's timeout
+        # (MoveIt's allowed_execution_duration_scaling) reports a generic
+        # CONTROL_FAILED while the driver, which knows the residual error,
+        # says nothing. Keep this under the client's own limit so the driver
+        # is the one that explains the failure.
+        self.declare_parameter("goal_settle_timeout_sec", 3.0)
 
     def _validate_joint_names(self) -> None:
         """Catch mis-loaded params (e.g. Right driver publishing Left_joint*)."""
@@ -278,6 +288,9 @@ class ArmDriverNode(LifecycleNode):
         self._joint_control_mode = mode
         self._joint_stiffness_ratio = self._clamp_stiffness_ratio(
             float(self.get_parameter("joint_stiffness_ratio").value)
+        )
+        self._goal_settle_timeout = max(
+            0.0, float(self.get_parameter("goal_settle_timeout_sec").value)
         )
 
     def _clamp_stiffness_ratio(self, ratio: float) -> float:
@@ -1146,9 +1159,22 @@ class ArmDriverNode(LifecycleNode):
         try:
             while rclpy.ok():
                 if goal_handle.is_cancel_requested:
+                    # MoveIt cancels when execution outruns
+                    # allowed_execution_duration_scaling, so say so: otherwise
+                    # this looks like a user cancel in the log.
+                    self.get_logger().warn(
+                        f"trajectory cancelled by the client "
+                        f"{time.monotonic() - start:.1f}s in (duration "
+                        f"{duration:.1f}s)"
+                    )
                     self._cancel_active_trajectory()
                     goal_handle.canceled()
-                    return FollowJointTrajectory.Result()
+                    result = FollowJointTrajectory.Result()
+                    result.error_code = (
+                        FollowJointTrajectory.Result.PATH_TOLERANCE_VIOLATED
+                    )
+                    result.error_string = "cancelled by the client"
+                    return result
 
                 elapsed = time.monotonic() - start
                 q_cmd, dq_cmd = sample_trajectory(traj, elapsed, self._dof)
@@ -1192,14 +1218,51 @@ class ArmDriverNode(LifecycleNode):
                 goal_handle.publish_feedback(feedback)
 
                 at_goal = elapsed >= duration
+                err = 0.0
+                worst_joint = ""
                 if at_goal and not self._mock and self._session:
                     st = self._session.states()
                     q_act = self._extract_arm_q(
                         [float(x) for x in st.q[: self._rdk_dof]]
                     )
                     q_goal = q_cmd[: self._arm_dof]
-                    err = max(abs(a - b) for a, b in zip(q_act, q_goal))
+                    deltas = [abs(a - b) for a, b in zip(q_act, q_goal)]
+                    err = max(deltas)
+                    idx = deltas.index(err)
+                    worst_joint = (self._joint_names[idx]
+                                   if idx < len(self._joint_names) else f"[{idx}]")
                     at_goal = err < self._goal_tol
+                    # Bounded wait, and deliberately shorter than the client's
+                    # own limit so the driver is what explains the failure.
+                    # MoveIt cancels at duration * allowed_execution_duration_
+                    # scaling (2.0) + allowed_goal_duration_margin (1.0); the
+                    # 0.5*duration + 0.5 cap stays below that for any duration,
+                    # which a fixed allowance does not (at duration 2.1s a 3.0s
+                    # allowance lands 0.1s before MoveIt, which is no margin).
+                    settle = min(self._goal_settle_timeout,
+                                 0.5 * duration + 0.5)
+                    if not at_goal and elapsed - duration > settle:
+                        msg = (
+                            f"goal tolerance not reached: {worst_joint} is "
+                            f"{math.degrees(err):.2f}° from target "
+                            f"({math.degrees(self._goal_tol):.2f}° allowed) "
+                            f"{settle:.1f}s after the "
+                            f"trajectory ended. The arm is not tracking the "
+                            f"commanded position — check for a fault, and for "
+                            f"default_max_joint_vel/acc set below what the "
+                            f"trajectory needs."
+                        )
+                        self.get_logger().error(msg)
+                        self._session.stop()
+                        goal_handle.abort()
+                        result = FollowJointTrajectory.Result()
+                        result.error_code = (
+                            FollowJointTrajectory.Result.GOAL_TOLERANCE_VIOLATED
+                        )
+                        result.error_string = msg
+                        self._active_traj = None
+                        self._traj_goal_handle = None
+                        return result
                 elif at_goal and self._mock:
                     at_goal = True
 
