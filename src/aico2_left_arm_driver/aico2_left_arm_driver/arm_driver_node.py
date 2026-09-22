@@ -118,6 +118,7 @@ class ArmDriverNode(LifecycleNode):
         self._joint_control_mode = "position"
         self._joint_stiffness_ratio = 1.0
         self._goal_settle_timeout = 3.0
+        self._goal_tol_impedance = 0.05
         self._cartesian_max_lin = 0.3
         self._cartesian_max_ang = 1.047
         self._use_device_timestamp = False
@@ -236,6 +237,16 @@ class ArmDriverNode(LifecycleNode):
         # says nothing. Keep this under the client's own limit so the driver
         # is the one that explains the failure.
         self.declare_parameter("goal_settle_timeout_sec", 3.0)
+        # A compliant arm cannot hold position as tightly as a stiff one: under
+        # joint impedance the steady-state error is (unmodelled torque / K_q),
+        # which on this robot is dominated by the undeclared gripper mass and
+        # measured around 1.7 deg at joint 4. That exceeds
+        # goal_joint_tolerance (0.02 rad = 1.15 deg), so convergence could never
+        # be declared and every trajectory ran until the client gave up.
+        # Impedance mode therefore gets its own, wider tolerance. Tightening it
+        # is a matter of declaring the tool in Flexiv Elements, not of tuning
+        # this number.
+        self.declare_parameter("goal_joint_tolerance_impedance", 0.05)
 
     def _validate_joint_names(self) -> None:
         """Catch mis-loaded params (e.g. Right driver publishing Left_joint*)."""
@@ -291,6 +302,9 @@ class ArmDriverNode(LifecycleNode):
         )
         self._goal_settle_timeout = max(
             0.0, float(self.get_parameter("goal_settle_timeout_sec").value)
+        )
+        self._goal_tol_impedance = float(
+            self.get_parameter("goal_joint_tolerance_impedance").value
         )
 
     def _clamp_stiffness_ratio(self, ratio: float) -> float:
@@ -366,6 +380,17 @@ class ArmDriverNode(LifecycleNode):
             # mode entry (trajectory start or teleop enable) picks it up.
             self._apply_joint_stiffness(quiet=True)
         return SetParametersResult(successful=True)
+
+    def _active_goal_tolerance(self) -> float:
+        """Convergence tolerance for the mode actually in use.
+
+        Impedance tracking carries a steady-state position error proportional
+        to the unmodelled load, so holding it to the position-mode tolerance is
+        asking the arm for something compliance rules out.
+        """
+        if self._joint_control_mode == "impedance":
+            return self._goal_tol_impedance
+        return self._goal_tol
 
     def _joint_rdk_mode(self):
         """The RDK joint mode this driver commands in, per joint_control_mode."""
@@ -701,6 +726,7 @@ class ArmDriverNode(LifecycleNode):
             f"joints={self._joint_names} teleop_backend={self._teleop_backend} "
             f"joint_control_mode={self._joint_control_mode} "
             f"stiffness_ratio={self._joint_stiffness_ratio} "
+            f"goal_tol={math.degrees(self._active_goal_tolerance()):.2f}deg "
             f"gripper={'on' if self._gripper_enabled else 'off'}"
         )
         self._hw_ready = False
@@ -1231,7 +1257,8 @@ class ArmDriverNode(LifecycleNode):
                     idx = deltas.index(err)
                     worst_joint = (self._joint_names[idx]
                                    if idx < len(self._joint_names) else f"[{idx}]")
-                    at_goal = err < self._goal_tol
+                    goal_tol = self._active_goal_tolerance()
+                    at_goal = err < goal_tol
                     # Bounded wait, and deliberately shorter than the client's
                     # own limit so the driver is what explains the failure.
                     # MoveIt cancels at duration * allowed_execution_duration_
@@ -1245,12 +1272,15 @@ class ArmDriverNode(LifecycleNode):
                         msg = (
                             f"goal tolerance not reached: {worst_joint} is "
                             f"{math.degrees(err):.2f}° from target "
-                            f"({math.degrees(self._goal_tol):.2f}° allowed) "
+                            f"({math.degrees(goal_tol):.2f}° allowed in "
+                            f"{self._joint_control_mode} mode) "
                             f"{settle:.1f}s after the "
                             f"trajectory ended. The arm is not tracking the "
-                            f"commanded position — check for a fault, and for "
-                            f"default_max_joint_vel/acc set below what the "
-                            f"trajectory needs."
+                            f"commanded position. In impedance mode a residual "
+                            f"this size is usually gravity sag from an "
+                            f"undeclared tool — declare it in Flexiv Elements, "
+                            f"or raise goal_joint_tolerance_impedance. "
+                            f"Otherwise check for a fault."
                         )
                         self.get_logger().error(msg)
                         self._session.stop()

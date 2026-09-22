@@ -40,6 +40,7 @@ import xml.etree.ElementTree as ET
 
 import rclpy
 from ament_index_python.packages import get_package_share_directory
+from aico2_msgs.msg import ArmStatus
 from moveit_msgs.action import MoveGroup
 from moveit_msgs.msg import Constraints, JointConstraint
 from rclpy.action import ActionClient
@@ -126,16 +127,39 @@ def load_srdf_states(group):
 
 
 class GoalSender(Node):
-    def __init__(self):
+    def __init__(self, group):
         super().__init__("moveit_goal")
         self._client = ActionClient(self, MoveGroup, _ACTION)
         self._latest = {}
         self.create_subscription(JointState, "/joint_states", self._on_js,
                                  qos_profile_sensor_data)
+        # MoveIt reports CONTROL_FAILED for anything the controller refuses or
+        # fails to finish, which says nothing about why. The driver publishes
+        # exactly that on ArmStatus, and the group name matches its namespace.
+        self._status = None
+        self.create_subscription(
+            ArmStatus, f"/{group}/status", self._on_status, 10)
 
     def _on_js(self, msg):
         for name, position in zip(msg.name, msg.position):
             self._latest[name] = position
+
+    def _on_status(self, msg):
+        self._status = msg
+
+    def status_line(self):
+        if self._status is None:
+            return None
+        st = self._status
+        return (f"driver: fault={st.fault} operational={st.operational} "
+                f"enabled={st.enabled} mode={st.mode!r}"
+                + (f" detail={st.detail!r}" if st.detail else ""))
+
+    def print_status(self, prefix=""):
+        line = self.status_line()
+        if line:
+            print(f"{prefix}{line}")
+        return self._status
 
     def wait_for_joint_states(self, names, timeout=5.0):
         deadline = self.get_clock().now().nanoseconds * 1e-9 + timeout
@@ -178,6 +202,7 @@ class GoalSender(Node):
         goal.planning_options.planning_scene_diff.is_diff = True
         goal.planning_options.planning_scene_diff.robot_state.is_diff = True
 
+        self.print_status()
         print(f"\ngroup {group}, {'PLAN ONLY' if plan_only else 'PLAN + EXECUTE'}")
         for name, position in targets.items():
             current = self._latest.get(name)
@@ -220,6 +245,24 @@ class GoalSender(Node):
                 print(f"  {jname:14s} {math.degrees(reached[jname]):8.2f}°  "
                       f"error {err:+6.2f}°")
         elif code in _HINTS:
+            print()
+            # Say what the driver reports before offering guesses about it.
+            status = self.print_status("at failure, ")
+            if status is not None and code == -4:
+                if status.fault:
+                    print("\nThe arm IS in fault, which is cause 1 below:")
+                    print("  ros2 service call "
+                          f"/{group}/clear_fault std_srvs/srv/Trigger")
+                elif not status.operational:
+                    print("\nThe arm is NOT operational, so the driver "
+                          "rejected the trajectory.")
+                else:
+                    print("\nThe arm is operational and unfaulted, so the "
+                          "driver either rejected the goal for another reason "
+                          "or could not converge within its goal tolerance — "
+                          "its own log says which. Under joint impedance a "
+                          "residual larger than goal_joint_tolerance_impedance "
+                          "is usually gravity sag from an undeclared tool.")
             print()
             print(_HINTS[code])
         return 0 if code == 1 else 1
@@ -276,7 +319,7 @@ def main():
     joint_names = [f"{prefix}_joint{i}" for i in range(1, 8)]
 
     rclpy.init()
-    node = GoalSender()
+    node = GoalSender(args.group)
     try:
         if args.named:
             targets = states[args.named]
