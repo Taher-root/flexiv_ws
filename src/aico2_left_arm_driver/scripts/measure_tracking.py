@@ -101,9 +101,15 @@ class TrackingRun(Node):
         self._t0 = 0.0
 
     def _on_js(self, msg):
+        carries_this_arm = any(n in msg.name for n in self._joint_names)
         for name, position in zip(msg.name, msg.position):
             self._latest[name] = position
-        if self._recording and all(n in self._latest for n in self._joint_names):
+        # Only a message that actually carries this arm's joints is a sample of
+        # this arm. With direct_joint_states the other arm publishes to the same
+        # topic, and counting its messages as unchanged readings of ours
+        # manufactured a ~50% repeat rate that had nothing to do with the robot.
+        if (self._recording and carries_this_arm
+                and all(n in self._latest for n in self._joint_names)):
             self._samples.append((
                 time.monotonic() - self._t0,
                 {n: self._latest[n] for n in self._joint_names},
@@ -183,6 +189,11 @@ def _repeat_fraction(values):
     return repeats / (len(values) - 1)
 
 
+# Samples closer together than this are treated as simultaneous: dividing by a
+# sub-millisecond dt turns encoder quantisation into thousands of deg/s.
+_MIN_DT = 1e-3
+
+
 def _smooth_velocity(times, values, half_window):
     """Central difference over +/-half_window samples.
 
@@ -192,7 +203,7 @@ def _smooth_velocity(times, values, half_window):
     out = []
     for i in range(half_window, len(values) - half_window):
         dt = times[i + half_window] - times[i - half_window]
-        if dt > 0:
+        if dt > _MIN_DT:
             out.append((times[i],
                         (values[i + half_window] - values[i - half_window]) / dt))
     return out
@@ -203,10 +214,10 @@ def _derivatives(times, values):
     vel, acc = [], []
     for i in range(1, len(values)):
         dt = times[i] - times[i - 1]
-        vel.append((values[i] - values[i - 1]) / dt if dt > 0 else 0.0)
+        vel.append((values[i] - values[i - 1]) / dt if dt > _MIN_DT else 0.0)
     for i in range(1, len(vel)):
         dt = times[i + 1] - times[i]
-        acc.append((vel[i] - vel[i - 1]) / dt if dt > 0 else 0.0)
+        acc.append((vel[i] - vel[i - 1]) / dt if dt > _MIN_DT else 0.0)
     return vel, acc
 
 
