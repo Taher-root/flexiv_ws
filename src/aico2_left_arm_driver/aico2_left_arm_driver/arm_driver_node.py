@@ -119,6 +119,7 @@ class ArmDriverNode(LifecycleNode):
         self._joint_stiffness_ratio = 1.0
         self._goal_settle_timeout = 3.0
         self._goal_tol_impedance = 0.05
+        self._max_contact_torque = 0.0
         self._traj_send_rate = 50.0
         self._cartesian_max_lin = 0.3
         self._cartesian_max_ang = 1.047
@@ -248,6 +249,15 @@ class ArmDriverNode(LifecycleNode):
         # is a matter of declaring the tool in Flexiv Elements, not of tuning
         # this number.
         self.declare_parameter("goal_joint_tolerance_impedance", 0.05)
+        # Torque ceiling per arm axis in impedance mode. Without it the
+        # impedance law demands stiffness x deflection with no bound and the
+        # joint simply saturates: at nominal K_q, arm joint 4 (4200 Nm/rad)
+        # demands 294 Nm for 4 degrees of deflection against its 64 Nm limit,
+        # so a blocked arm pushes with everything it has until the controller's
+        # collision detection trips. SetMaxContactTorque makes it yield at a
+        # chosen torque instead. 0 or less leaves it unset (previous
+        # behaviour); the URDF's own effort limits are 123/123/64/64/39/39/39.
+        self.declare_parameter("max_contact_torque", 0.0)
         # Rate at which trajectory samples are pushed to the controller. Was
         # welded to publish_rate_hz, which conflated two unrelated things: how
         # often state is published, and how often the arm is re-commanded.
@@ -319,6 +329,23 @@ class ArmDriverNode(LifecycleNode):
         self._goal_tol_impedance = float(
             self.get_parameter("goal_joint_tolerance_impedance").value
         )
+        self._max_contact_torque = float(
+            self.get_parameter("max_contact_torque").value
+        )
+        if (self._joint_control_mode == "impedance"
+                and self._joint_stiffness_ratio >= 0.8):
+            self.get_logger().warn(
+                f"joint_control_mode is 'impedance' but joint_stiffness_ratio "
+                f"is {self._joint_stiffness_ratio}: at nominal K_q the arm is "
+                f"as stiff as position mode and will NOT yield to a push — it "
+                f"saturates its joint torque instead. Use 0.1-0.3 for "
+                f"compliance, and never test it with a hand or arm in the path."
+            )
+        if self._joint_control_mode == "impedance" and self._max_contact_torque <= 0.0:
+            self.get_logger().warn(
+                "max_contact_torque is unset, so nothing bounds the torque the "
+                "impedance law will demand when the arm is obstructed."
+            )
         send_rate = float(self.get_parameter("trajectory_send_rate_hz").value)
         self._traj_send_rate = send_rate if send_rate > 0.0 else self._rate_hz
 
@@ -456,10 +483,20 @@ class ArmDriverNode(LifecycleNode):
             for i in range(start, len(nominal)):
                 K_q[i] = nominal[i] * self._joint_stiffness_ratio
             self._session.set_joint_impedance(K_q)
+            if self._max_contact_torque > 0.0:
+                # Same applicable modes as SetJointImpedance, so it goes here:
+                # after the mode switch, never before.
+                self._session.robot.SetMaxContactTorque(
+                    [self._max_contact_torque] * len(nominal)
+                )
             if not quiet:
+                torque_note = (
+                    f", max contact torque {self._max_contact_torque:.0f} Nm"
+                    if self._max_contact_torque > 0.0 else ", torque UNBOUNDED"
+                )
                 self.get_logger().info(
                     f"joint stiffness set to {self._joint_stiffness_ratio} x "
-                    f"K_q_nom on axes {start}..{len(nominal) - 1}"
+                    f"K_q_nom on axes {start}..{len(nominal) - 1}{torque_note}"
                 )
         except Exception as exc:  # noqa: BLE001
             self.get_logger().error(f"SetJointImpedance failed: {exc}")
