@@ -56,9 +56,13 @@ def generate_launch_description():
             parameters=[
                 moveit_config.to_dict(),
                 {
-                    # move_group does not run the controllers, so it must not
-                    # wait on a controller_manager that is not there.
-                    "publish_robot_description": False,
+                    # Published so RViz and anything else on the domain can get
+                    # the URDF from move_group. robot_state_publisher normally
+                    # publishes it too -- identical content, and publishing it
+                    # here means MoveIt does not silently depend on RSP being up.
+                    # TF still does: RSP is what turns /joint_states into link
+                    # transforms (flexiv_amr_description/display.launch.py).
+                    "publish_robot_description": True,
                     "publish_robot_description_semantic": True,
                     # RViz's MotionPlanning display needs the monitored scene.
                     # Booleans, not substitutions: a LaunchConfiguration would

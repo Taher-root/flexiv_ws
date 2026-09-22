@@ -131,6 +131,13 @@ def generate_launch_description():
                               ]),
                               description="Map yaml to localize against "
                                           "(localization_backend:=amcl)"),
+        DeclareLaunchArgument("joint_control_mode", default_value="position",
+                              description="'position' (NRT_JOINT_POSITION) or "
+                                          "'impedance' (NRT_JOINT_IMPEDANCE, "
+                                          "compliant) — see arms.launch.py"),
+        DeclareLaunchArgument("joint_stiffness_ratio", default_value="1.0",
+                              description="fraction of K_q_nom on the arm axes "
+                                          "when joint_control_mode:=impedance"),
         DeclareLaunchArgument("use_moveit", default_value="false",
                               description="Launch move_group for arm motion "
                                           "planning (aico2_moveit_config)"),
@@ -155,6 +162,8 @@ def generate_launch_description():
             "mock_hardware": mock_arms,
             "enable_waist_driver": LaunchConfiguration("enable_waist_driver"),
             "direct_joint_states": LaunchConfiguration("direct_joint_states"),
+            "joint_control_mode": LaunchConfiguration("joint_control_mode"),
+            "joint_stiffness_ratio": LaunchConfiguration("joint_stiffness_ratio"),
         }),
 
         # ============================================================

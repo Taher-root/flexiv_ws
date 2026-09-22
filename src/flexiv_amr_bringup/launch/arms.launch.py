@@ -29,6 +29,7 @@ from launch.substitutions import (
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from lifecycle_msgs.msg import Transition
 
@@ -107,6 +108,12 @@ def generate_launch_description():
     mock_hardware = LaunchConfiguration("mock_hardware")
     enable_waist_driver = LaunchConfiguration("enable_waist_driver")
     direct_joint_states = LaunchConfiguration("direct_joint_states")
+    joint_control_mode = ParameterValue(
+        LaunchConfiguration("joint_control_mode"), value_type=str)
+    # Without value_type a LaunchConfiguration arrives as a string and the
+    # driver's double parameter rejects it as a type mismatch.
+    joint_stiffness_ratio = ParameterValue(
+        LaunchConfiguration("joint_stiffness_ratio"), value_type=float)
 
     # joint_state_architecture.md sec 3 / sec 8 step 6: the target state is
     # every driver publishing its own joints straight to /joint_states, with
@@ -140,6 +147,14 @@ def generate_launch_description():
                 "mock_hardware": mock_hardware,
                 "joint_names": LEFT_JOINTS,
                 "tcp_frame_id": "Left_flange",
+                # Overridable here because joint_control_mode is only read in
+                # on_configure: changing it later needs a relaunch, so it has
+                # to be settable without editing the YAML.
+                # joint_stiffness_ratio is also a live parameter:
+                #   ros2 param set /left_arm/left_arm_driver \
+                #       joint_stiffness_ratio 0.3
+                "joint_control_mode": joint_control_mode,
+                "joint_stiffness_ratio": joint_stiffness_ratio,
             },
         ],
     )
@@ -159,6 +174,8 @@ def generate_launch_description():
                 "mock_hardware": mock_hardware,
                 "joint_names": RIGHT_JOINTS,
                 "tcp_frame_id": "Right_flange",
+                "joint_control_mode": joint_control_mode,
+                "joint_stiffness_ratio": joint_stiffness_ratio,
             },
         ],
     )
@@ -206,6 +223,27 @@ def generate_launch_description():
                             "merger is not started — robot_state_publisher merges "
                             "by joint name, so the waist driver's real values are "
                             "no longer overwritten with zeros",
+            ),
+            DeclareLaunchArgument(
+                "joint_control_mode",
+                default_value="position",
+                description="position: NRT_JOINT_POSITION, a stiff position "
+                            "controller (historical behaviour). impedance: "
+                            "NRT_JOINT_IMPEDANCE, tracking the same "
+                            "SendJointPosition stream but yielding to external "
+                            "force at joint_stiffness_ratio x K_q_nom. Applies "
+                            "to both trajectories and servo teleop, and is read "
+                            "once in on_configure — hence a launch argument "
+                            "rather than something to set at runtime",
+            ),
+            DeclareLaunchArgument(
+                "joint_stiffness_ratio",
+                default_value="1.0",
+                description="fraction of K_q_nom on the arm axes when "
+                            "joint_control_mode:=impedance (the waist entries "
+                            "are +inf nominal and pass through untouched). "
+                            "Retunable live: ros2 param set "
+                            "/left_arm/left_arm_driver joint_stiffness_ratio 0.3",
             ),
             left_driver,
             right_driver,

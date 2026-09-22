@@ -1,0 +1,18 @@
+# Read by MoveItConfigsBuilder.__init__ (moveit_configs_utils). Without it, the
+# builder cannot infer where the URDF and SRDF live and warns
+#   Cannot infer URDF from `.../aico2_moveit_config`. -- using config/AICO2.urdf
+# before falling back to a path that does not exist. The explicit
+# .robot_description(...) / .robot_description_semantic(...) calls in the launch
+# files then override it, so the warning was cosmetic -- but the fallback it
+# names is also what would be used if those calls were ever dropped, and a
+# missing URDF there degrades silently to "load it from the /robot_description
+# topic", which nothing publishes unless robot_state_publisher is running.
+#
+# The URDF is deliberately in flexiv_amr_description: one URDF for description,
+# nav2 and MoveIt.
+moveit_setup_assistant_config:
+  urdf:
+    package: flexiv_amr_description
+    relative_path: urdf/AICO2-Rizon4.urdf
+  srdf:
+    relative_path: config/aico2.srdf
