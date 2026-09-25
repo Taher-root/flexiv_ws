@@ -57,8 +57,12 @@ from launch.substitutions import (
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
-# Scans merged into /scan/merged once the head camera is in play.
-LASERSCAN_TOPICS = "/scan/nav /scan/avoid /scan/depth /scan/top"
+# Scans merged into /scan/merged. /scan/top is appended only when the head
+# camera is actually enabled: the merger waits on every topic it is given, so
+# listing a scan that never publishes costs you /scan/merged -- and with it the
+# costmaps' only laser source, AMCL's input and the collision monitor's.
+LASERSCAN_TOPICS = "/scan/nav /scan/avoid /scan/depth"
+TOP_LASERSCAN_TOPIC = "/scan/top"
 
 # Staged start-up, seconds after launch.
 MERGER_DELAY = 3.0          # TF tree + scan sources up
@@ -83,6 +87,11 @@ def _include(package, launch_file, launch_arguments=None, condition=None):
 def generate_launch_description():
     use_camera = LaunchConfiguration("use_camera")
     use_visual_odom = LaunchConfiguration("use_visual_odom")
+    use_top_camera = LaunchConfiguration("use_top_camera")
+    laserscan_topics = PythonExpression([
+        "'", LASERSCAN_TOPICS, " ", TOP_LASERSCAN_TOPIC, "' if '",
+        use_top_camera, "' == 'true' else '", LASERSCAN_TOPICS, "'",
+    ])
     use_slam = LaunchConfiguration("use_slam")
     use_rtabmap = LaunchConfiguration("use_rtabmap")
     use_nav = LaunchConfiguration("use_nav")
@@ -106,6 +115,14 @@ def generate_launch_description():
         # --- Arguments ---
         DeclareLaunchArgument("use_camera", default_value="true",
                               description="Launch both RealSense cameras + depth-to-laserscan"),
+        DeclareLaunchArgument("use_top_camera", default_value="false",
+                              description="Also bring up the head-mounted top "
+                                          "D456 (adds /scan/top to the merged "
+                                          "scan and a second visual odometry). "
+                                          "Default false because that camera is "
+                                          "not mounted or connected — matching "
+                                          "sensors.launch.py and the disabled "
+                                          "odom2 source in ekf.yaml"),
         DeclareLaunchArgument("use_visual_odom", default_value="true",
                               description="Launch RTAB-Map visual odometry"),
         DeclareLaunchArgument("use_slam", default_value="true",
@@ -179,9 +196,12 @@ def generate_launch_description():
         _include("flexiv_amr_bringup", "hardware_test.launch.py", {
             "use_robokit": "true",
             "use_camera": use_camera,
-            "use_top_camera": use_camera,
+            # Was welded to use_camera, which turned the head camera on for
+            # every full-system launch. It is not plugged in, so realsense2
+            # spun on a missing serial and /scan/top never published.
+            "use_top_camera": use_top_camera,
             "use_visual_odom": use_visual_odom,
-            "laserscan_topics": LASERSCAN_TOPICS,
+            "laserscan_topics": laserscan_topics,
             "merger_delay": str(MERGER_DELAY),
         }),
 

@@ -1,12 +1,23 @@
 """move_group for the two Rizon arms.
 
 Composes with the existing bringup rather than replacing it: this launch starts
-move_group only. The arm drivers (which serve the FollowJointTrajectory actions
-move_group executes on) and robot_state_publisher come from
-flexiv_amr_bringup/arms.launch.py, so the usual order is
+move_group only. The arm drivers, which serve the FollowJointTrajectory actions
+move_group executes on, come from flexiv_amr_bringup/arms.launch.py.
+
+robot_state_publisher does NOT: arms.launch.py starts the drivers and the joint
+state merger, nothing else. RSP is what turns /joint_states into link
+transforms, so without it move_group has no TF and the planning scene monitor
+complains. It comes from flexiv_amr_description/display.launch.py (or
+flexiv_amr_bringup/hardware_test.launch.py, which starts a great deal more).
+So the usual order is
 
     ros2 launch flexiv_amr_bringup arms.launch.py
+    ros2 launch flexiv_amr_description display.launch.py
     ros2 launch aico2_moveit_config move_group.launch.py
+
+Do not pass use_gui:=true to display.launch.py against a real robot: it starts
+joint_state_publisher_gui, which publishes its own /joint_states and fights the
+drivers for the topic.
 
 The URDF lives in flexiv_amr_description, not here, so robot_description is
 loaded by absolute path from that package's share directory. That keeps one

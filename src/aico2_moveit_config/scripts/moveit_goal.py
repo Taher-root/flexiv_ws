@@ -21,6 +21,11 @@ layer can be tested headless:
     python3 src/aico2_moveit_config/scripts/moveit_goal.py \
         --joint 4 --degrees 15 --yes-move
 
+    # a random pose on all 7 joints -- plan it first, then run the same one
+    python3 src/aico2_moveit_config/scripts/moveit_goal.py --random --plan-only
+    python3 src/aico2_moveit_config/scripts/moveit_goal.py \
+        --random --seed 12345 --yes-move
+
 Targets are joint-space (JointConstraint), not poses, deliberately: it isolates
 planning and execution from IK, which on a 7-DoF arm with the KDL solver is the
 other thing most likely to fail. Once this works, a failing pose goal in RViz is
@@ -35,6 +40,7 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import random
 import sys
 import xml.etree.ElementTree as ET
 
@@ -124,6 +130,53 @@ def load_srdf_states(group):
         states[gs.get("name")] = {j.get("name"): float(j.get("value"))
                                   for j in gs.findall("joint")}
     return states, srdf
+
+
+def load_joint_limits(joint_names):
+    """Position limits from the URDF -- the same file move_group plans against.
+
+    Read by path rather than off /robot_description so this works with only
+    move_group up: move_group.launch.py loads this exact file.
+    """
+    urdf = os.path.join(get_package_share_directory("flexiv_amr_description"),
+                        "urdf", "AICO2-Rizon4.urdf")
+    root = ET.parse(urdf).getroot()
+    limits = {}
+    for joint in root.findall("joint"):
+        name = joint.get("name")
+        if name not in joint_names:
+            continue
+        limit = joint.find("limit")
+        if limit is not None:
+            limits[name] = (float(limit.get("lower")), float(limit.get("upper")))
+    missing = [n for n in joint_names if n not in limits]
+    if missing:
+        raise SystemExit(f"no position limits in {urdf} for {missing}")
+    return limits, urdf
+
+
+def random_targets(current, limits, range_deg, margin_deg, rng):
+    """A random target per joint, within range_deg of now and inside the limits.
+
+    Bounded relative to the current pose rather than sampled across the whole
+    range. A uniform sample over seven joints puts the arm somewhere
+    unpredictable, and "collision-free" here only means free of SELF-collision:
+    the table, the fixtures and anything else in the cell are not in the
+    planning scene, so MoveIt will happily plan straight through them.
+    """
+    span = math.radians(range_deg)
+    margin = math.radians(margin_deg)
+    targets = {}
+    for name, position in current.items():
+        lower, upper = limits[name]
+        low = max(position - span, lower + margin)
+        high = min(position + span, upper - margin)
+        if low > high:
+            # Already outside the margin band: aim for the nearest point in it
+            # rather than sampling an empty interval.
+            low = high = min(max(position, lower + margin), upper - margin)
+        targets[name] = rng.uniform(low, high)
+    return targets
 
 
 class GoalSender(Node):
@@ -278,6 +331,18 @@ def main():
     ap.add_argument("--named", help="SRDF named state to move to, e.g. ready")
     ap.add_argument("--joint", type=int,
                     help="arm joint 1-7 for a relative move")
+    ap.add_argument("--random", action="store_true",
+                    help="random target on all 7 joints, within --random-range "
+                         "of the current pose and inside the URDF limits")
+    ap.add_argument("--random-range", type=float, default=25.0,
+                    help="max per-joint deviation for --random, degrees "
+                         "(default 25)")
+    ap.add_argument("--limit-margin", type=float, default=5.0,
+                    help="keep --random targets this far inside each joint "
+                         "limit, degrees (default 5)")
+    ap.add_argument("--seed", type=int,
+                    help="seed for --random, so --plan-only and the execute "
+                         "run aim at the same pose. Printed either way.")
     ap.add_argument("--degrees", type=float, default=15.0,
                     help="relative move size with --joint")
     ap.add_argument("--plan-only", action="store_true",
@@ -302,10 +367,14 @@ def main():
             print(f"  {name:10s} {values} (deg)")
         return 0
 
-    if not args.named and args.joint is None:
-        raise SystemExit("give --named <state> or --joint <n> (or --list)")
-    if args.named and args.joint is not None:
-        raise SystemExit("--named and --joint are mutually exclusive")
+    chosen = [n for n, v in (("--named", args.named),
+                             ("--joint", args.joint is not None),
+                             ("--random", args.random)) if v]
+    if not chosen:
+        raise SystemExit(
+            "give one of --named <state>, --joint <n>, --random (or --list)")
+    if len(chosen) > 1:
+        raise SystemExit(f"{' and '.join(chosen)} are mutually exclusive")
     if not args.plan_only and not args.yes_move:
         raise SystemExit(
             "executing moves the arm. Add --yes-move, or --plan-only to plan\n"
@@ -323,6 +392,15 @@ def main():
     try:
         if args.named:
             targets = states[args.named]
+        elif args.random:
+            limits, urdf = load_joint_limits(joint_names)
+            seed = args.seed if args.seed is not None \
+                else random.randrange(1 << 30)
+            print(f"limits: {urdf}")
+            print(f"seed:   {seed}   (--seed {seed} repeats this pose)")
+            current = node.wait_for_joint_states(joint_names)
+            targets = random_targets(current, limits, args.random_range,
+                                     args.limit_margin, random.Random(seed))
         else:
             if not 1 <= args.joint <= 7:
                 raise SystemExit("--joint must be 1..7")
