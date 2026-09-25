@@ -74,16 +74,44 @@ rtabmap:
     RGBD/CreateOccupancyGrid: 'true'
 
     # === Occupancy Grid ===
-    Grid/FromDepth: 'true'
+    # Grid/Sensor picks the source: 0=laser scan, 1=depth image(s), 2=both.
+    # 0 here, and 0 is also what rtabmap_ros would force on its own: with
+    # subscribe_scan true and Grid/Sensor unset it sets 0 and warns, telling you
+    # to state it explicitly to silence the warning (CoreWrapper.cpp). So this
+    # is the default made visible, not a departure from it.
+    #
+    # Grid/FromDepth was removed here. It is the pre-0.20.15 name for this same
+    # setting, and when both are present the NEW name wins and the old one is
+    # discarded with "the new parameter is already used with value 0, ignoring
+    # the old one with value true". It had no effect, and read as though the
+    # grid came from depth images when it comes from the scan.
+    Grid/Sensor: '0'
     Grid/RangeMax: '8.0'
     Grid/RangeMin: '0.3'
     Grid/CellSize: '0.05'
-    Grid/MaxObstacleHeight: '2.0'
-    Grid/MinObstacleHeight: '0.1'
-    Grid/MaxGroundHeight: '0.05'
-    Grid/3D: 'false'
-    Grid/RayTracing: 'true'
-    Grid/Sensor: '0'
+
+    # The scan RTAB-Map receives (/scan/depth) is 2D, and for a 2D scan with
+    # Grid/Sensor=0 LocalGridMaker takes a separate path that uses only
+    # RangeMin, RangeMax, CellSize and Grid/Scan2dUnknownSpaceFilled: every
+    # surviving point becomes an obstacle cell, with no ground/obstacle
+    # segmentation at all. So the four below do NOTHING today. They are kept,
+    # not deleted, because they are the right values for Grid/Sensor:=1 or 2 --
+    # but do not tune them expecting the current map to change.
+    #
+    # Grid/3D says so itself: "Ignored if laser scan is 2D and Grid/Sensor is 0".
+    #
+    # Grid/RayTracing is the one to know about: free space between the sensor
+    # and an obstacle is filled by Grid/Scan2dUnknownSpaceFilled on the 2D path,
+    # NOT by Grid/RayTracing, and that parameter defaults to false and is not
+    # set here. So nothing currently marks free space -- everything the scan
+    # does not hit stays unknown. Setting it changes the map, so it is a
+    # deliberate decision rather than a cleanup.
+    Grid/MaxObstacleHeight: '2.0'    # ignored while Grid/Sensor is 0
+    Grid/MinObstacleHeight: '0.1'    # ignored while Grid/Sensor is 0
+    Grid/MaxGroundHeight: '0.05'     # ignored while Grid/Sensor is 0
+    Grid/3D: 'false'                 # ignored while Grid/Sensor is 0 and scan is 2D
+    Grid/RayTracing: 'true'          # ignored on the 2D path; see above
+
     cloud_output_voxelized: true
     cloud_voxel_size: 0.02
 
@@ -94,7 +122,11 @@ rtabmap:
     Icp/Iterations: '30'
 
     # === Memory ===
-    Mem/IncrementalMemory: 'false'
+    # Mem/IncrementalMemory is NOT set here -- see the note at the top of this
+    # file. It was set to 'false' below, directly contradicting that note: both
+    # launch files happen to pass their own value after this file so the right
+    # one won, but a third launch, or a reordering of that parameters list,
+    # would have silently forced mapping into localization mode again.
     Mem/InitWMWithAllNodes: 'true'
     Mem/STMSize: '30'
     Mem/RehearsalSimilarity: '0.6'
