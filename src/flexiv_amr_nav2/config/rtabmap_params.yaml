@@ -112,6 +112,18 @@ rtabmap:
     Grid/3D: 'false'                 # ignored while Grid/Sensor is 0 and scan is 2D
     Grid/RayTracing: 'true'          # ignored on the 2D path; see above
 
+    # The 2D path's ray tracing. Without it nothing marks free space: only the
+    # cells the scan actually hits become obstacles and everything else stays
+    # UNKNOWN. Nav2's global costmap runs track_unknown_space: true, so unknown
+    # reads as blocked to the planner -- a map with no free space is a map the
+    # planner cannot cross. Bounded by Grid/RangeMax above.
+    #
+    # Only affects MAPPING runs. In localization mode the grid cells come from
+    # the nodes already stored in the .db, so changing this does not alter a
+    # localization run against an existing map -- it takes effect the next time
+    # rtabmap_mapping.launch.py builds one.
+    Grid/Scan2dUnknownSpaceFilled: 'true'
+
     cloud_output_voxelized: true
     cloud_voxel_size: 0.02
 
