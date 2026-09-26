@@ -115,9 +115,41 @@ base LiDAR to the head camera — is working from a waist pose that is fiction.
                                                            robot_state_publisher → TF
 ```
 
-Three publishers, one topic, no merger. `robot_state_publisher` merges partial
-`JointState` messages by joint name, so each node publishes only the joints it
+Three publishers, one topic, no merger. Each node publishes only the joints it
 owns, with its own honest timestamp. One physical joint, one publisher.
+
+> **THIS DESIGN DOES NOT WORK AS WRITTEN — 2026-09-26.** It rests on
+> `robot_state_publisher` merging partial `JointState` messages by joint name.
+> It does not. In `robot_state_publisher.cpp` (Jazzy), `callbackJointState`
+> declares its map as a **local**:
+>
+> ```cpp
+> std::map<std::string, double> joint_positions;          // line 343, local
+> for (size_t i = 0; i < state->name.size(); ++i)
+>   joint_positions.insert({state->name[i], state->position[i]});
+> publishTransforms(joint_positions, state->header.stamp);
+> ```
+>
+> The map is rebuilt from scratch on every message, so a message publishes
+> transforms for **only the joints it contains**. Nothing accumulates across
+> messages.
+>
+> Observed consequence with `direct_joint_states:=true` and no waist publisher:
+> `AGV_Joint1`/`AGV_Joint2` never appear in any message, so their transforms are
+> never published. Both arms hang off `AGV_Pitch` via those two revolute joints,
+> so the entire upper body loses its transform chain from `base_link` and RViz
+> renders both arms detached from the chassis.
+>
+> This is also why the waist driver "races last-writer-wins" with the merger
+> (sec 8 step 3): at 200 Hz it publishes 2-joint messages while the merger
+> publishes 16-joint messages at 50 Hz, and because nothing accumulates, each
+> message alone decides what gets a transform that instant.
+>
+> **Until one publisher emits all 16 joints in a single message, the merger has
+> to stay.** The path to removing it is not "let RSP merge" — it is to give the
+> single publisher the waist values. `arm_driver_node._extract_arm_q` already
+> reads the full 9-DoF `q` off the left arm's existing RDK session and discards
+> indices 0-1, which are exactly `AGV_Joint1`/`AGV_Joint2`.
 
 ### Why drop `joint_state_merger`
 
@@ -129,8 +161,9 @@ exactly the information we are trying to preserve.
 
 **Risk to check before deleting it:** anything downstream that assumes a single
 `/joint_states` message contains all 16 joints. Grep for `/joint_states`
-subscribers. MoveIt and `robot_state_publisher` both handle partial messages;
-hand-rolled consumers may not. If something does depend on it, keep the merger
+subscribers. `robot_state_publisher` does NOT handle partial messages (see the
+note above); MoveIt's planning scene monitor does accumulate, but TF comes from
+RSP, so partial messages break TF regardless of what MoveIt does. If something does depend on it, keep the merger
 as an optional node behind a launch arg rather than in the default path.
 
 ### Why a separate waist node
