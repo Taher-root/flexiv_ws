@@ -13,5 +13,10 @@
   <exec_depend>apriltag_ros</exec_depend>
   <exec_depend>image_proc</exec_depend>
   <exec_depend>opennav_docking</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>flexiv_amr_nav2</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
   <export><build_type>ament_cmake</build_type></export>
 </package>

@@ -61,6 +61,12 @@ Visualization Manager:
     Fixed Frame: base_link
     Frame Rate: 30
   Tools:
+    # Interact must be present, and first so it is the active tool on startup.
+    # Without it RViz has no way to grab an interactive marker, so MoveIt's
+    # goal-state gimbal never appears -- the robot and the orange goal ghost
+    # both render fine and nothing can be dragged.
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
     - Class: rviz_default_plugins/MoveCamera
     - Class: rviz_default_plugins/Select
   Views:
