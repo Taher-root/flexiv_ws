@@ -115,6 +115,16 @@ def generate_launch_description():
         # --- Arguments ---
         DeclareLaunchArgument("use_camera", default_value="true",
                               description="Launch both RealSense cameras + depth-to-laserscan"),
+        DeclareLaunchArgument("use_robokit", default_value="true",
+                              description="true: robokit_velocity_controller, "
+                                          "raw TCP to port 19205. false: "
+                                          "velocity_controller, which uses the "
+                                          "flexivamr SDK and calls "
+                                          "gain_control() before commanding. "
+                                          "The Robokit one never acquires "
+                                          "control and discards the chassis "
+                                          "reply, so a refused command looks "
+                                          "identical to an accepted one"),
         DeclareLaunchArgument("use_top_camera", default_value="false",
                               description="Also bring up the head-mounted top "
                                           "D456 (adds /scan/top to the merged "
@@ -194,7 +204,7 @@ def generate_launch_description():
         # both cameras + depth-to-laserscan + scan merger
         # ============================================================
         _include("flexiv_amr_bringup", "hardware_test.launch.py", {
-            "use_robokit": "true",
+            "use_robokit": LaunchConfiguration("use_robokit"),
             "use_camera": use_camera,
             # Was welded to use_camera, which turned the head camera on for
             # every full-system launch. It is not plugged in, so realsense2

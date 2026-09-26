@@ -13,7 +13,12 @@
     # Odometry Parameters
     base_frame: "base_link"
     odom_frame: "odom_raw"
-    publish_tf: true
+    # false: the EKF owns odom -> base_link. This was true, which made
+    # odometry_publisher broadcast a SECOND parent for base_link alongside
+    # robot_localization's -- a frame cannot have two parents, so the tree
+    # breaks and transforms go unpredictable. amr_params_robokit.yaml already
+    # had this right; this file was stale.
+    publish_tf: false
     
     # Status Monitor Parameters
     status_rate: 2.0
