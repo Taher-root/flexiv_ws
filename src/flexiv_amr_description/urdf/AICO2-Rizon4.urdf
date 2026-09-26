@@ -12,7 +12,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://flexiv_amr_description/meshes/visual/AGV_Base.obj" />
+        <mesh filename="package://flexiv_amr_description/meshes/collision/AGV_Base.stl" />
       </geometry>
       <material name="">
         <color rgba="1 1 1 1" />
@@ -56,7 +56,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://flexiv_amr_description/meshes/visual/AGV_Pitch.obj" />
+        <mesh filename="package://flexiv_amr_description/meshes/collision/AGV_Pitch.stl" />
       </geometry>
       <material name="">
         <color rgba="1 1 1 1" />
@@ -128,7 +128,7 @@
     <visual name="shell">
       <origin rpy="0 0 0" xyz="0 0 0" />
       <geometry>
-        <mesh filename="package://flexiv_amr_description/meshes/visual/link2.obj" />
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link2.stl" />
       </geometry>
     </visual>
     <visual name="ring">
@@ -228,7 +228,7 @@
     <visual name="shell">
       <origin rpy="0 0 0" xyz="0 0 0" />
       <geometry>
-        <mesh filename="package://flexiv_amr_description/meshes/visual/link6.obj" />
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link6.stl" />
       </geometry>
     </visual>
     <visual name="ring">
@@ -335,7 +335,7 @@
     <visual name="shell">
       <origin rpy="3.141592653589793 0 0" xyz="0 0 0" />
       <geometry>
-        <mesh filename="package://flexiv_amr_description/meshes/visual/link2.obj" />
+        <mesh filename="package://flexiv_amr_description/meshes/collision/link2.stl" />
       </geometry>
     </visual>
     <visual name="ring">
