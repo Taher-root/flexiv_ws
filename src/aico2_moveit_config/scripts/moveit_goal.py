@@ -384,6 +384,22 @@ def main():
             f"{args.named!r} is not a named state for {args.group!r}; "
             f"have {sorted(states)}")
 
+    # joint_names below is a 7-joint arm, named after the side. That holds for
+    # left_arm and right_arm and for nothing else: left_arm_waist is 9 joints
+    # (the chain runs base_link -> Left_flange through AGV_Joint1/2) and
+    # both_arms is 14. On those groups --joint could not address the extra
+    # joints at all, and --random would sample only the arm while leaving the
+    # torso unconstrained and unchecked against its limits -- the planner would
+    # be free to swing it anywhere. Refuse instead of under-constraining.
+    # Plan those groups from RViz, which builds the goal from the group itself,
+    # or send a full-width trajectory to the action directly.
+    _ARM_GROUPS = ("left_arm", "right_arm")
+    if (args.joint is not None or args.random) and args.group not in _ARM_GROUPS:
+        raise SystemExit(
+            f"--joint/--random assume a 7-joint arm group; {args.group!r} is "
+            f"not one of {_ARM_GROUPS}. Use --named, RViz, or a direct "
+            f"follow_joint_trajectory goal for that group."
+        )
     prefix = "Right" if "right" in args.group else "Left"
     joint_names = [f"{prefix}_joint{i}" for i in range(1, 8)]
 
@@ -406,7 +422,12 @@ def main():
                 raise SystemExit("--joint must be 1..7")
             current = node.wait_for_joint_states(joint_names)
             name = joint_names[args.joint - 1]
-            targets = {name: current[name] + math.radians(args.degrees)}
+            # Constrain every joint, not just the moved one. A JointConstraint
+            # is only built for what is in targets, so a single entry leaves
+            # the other six free and RRTConnect routes them wherever its tree
+            # grew -- a one-joint request that visibly moves the whole arm.
+            targets = dict(current)
+            targets[name] = current[name] + math.radians(args.degrees)
         # Populate current positions for the printout even on a named goal.
         # Same timeout as the --joint path: a freshly started node needs a
         # moment to discover /joint_states publishers, and 2s was short enough
