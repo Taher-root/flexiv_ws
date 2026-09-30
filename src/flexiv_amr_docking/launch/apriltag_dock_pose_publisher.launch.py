@@ -11,12 +11,6 @@ def generate_launch_description():
         'apriltags_36h11.yaml'
     )
 
-    nav2_params = os.path.join(
-        get_package_share_directory('flexiv_amr_nav2'),
-        'config',
-        'nav2_params.yaml'
-    )
-
     return LaunchDescription([
         # Step 1: Rectify raw color image
         Node(
