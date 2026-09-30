@@ -91,12 +91,36 @@ class ArmDriverNode(LifecycleNode):
         if not self._joint_names:
             self._joint_names = list(self._default_joints)
         self._validate_joint_names()
+        # The two external axes (q[0:2] on this robot). Empty by default, in
+        # which case nothing below changes and the waist is held at its
+        # measured position exactly as before. Set it to
+        # ["AGV_Joint1", "AGV_Joint2"] and this driver both publishes and
+        # commands them, using the RDK session it already holds -- no second
+        # session, no joint_state_merger zeros. Left arm only: both drivers
+        # see the same external axes, so two commanders would fight.
+        self._waist_joint_names: List[str] = list(
+            self.get_parameter("waist_joint_names")
+            .get_parameter_value().string_array_value
+        )
+        if self._waist_joint_names and "right" in self._namespace.lower():
+            self.get_logger().warn(
+                "waist_joint_names set on the RIGHT arm driver; ignoring. The "
+                "external axes are shared, so only one driver may own them."
+            )
+            self._waist_joint_names = []
         self._mock = bool(self.get_parameter("mock_hardware").value)
         self._rate_hz = float(self.get_parameter("publish_rate_hz").value)
         self._robot_sn = str(self.get_parameter("robot_sn").value).strip()
         self._auto_enable = bool(self.get_parameter("auto_enable").value)
         self._op_timeout = float(self.get_parameter("operational_timeout_sec").value)
         self._dof = len(self._joint_names)
+        # What a trajectory must contain, and the width of every sampled
+        # command vector: the arm joints followed by the waist joints.
+        # Identical to _joint_names while waist_joint_names is empty.
+        self._cmd_joint_names: List[str] = (
+            self._joint_names + self._waist_joint_names
+        )
+        self._cmd_dof = len(self._cmd_joint_names)
         self._rdk_dof = self._dof
         self._arm_dof = self._dof
         self._ext_dof = 0
@@ -213,6 +237,8 @@ class ArmDriverNode(LifecycleNode):
         self.declare_parameter("tcp_frame_id", self._default_tcp)
         self.declare_parameter("mock_idle_joint_positions", [0.0] * 7)
         self.declare_parameter("joint_names", self._default_joints)
+        # Waist/external axes this driver owns. [] = off (previous behaviour).
+        self.declare_parameter("waist_joint_names", [])
         # Timestamping (sec 4.3/4.4). Defaults to false here, unlike
         # aico2_waist_driver: the arms already have live TF consumers, so
         # enabling device timestamps is opt-in per arm rather than a silent
@@ -694,7 +720,13 @@ class ArmDriverNode(LifecycleNode):
     def _expand_arm_to_rdk(
         self, q_arm: List[float], dq_arm: List[float]
     ) -> tuple[List[float], List[float]]:
-        """Pad 7-DOF arm trajectory with current external-axis positions."""
+        """Build the full RDK vector from a sampled command vector.
+
+        q_arm is _cmd_dof wide: the arm joints, then the waist joints if
+        waist_joint_names is set. Entries this driver does not command keep
+        their measured value, which for the waist means "hold still" -- the
+        behaviour when waist_joint_names is empty.
+        """
         st = self._session.states()
         q_full = [float(x) for x in st.q[: self._rdk_dof]]
         dq_full = [float(x) for x in st.dq[: self._rdk_dof]]
@@ -703,6 +735,13 @@ class ArmDriverNode(LifecycleNode):
         for i in range(n):
             q_full[start + i] = q_arm[i]
             dq_full[start + i] = dq_arm[i] if i < len(dq_arm) else 0.0
+        # Waist entries trail the arm ones in the sampled vector and land at
+        # the front of the RDK vector, which is where the external axes live.
+        for i in range(len(self._waist_joint_names)):
+            src = self._dof + i
+            if src < len(q_arm) and i < start:
+                q_full[i] = q_arm[src]
+                dq_full[i] = dq_arm[src] if src < len(dq_arm) else 0.0
         return q_full, dq_full
 
     def _reset_servo_stream_state(self) -> None:
@@ -1159,8 +1198,12 @@ class ArmDriverNode(LifecycleNode):
             else:
                 q = list(self._mock_hold_q)
                 dq = [0.0] * self._dof
-            js.position = q
-            js.velocity = dq
+            # sample_trajectory returns the point's full width, which is
+            # _cmd_dof once waist_joint_names is set. js.name is the arm only
+            # in mock (there are no external axes to read), so trim to match
+            # or the message is inconsistent.
+            js.position = list(q)[: self._dof]
+            js.velocity = list(dq)[: self._dof]
             fault, operational, enabled = False, True, True
             mode, detail = "MOCK", "mock_hardware"
             tcp_pose = PoseStamped()
@@ -1204,6 +1247,20 @@ class ArmDriverNode(LifecycleNode):
             js.velocity = self._extract_arm_dq(sample.dq)
             if self._publish_effort:
                 js.effort = self._extract_arm_tau(sample.tau)
+            if self._waist_joint_names:
+                # Already in sample.q -- the poll thread reads the whole
+                # vector. Publishing them here is what lets the merger and
+                # aico2_waist_driver go away: one message, all the joints,
+                # real values, one RDK session.
+                n_w = min(len(self._waist_joint_names), self._rdk_arm_start_index())
+                js.name = list(js.name) + self._waist_joint_names[:n_w]
+                js.position = list(js.position) + [
+                    float(sample.q[i]) for i in range(n_w)]
+                js.velocity = list(js.velocity) + [
+                    float(sample.dq[i]) for i in range(n_w)]
+                if js.effort:
+                    js.effort = list(js.effort) + [
+                        float(sample.tau[i]) for i in range(n_w)]
             fault, operational, enabled, mode, detail = self._session.status_snapshot()
             tcp_pose = PoseStamped()
             tcp_pose.header.stamp = stamp
@@ -1238,7 +1295,7 @@ class ArmDriverNode(LifecycleNode):
             self.get_logger().warn("Reject trajectory: no points")
             return GoalResponse.REJECT
         try:
-            reorder_to_driver(traj, self._joint_names)
+            reorder_to_driver(traj, self._cmd_joint_names)
         except ValueError as exc:
             self.get_logger().warn(f"Reject trajectory: {exc}")
             return GoalResponse.REJECT
@@ -1275,7 +1332,7 @@ class ArmDriverNode(LifecycleNode):
     async def _execute_trajectory(self, goal_handle):
         traj = goal_handle.request.trajectory
         try:
-            _, traj = reorder_to_driver(traj, self._joint_names)
+            _, traj = reorder_to_driver(traj, self._cmd_joint_names)
         except ValueError as exc:
             goal_handle.abort()
             result = FollowJointTrajectory.Result()
@@ -1293,6 +1350,12 @@ class ArmDriverNode(LifecycleNode):
             self._session.stop()
             time.sleep(0.05)
             try:
+                # LockExternalAxes needs IDLE, so it goes before SwitchMode --
+                # the ordering _enter_servo_rdk_mode already uses. Only when
+                # this driver owns the waist; otherwise the axes stay locked
+                # and hold position, which is the previous behaviour.
+                if self._waist_joint_names and self._ext_dof > 0:
+                    self._session.robot.LockExternalAxes(False)
                 self._session.switch_mode(self._joint_rdk_mode())
                 # After the switch, never before: SetJointImpedance is only
                 # applicable in NRT_JOINT_IMPEDANCE.
@@ -1347,7 +1410,7 @@ class ArmDriverNode(LifecycleNode):
 
                 elapsed = time.monotonic() - start
                 iterations += 1
-                q_cmd, dq_cmd = sample_trajectory(traj, elapsed, self._dof)
+                q_cmd, dq_cmd = sample_trajectory(traj, elapsed, self._cmd_dof)
 
                 if not self._mock and self._session:
                     try:

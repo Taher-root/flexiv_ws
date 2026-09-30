@@ -62,6 +62,15 @@ residual, in which case fixing the cap fixes both.
 
 ## 3. Waist joints are hardcoded to 0.0
 
+**Measured 2026-09-30 on Rizon4-063352:** `DoF 9, DoF_m 7, DoF_e 2`.
+`AGV_Joint1` (yaw) range -87.45..+87.45 deg, sitting at 0.09 deg.
+`AGV_Joint2` (pitch) range **+2.50**..+87.45 deg, sitting at 5.85 deg.
+
+So the merger's hardcoded 0.0 for AGV_Joint2 is **below that axis's
+mechanical minimum** -- the rendered model holds the torso in a pose the
+robot cannot reach. The yaw error is 0.09 deg, i.e. nothing. Both axes are
+genuinely commandable; scripts/rdk_waist_move.py moves them.
+
 `joint_state_merger` initialises `AGV_Joint1`/`AGV_Joint2` to `0.0` and never
 updates them — nothing publishes the real values. The torso renders at the
 wrong yaw/pitch, and both arms hang off `AGV_Pitch`, so the whole upper body is

@@ -119,6 +119,12 @@ def generate_launch_description():
         LaunchConfiguration("joint_stiffness_ratio"), value_type=float)
     max_contact_torque = ParameterValue(
         LaunchConfiguration("max_contact_torque"), value_type=float)
+    # Empty string -> [], i.e. off. Only the left driver is given these: the
+    # external axes are shared, so two commanders would fight over them.
+    waist_joint_names = PythonExpression([
+        "['AGV_Joint1', 'AGV_Joint2'] if '",
+        LaunchConfiguration("control_waist"), "' == 'true' else []",
+    ])
 
     # joint_state_architecture.md sec 3 / sec 8 step 6: the target state is
     # every driver publishing its own joints straight to /joint_states, with
@@ -161,6 +167,7 @@ def generate_launch_description():
                 "joint_control_mode": joint_control_mode,
                 "joint_stiffness_ratio": joint_stiffness_ratio,
                 "max_contact_torque": max_contact_torque,
+                "waist_joint_names": waist_joint_names,
             },
         ],
     )
@@ -251,6 +258,18 @@ def generate_launch_description():
                             "are +inf nominal and pass through untouched). "
                             "Retunable live: ros2 param set "
                             "/left_arm/left_arm_driver joint_stiffness_ratio 0.3",
+            ),
+            DeclareLaunchArgument(
+                "control_waist",
+                default_value="false",
+                description="true: the LEFT arm driver owns AGV_Joint1/2 (the "
+                            "two external axes) -- publishes their real values "
+                            "in /joint_states and accepts them in a "
+                            "follow_joint_trajectory goal, using the RDK "
+                            "session it already holds. Replaces both the "
+                            "merger's hardcoded 0.0 and aico2_waist_driver's "
+                            "second session. Leave false and the waist is held "
+                            "at its measured position, as before",
             ),
             DeclareLaunchArgument(
                 "max_contact_torque",
