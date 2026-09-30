@@ -121,9 +121,10 @@ class ArmDriverNode(LifecycleNode):
         self._auto_enable = bool(self.get_parameter("auto_enable").value)
         self._op_timeout = float(self.get_parameter("operational_timeout_sec").value)
         self._dof = len(self._joint_names)
-        # What a trajectory must contain, and the width of every sampled
-        # command vector: the arm joints followed by the waist joints.
-        # Identical to _joint_names while waist_joint_names is empty.
+        # The most this driver can command. A given goal uses
+        # _cmd_names_for(traj), which is the arm plus whichever waist joints
+        # that trajectory carries -- the waist is optional, so a 7-joint
+        # MoveIt plan is still accepted.
         self._cmd_joint_names: List[str] = (
             self._joint_names + self._waist_joint_names
         )
@@ -682,6 +683,22 @@ class ArmDriverNode(LifecycleNode):
         )
         st["count"] = 0
         st["t0"] = now
+
+    def _cmd_names_for(self, traj) -> List[str]:
+        """Joints to command for one trajectory: the arm, plus any waist
+        joints the trajectory actually carries.
+
+        The waist has to be OPTIONAL. reorder_to_driver raises if a driver
+        joint is missing from the trajectory, so requiring it unconditionally
+        rejected every 7-joint client the moment control_waist was enabled --
+        MoveIt's left_arm group, check_arm_ros.py, measure_tracking.py. A goal
+        that omits the waist leaves it where it is, which is what
+        _expand_arm_to_rdk already does for the entries it is not given.
+        """
+        present = set(traj.joint_names)
+        return self._joint_names + [
+            n for n in self._waist_joint_names if n in present
+        ]
 
     def _rdk_arm_start_index(self) -> int:
         """Start index of arm joints inside RDK states().q (external axes often come first)."""
@@ -1302,7 +1319,7 @@ class ArmDriverNode(LifecycleNode):
             self.get_logger().warn("Reject trajectory: no points")
             return GoalResponse.REJECT
         try:
-            reorder_to_driver(traj, self._cmd_joint_names)
+            reorder_to_driver(traj, self._cmd_names_for(traj))
         except ValueError as exc:
             self.get_logger().warn(f"Reject trajectory: {exc}")
             return GoalResponse.REJECT
@@ -1338,8 +1355,10 @@ class ArmDriverNode(LifecycleNode):
 
     async def _execute_trajectory(self, goal_handle):
         traj = goal_handle.request.trajectory
+        cmd_names = self._cmd_names_for(traj)
+        cmd_dof = len(cmd_names)
         try:
-            _, traj = reorder_to_driver(traj, self._cmd_joint_names)
+            _, traj = reorder_to_driver(traj, cmd_names)
         except ValueError as exc:
             goal_handle.abort()
             result = FollowJointTrajectory.Result()
@@ -1417,7 +1436,7 @@ class ArmDriverNode(LifecycleNode):
 
                 elapsed = time.monotonic() - start
                 iterations += 1
-                q_cmd, dq_cmd = sample_trajectory(traj, elapsed, self._cmd_dof)
+                q_cmd, dq_cmd = sample_trajectory(traj, elapsed, cmd_dof)
 
                 if not self._mock and self._session:
                     try:

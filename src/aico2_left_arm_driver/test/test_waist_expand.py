@@ -64,3 +64,53 @@ def test_never_writes_past_the_external_axes():
     assert q[:2] == [0.5, 0.7]
     assert 9.9 not in q
     assert len(q) == 9
+
+
+# ---------------------------------------------------------------------------
+# _cmd_names_for: the waist must be OPTIONAL in an incoming trajectory.
+# Requiring it unconditionally rejected every 7-joint client (MoveIt's
+# left_arm group, check_arm_ros.py, measure_tracking.py) as soon as
+# control_waist was enabled -- reorder_to_driver raises on a missing joint.
+# ---------------------------------------------------------------------------
+import ast as _ast, textwrap as _tw
+
+_text = open(SRC).read()
+_cls = next(n for n in _ast.parse(_text).body
+            if isinstance(n, _ast.ClassDef) and n.name == "ArmDriverNode")
+_fn = next(n for n in _cls.body if isinstance(n, _ast.FunctionDef)
+           and n.name == "_cmd_names_for")
+_ns = {"List": list}
+exec(_tw.dedent(_ast.get_source_segment(_text, _fn)), _ns)
+cmd_names_for = _ns["_cmd_names_for"]
+
+ARM_NAMES = [f"Left_joint{i}" for i in range(1, 8)]
+
+
+class _Traj:
+    def __init__(self, names):
+        self.joint_names = names
+
+
+def _node(waist):
+    n = Node(waist)
+    n._joint_names = ARM_NAMES
+    return n
+
+
+def test_moveit_left_arm_plan_is_accepted_while_waist_is_enabled():
+    # 7-joint trajectory, waist owned: command the arm, leave the waist.
+    assert cmd_names_for(_node(WAIST), _Traj(ARM_NAMES)) == ARM_NAMES
+
+
+def test_nine_joint_goal_commands_the_waist_too():
+    assert cmd_names_for(_node(WAIST), _Traj(ARM_NAMES + WAIST)) == \
+        ARM_NAMES + WAIST
+
+
+def test_one_waist_joint_is_enough():
+    assert cmd_names_for(_node(WAIST), _Traj(ARM_NAMES + ["AGV_Joint2"])) == \
+        ARM_NAMES + ["AGV_Joint2"]
+
+
+def test_waist_ignored_when_the_driver_does_not_own_it():
+    assert cmd_names_for(_node([]), _Traj(ARM_NAMES + WAIST)) == ARM_NAMES
