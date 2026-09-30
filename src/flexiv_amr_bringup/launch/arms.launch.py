@@ -119,12 +119,10 @@ def generate_launch_description():
         LaunchConfiguration("joint_stiffness_ratio"), value_type=float)
     max_contact_torque = ParameterValue(
         LaunchConfiguration("max_contact_torque"), value_type=float)
-    # Empty string -> [], i.e. off. Only the left driver is given these: the
-    # external axes are shared, so two commanders would fight over them.
-    waist_joint_names = PythonExpression([
-        "['AGV_Joint1', 'AGV_Joint2'] if '",
-        LaunchConfiguration("control_waist"), "' == 'true' else []",
-    ])
+    # Left driver only: the external axes are shared, so two commanders would
+    # fight over them.
+    control_waist = ParameterValue(
+        LaunchConfiguration("control_waist"), value_type=bool)
 
     # joint_state_architecture.md sec 3 / sec 8 step 6: the target state is
     # every driver publishing its own joints straight to /joint_states, with
@@ -167,7 +165,7 @@ def generate_launch_description():
                 "joint_control_mode": joint_control_mode,
                 "joint_stiffness_ratio": joint_stiffness_ratio,
                 "max_contact_torque": max_contact_torque,
-                "waist_joint_names": waist_joint_names,
+                "control_waist": control_waist,
             },
         ],
     )

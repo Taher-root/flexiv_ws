@@ -44,6 +44,13 @@ from aico2_left_arm_driver.trajectory_stream import (
 
 _STALE_WARN_INTERVAL_SEC = 2.0
 
+# The two external axes, q[0:2] of the RDK vector. Fixed by the URDF and
+# already spelled out in joint_state_merger.WAIST and
+# waist_driver_node._DEFAULT_JOINTS; a bool parameter beats a list one here
+# because an empty list default makes rclpy infer BYTE_ARRAY and reject any
+# string-array override.
+_WAIST_JOINTS = ["AGV_Joint1", "AGV_Joint2"]
+
 
 def _namespace_defaults(namespace: str) -> tuple[str, List[str]]:
     """Fallback joint names / TCP frame when YAML params are not applied."""
@@ -98,13 +105,13 @@ class ArmDriverNode(LifecycleNode):
         # commands them, using the RDK session it already holds -- no second
         # session, no joint_state_merger zeros. Left arm only: both drivers
         # see the same external axes, so two commanders would fight.
-        self._waist_joint_names: List[str] = list(
-            self.get_parameter("waist_joint_names")
-            .get_parameter_value().string_array_value
+        self._waist_joint_names: List[str] = (
+            list(_WAIST_JOINTS)
+            if bool(self.get_parameter("control_waist").value) else []
         )
         if self._waist_joint_names and "right" in self._namespace.lower():
             self.get_logger().warn(
-                "waist_joint_names set on the RIGHT arm driver; ignoring. The "
+                "control_waist is set on the RIGHT arm driver; ignoring. The "
                 "external axes are shared, so only one driver may own them."
             )
             self._waist_joint_names = []
@@ -237,8 +244,8 @@ class ArmDriverNode(LifecycleNode):
         self.declare_parameter("tcp_frame_id", self._default_tcp)
         self.declare_parameter("mock_idle_joint_positions", [0.0] * 7)
         self.declare_parameter("joint_names", self._default_joints)
-        # Waist/external axes this driver owns. [] = off (previous behaviour).
-        self.declare_parameter("waist_joint_names", [])
+        # Own the waist/external axes. False = off (previous behaviour).
+        self.declare_parameter("control_waist", False)
         # Timestamping (sec 4.3/4.4). Defaults to false here, unlike
         # aico2_waist_driver: the arms already have live TF consumers, so
         # enabling device timestamps is opt-in per arm rather than a silent
