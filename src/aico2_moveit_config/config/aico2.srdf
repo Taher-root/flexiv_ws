@@ -27,6 +27,14 @@
     <group name="left_arm"/>
     <group name="right_arm"/>
   </group>
+  <!-- base_link -> Left_flange runs through AGV_Joint1 and AGV_Joint2,
+       so this chain is 9 joints: the two waist axes then the seven arm
+       ones. Only the LEFT arm gets a waist group, because the external
+       axes are shared and the left driver is the one that owns them
+       (control_waist:=true). -->
+  <group name="left_arm_waist">
+    <chain base_link="base_link" tip_link="Left_flange"/>
+  </group>
 
   <!-- home matches mock_idle_joint_positions in left_arm.yaml. joint6=0
        there is a wrist singularity where MoveIt Servo halts, so `ready`
@@ -68,11 +76,13 @@
     <joint name="Right_joint7" value="0.0000"/>
   </group_state>
 
-  <!-- The waist carries both arm bases (Left_Joint0/Right_Joint0 are
-       fixed to AGV_Pitch) but nothing in ROS commands it, so it is in no
-       planning group: MoveIt sees it as a moving base via /joint_states. -->
-  <passive_joint name="AGV_Joint1"/>
-  <passive_joint name="AGV_Joint2"/>
+  <!-- AGV_Joint1/2 were <passive_joint> here, which tells MoveIt they
+       cannot be commanded. They can now: the left arm driver owns them
+       with control_waist:=true and accepts them in a
+       follow_joint_trajectory goal, so they belong to left_arm_waist
+       and a passive declaration would make MoveIt refuse to plan them.
+       With control_waist false the driver silently drops the waist
+       columns and only the arm moves. -->
 
   <disable_collisions link1="AGV_Pitch" link2="AGV_Yaw" reason="Adjacent"/>
   <disable_collisions link1="AGV_Pitch" link2="Left_link0" reason="Welded"/>

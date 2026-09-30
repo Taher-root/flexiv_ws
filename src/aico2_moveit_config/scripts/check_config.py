@@ -32,6 +32,9 @@ import xml.etree.ElementTree as ET
 
 import yaml
 
+# The two external axes. The left controller may carry them; see below.
+WAIST_JOINTS = ["AGV_Joint1", "AGV_Joint2"]
+
 _ACTUATED = ("revolute", "continuous", "prismatic")
 
 
@@ -155,9 +158,18 @@ def main():
                 f"have {scm['controller_names']}")
         if name not in scm:
             continue
-        c.check(scm[name]["joints"] == drv_joints,
+        # The driver's joint_names are the arm only. The left controller may
+        # additionally carry the two waist axes, because it is the controller
+        # MoveIt picks for the left_arm_waist group and the action name is
+        # <controller_name>/<action_ns>, so a second entry could not reach the
+        # same action. Anything else is a mismatch.
+        ctrl_joints = scm[name]["joints"]
+        allowed = [drv_joints, drv_joints + WAIST_JOINTS] if side == "left" \
+            else [drv_joints]
+        c.check(ctrl_joints in allowed,
                 f"controller {name!r} joints match the driver, in order",
-                f"moveit={scm[name]['joints']}\n         driver={drv_joints}")
+                f"moveit={ctrl_joints}\n         driver={drv_joints}"
+                f"\n         (left may append {WAIST_JOINTS})")
         action = f"/{name}/{scm[name]['action_ns']}"
         c.check(action == f"/{side}_arm/follow_joint_trajectory",
                 f"controller {name!r} resolves to the driver's action", action)
