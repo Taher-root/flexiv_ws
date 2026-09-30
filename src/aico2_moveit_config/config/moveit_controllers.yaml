@@ -23,6 +23,15 @@ moveit_simple_controller_manager:
     - left_arm
     - right_arm
 
+  # AGV_Joint1/2 are listed here so this controller also covers the
+  # left_arm_waist group. MoveIt picks a controller whose joint set covers the
+  # group's, and the action name is <controller_name>/<action_ns> -- so a
+  # second controller entry could not point at the same
+  # /left_arm/follow_joint_trajectory action. One entry, both groups.
+  #
+  # With control_waist:=false the driver's reorder step ignores trajectory
+  # columns it does not own, so a left_arm_waist plan executes the arm and
+  # leaves the waist where it is. Nothing breaks; the torso just does not move.
   left_arm:
     type: FollowJointTrajectory
     action_ns: follow_joint_trajectory
@@ -35,6 +44,8 @@ moveit_simple_controller_manager:
       - Left_joint5
       - Left_joint6
       - Left_joint7
+      - AGV_Joint1
+      - AGV_Joint2
 
   right_arm:
     type: FollowJointTrajectory

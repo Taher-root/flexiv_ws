@@ -35,3 +35,11 @@ both_arms:
     - RRTConnectkConfigDefault
   projection_evaluator: joints(Left_joint1,Right_joint1)
   longest_valid_segment_fraction: 0.005
+
+left_arm_waist:
+  planner_configs:
+    - RRTConnectkConfigDefault
+  # The two waist axes: they dominate where the end effector can reach, so
+  # they are what the projection should discriminate on.
+  projection_evaluator: joints(AGV_Joint1,AGV_Joint2)
+  longest_valid_segment_fraction: 0.005
