@@ -29,6 +29,8 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>opennav_docking</exec_depend>
+  <!-- nav2_params.yaml resolves dock_database from this package's share dir -->
+  <exec_depend>flexiv_amr_docking</exec_depend>
   <exec_depend>rtabmap_slam</exec_depend>
   <exec_depend>rtabmap_sync</exec_depend>
 

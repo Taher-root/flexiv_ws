@@ -11,10 +11,35 @@ ROS 2 **Jazzy** (`ros-jazzy-desktop`), plus two vendor Python SDKs that are
 | module | used by | note |
 |---|---|---|
 | `flexivrdk` | `aico2_left_arm_driver`, `aico2_waist_driver`, the `rdk_*.py` scripts | Flexiv RDK 1.9.0 wheel, matched to controller software v3.11. 2.x does **not** support Rizon — see `rdk_version_and_compliance.md`. |
-| `flexivamr` | `flexiv_amr_driver/velocity_controller.py`, `status_monitor.py` | AMR vendor SDK. Only needed with `use_robokit:=false`. |
+| `flexivamr` | `flexiv_amr_driver/velocity_controller.py`, `status_monitor.py` | AMR vendor SDK. `velocity_controller` runs only with `use_robokit:=false`, but **`status_monitor` launches unconditionally** (`amr_driver.launch.py`), so without this module `/amr/status`, `/amr/emergency` and `/amr/blocked` never publish on any configuration. |
 
-Both import lazily, so the workspace builds without them; the affected nodes
-fail at runtime with an import error that names the module.
+Both import lazily, so the workspace builds without them.
+
+**`flexivrdk`** missing is loud: the arm driver's `on_configure` returns
+FAILURE and the lifecycle node refuses to activate.
+
+**`flexivamr`** missing is silent, and this has cost real debugging time.
+`status_monitor.connect_to_amr()` and `velocity_controller.connect_to_amr()`
+both catch the `ImportError`, log it **once** at startup, set their API handle
+to `None`, and then run forever as no-ops — every tick returns early. The nodes
+appear in `ros2 node list` and their topics appear in `ros2 topic list`; they
+simply never publish. Verify explicitly rather than trusting the node list:
+
+```bash
+python3 -c "import flexivamr; print('ok')"
+ros2 topic hz /amr/status          # silence here means status_monitor is dead
+```
+
+Consequence on a machine without it: **`use_robokit` must stay `true`.** With
+`false`, `velocity_controller` starts, fails to connect, never seizes control,
+and discards every `/cmd_vel` — the chassis will not move and nothing will say
+why. Note `amr_driver.launch.py` defaults `use_robokit` to `false` while
+`full_system.launch.py` defaults it to `true`, so launching the driver
+standalone on such a machine gives you the broken backend.
+
+The raw-TCP nodes (`robokit_velocity_controller`, `odometry_publisher`,
+`seer_lidar_publisher`, `seer_imu_publisher`) go through
+`robokit_protocol.py` and need no vendor SDK.
 
 A machine that only *views* (RViz, MoveIt panel) needs neither.
 

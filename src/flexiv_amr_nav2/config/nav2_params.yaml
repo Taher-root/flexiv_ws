@@ -62,7 +62,11 @@ docking_server:
 
     # ── Dock plugin list ───────────────────────────────────────────────────
     dock_plugins: ['flexiv_dock_plugin']
-    dock_database: '/home/vivangupta/flexiv_ws/src/flexiv_amr_docking/config/dock_database.yaml'
+    # Resolved at launch: navigation.launch.py loads this file through
+    # RewrittenYaml(allow_substs=True), which expands $(find-pkg-share ...).
+    # Never hardcode an absolute path here -- a stale one fails on_configure,
+    # and docking_server failing takes the whole nav2 lifecycle chain with it.
+    dock_database: '$(find-pkg-share flexiv_amr_docking)/config/dock_database.yaml'
     # ── Per-plugin configuration ───────────────────────────────────────────
     flexiv_dock_plugin:
       plugin: 'opennav_docking::SimpleChargingDock'

@@ -1,4 +1,4 @@
-# Open issues — 2026-09-26
+# Open issues — 2026-09-26, updated 2026-09-30
 
 Parked for tomorrow. Each entry says what was measured, what the code says,
 and what is still a hypothesis. Nothing here is blocking a port.
@@ -100,35 +100,81 @@ The flag and its docs are corrected in `joint_state_architecture.md`.
 
 ---
 
-## 5. Chassis does not move on `/cmd_vel` (intermittent)
+## 5. RESOLVED (mostly) — the chassis was inhibited, not the driver
 
-Nav2 emits correct velocities — `/cmd_vel` and `/cmd_vel_smoothed` were
-observed identical and non-zero, so the collision monitor is passing them
-through. `/odom_raw` twist read zero at the same time (single sample, not
-conclusive).
+**2026-09-30. The control-token theory is disproven.** With
+`robokit_velocity_controller` running unchanged — no `pkill`, no swap to
+`velocity_controller`, `use_robokit` still defaulting to `true` —
+`teleop_twist_keyboard` moved the chassis, and a `/navigate_to_pose` goal then
+succeeded in 3.4 s with `number_of_recoveries: 0`.
 
-`robokit_velocity_controller` **never acquires control**: no gain-control
-message exists anywhere in `robokit_protocol.py`, which defines only 1004,
-1005 and 2010. `velocity_controller` (the non-Robokit one) does call
-`configure_api.gain_control('ros2_nav')`. A Seer chassis refuses motion from a
-client without the control token, and this driver cannot tell — it does
-`self.sock.recv(16)`, discards the header and swallows timeouts, so a refusal
-is indistinguishable from success.
+So a Seer chassis *does* accept `robot_control_motion_req` (2010) from this
+driver with no gain-control handshake. The earlier "never acquires control"
+reasoning was wrong.
 
-`use_robokit` is now a real argument on `full_system.launch.py` (it was
-hardcoded `true`), but **that fix has not been transferred to the Jetson**, so
-`use_robokit:=false` there is still silently ignored.
+**What was actually happening:** during the failing run the chassis had a
+flashing red light — E-stop or chassis fault. It accepted every `/cmd_vel`
+packet and ignored it. Signature at the time: `/cmd_vel` non-zero
+(0.189 m/s), robot creeping 7 cm in 108 s, `number_of_recoveries: 12` from
+`SimpleProgressChecker` (0.5 m required within 10 s → ~9 s per cycle → 12
+cycles in 108 s). Once the light was cleared, everything worked with no
+config change. Not proven retroactively, but it fits every observation.
 
-**Decisive test, not yet run:** stop the full stack, then
-`amr_driver.launch.py use_robokit:=true` alone, `ros2 topic pub -r 10 /cmd_vel`
-a slow spin, and watch `/odom_raw`. Repeat with `use_robokit:=false`.
+**Also ruled out** (both checked *after* the successful run, config
+unchanged throughout): `collision_monitor` — `scan.enabled` read `True` and
+`PolygonStop.radius` read `0.3` across both the failure and the success;
+`/scan/merged` was healthy at ~32 Hz with `/scan/nav` and `/scan/avoid` both
+at 15 Hz.
 
-**Blocked on:** the Seer API spec for the gain-control request ID and body.
-Without it, adding acquisition to the Robokit driver is guesswork.
+**Still worth fixing in `robokit_velocity_controller.py`** — independent of
+the above, two real defects make any chassis-side refusal invisible:
+
+- The reply is read and discarded: `data = self.sock.recv(16)` inside
+  `except socket.timeout: pass`, and `data` is never inspected. An explicit
+  error code on every 20 Hz packet would go unseen.
+- `recv(16)` reads exactly the header (`!BBHLH6s`) and leaves the JSON body
+  in the socket buffer, so the next `recv(16)` parses body bytes as a header.
+  The stream desynchronises after the first reply.
+
+Parsing and logging the reply is ~15 lines and needs no API spec.
 
 ---
 
-## 6. Smaller items
+## 6. Chassis E-stop and fault state are invisible to the stack
+
+**Confirmed 2026-09-30.** `ros2 topic echo /amr/emergency --once` hung with no
+output, so `/amr/emergency` is advertised but never published:
+`status_monitor.connect_to_amr()` failed (either `import flexivamr` or
+`states_api.connect()`), leaving `self.states_api = None`, after which
+`publish_status()` returns early every tick. The node logs the error once at
+startup and is silent thereafter.
+
+Two consequences, and together they cost about an hour of debugging:
+
+1. The only node that reads `check_emergency_status()` /
+   `check_blocked_status()` was producing nothing, so an E-stop was
+   unobservable from ROS.
+2. Even when it works, **nothing consumes** `/amr/status`,
+   `/amr/emergency` or `/amr/blocked`. Nav2 plans, commands, and burns
+   recoveries against an inhibited chassis with no indication why.
+
+**Fix, in order of value:**
+
+- Make `status_monitor` retry the connection instead of giving up at startup,
+  and log a throttled warning while `states_api is None` so the failure is
+  visible in a running system.
+- Surface it where it is needed: gate goal acceptance, or at minimum log
+  loudly, when `emergency_stop` is true. A `/navigate_to_pose` goal against an
+  E-stopped chassis should say so rather than time out via the progress
+  checker.
+
+**Check first:** `ros2 topic hz /amr/status` and
+`python3 -c "import flexivamr"` on the Jetson. If the import fails, the
+library is missing from that machine and `docs/porting.md` needs it.
+
+---
+
+## 7. Smaller items
 
 - `/amr/actual_velocity` has **two publishers**: `odometry_publisher` (real
   encoder speed, API 1005) and `robokit_velocity_controller` (echoes the

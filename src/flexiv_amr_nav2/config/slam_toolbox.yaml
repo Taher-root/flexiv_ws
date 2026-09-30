@@ -16,7 +16,12 @@
     mode: mapping
 
     # Lifelong params
-    map_file_name: /home/oelinux/flexiv_ws/maps/map
+    # map_file_name is only read in mode: localization, to deserialize a
+    # saved pose graph. Left unset because slam_toolbox's own launch does
+    # not expand substitutions in this file, so any path here would be a
+    # machine-specific absolute one. Pass it explicitly when switching to
+    # mode: localization.
+    # map_file_name: <abs path to serialized map, no extension>
     map_start_pose: [0.0, 0.0, 0.0]
     map_start_at_dock: true
 

@@ -21,7 +21,11 @@ def generate_launch_description():
     params_file = LaunchConfiguration('params_file')
     log_level = LaunchConfiguration('log_level')
 
-    # Only the nodes we actually use — no route_server, no docking_server
+    # Only the nodes we actually use — no route_server.
+    # NOTE: the lifecycle manager configures in list order and aborts
+    # startup() on the first failure, leaving every earlier node stuck
+    # at inactive[2]. docking_server is last so its failure cannot
+    # strand the navigation nodes mid-chain.
     lifecycle_nodes = [
         'controller_server',
         'smoother_server',
