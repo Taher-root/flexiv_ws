@@ -1,4 +1,4 @@
-# flexiv_ws — AICO2 dual-arm mobile manipulator
+# AICO2 dual-arm mobile manipulator
 
 ROS 2 Jazzy workspace for the Flexiv **AICO2-4**: two 7-DoF Rizon4 arms on a
 2-DoF waist, mounted on an FMR 300 differential-drive chassis, with an
