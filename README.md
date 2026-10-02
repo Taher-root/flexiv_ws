@@ -296,6 +296,19 @@ colcon test --packages-select aico2_left_arm_driver aico2_moveit_config
 colcon test-result --verbose
 ```
 
+**Verify a whole machine, headless, with no robot attached:**
+
+```bash
+./scripts/smoke_test.sh              # build + all checks
+./scripts/smoke_test.sh --no-build   # checks only, against an existing build
+```
+
+It runs six steps — rosdep resolution, `colcon build`, every mesh the URDF
+references, every launch file's arguments and includes, the unit tests, and a
+mock arm bring-up that must reach `active` with no robot. Exit code 0 means
+the machine is good. Run it first on any new machine; it is faster than
+discovering the same gaps one launch at a time.
+
 ---
 
 ## 5. Running, one layer at a time
