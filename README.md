@@ -358,6 +358,31 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard
 Press **`z` several times first** — it starts at 0.5 m/s, which is too fast
 indoors. Each press drops the speed 10 %.
 
+> **`z` is not a brake.** This is standard `teleop_twist_keyboard`
+> behaviour, not something this workspace adds. Its speed keys
+> (`q` `z` `w` `x` `e` `c`) scale the speed but **do not clear the direction
+> vector**, and the node publishes at the end of the same loop either way. So
+> `z` means *"same direction, 10 % slower"* — it is a motion command. Press it
+> while rolling and you keep rolling; press it after the robot has stopped and
+> it **starts moving again** in the last direction.
+>
+> | To do this | Press |
+> |---|---|
+> | **Stop** | **`k`**, or any unbound key — the `else` branch publishes all zeros |
+> | Slow down | `z`, but expect to move as well |
+> | Set a safe speed | `z` repeatedly **before** the first direction key |
+>
+> In a narrow aisle: set the speed first, then steer, and stop with `k`.
+> Confirm the behaviour on your own install with `ros2 topic echo /cmd_vel`
+> while pressing `i` then `z` — you should see the same sign at a lower
+> magnitude.
+
+Each tap moves the chassis for at most 0.5 s: the node publishes once per
+keypress and then blocks for the next one, and `robokit_velocity_controller`
+sends a stop when no `/cmd_vel` has arrived within `cmd_timeout` (0.5 s). At
+0.3 m/s that is ≤15 cm per tap, which makes it the right tool in tight
+spaces — tap-to-move with a built-in deadman.
+
 Verify:
 
 ```bash
