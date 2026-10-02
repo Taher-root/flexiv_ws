@@ -83,6 +83,17 @@ its own timer. Two arms' data taken at different instants get one shared stamp.
 `q[0]`/`q[1]`. Every TF consumer downstream — including anything relating the
 base LiDAR to the head camera — is working from a waist pose that is fiction.
 
+0.0 is also below the mechanical limit: measured pitch range on
+`Rizon4-063352` is +2.50° to +87.45°, so the published value is a pose the
+robot cannot reach.
+
+Partly addressed since: with `control_waist:=true` the left arm driver
+appends the real waist names and positions to its own
+`/left_arm/joint_states`, and accepts them in a `follow_joint_trajectory`
+goal. The merger still overwrites them with 0.0 on the aggregate
+`/joint_states`, so the fiction survives wherever TF reads from the merger.
+Tracked as issue 3 in [`open_issues.md`](open_issues.md).
+
 ---
 
 ## 3. Target architecture
