@@ -14,8 +14,9 @@ def import_flexivrdk(logger: RcutilsLogger):
         import flexivrdk  # noqa: WPS433
     except ImportError as exc:
         logger.error(
-            "flexivrdk not installed. Use: "
-            "/usr/bin/python3.10 -m pip install 'flexivrdk==1.9.0'"
+            "flexivrdk not installed. Install it for the interpreter ROS "
+            "uses (python3.12 on Jazzy): "
+            "python3 -m pip install 'flexivrdk==1.9.0'"
         )
         raise exc
     return flexivrdk

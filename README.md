@@ -142,12 +142,21 @@ risk, not a software error.
    AICO2 is in motion the machine must be in the stowed position; movement of
    the arms and waist joint is prohibited.
 
-   Nothing in **this workspace** couples the two: no node reads arm state
-   before publishing `/cmd_vel`, and no node reads chassis state before
-   accepting a trajectory. So do not expect a software guard to stop you.
-   Whether the **hardware** refuses the combination is a separate question and
-   is not characterised here — treat the prohibition as the operating rule
-   either way, not as something to probe.
+   **Nothing stops you, and this was tested.** With a left-arm trajectory
+   executing, the chassis was driven from keyboard teleop at the same time.
+   The arm goal ran to `SUCCESS` and the chassis moved. Neither side refuses
+   the other, and no alarm was raised. Nothing in this workspace couples them
+   either: no node reads arm state before publishing `/cmd_vel`, and none
+   reads chassis state before accepting a trajectory.
+
+   So the prohibition is **procedural, and the operator is the only thing
+   enforcing it.** Drive with the arms stowed.
+
+   Test conditions, so nobody reads more into it than it shows: wrist roll
+   only (`Left_joint7`, 20°) on an otherwise stowed arm, chassis rotating in
+   place at reduced teleop speed. That establishes the combination is not
+   blocked — not that any combination is safe. The stability and coasting
+   limits in 3 and 4 below are why stowed still matters.
 
 2. **Keep the chassis motor enabled whenever the arms or waist are moving.**
    The chassis motor has no brake, so it must stay enabled to hold position
@@ -348,6 +357,31 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard
 
 Press **`z` several times first** — it starts at 0.5 m/s, which is too fast
 indoors. Each press drops the speed 10 %.
+
+> **`z` is not a brake.** This is standard `teleop_twist_keyboard`
+> behaviour, not something this workspace adds. Its speed keys
+> (`q` `z` `w` `x` `e` `c`) scale the speed but **do not clear the direction
+> vector**, and the node publishes at the end of the same loop either way. So
+> `z` means *"same direction, 10 % slower"* — it is a motion command. Press it
+> while rolling and you keep rolling; press it after the robot has stopped and
+> it **starts moving again** in the last direction.
+>
+> | To do this | Press |
+> |---|---|
+> | **Stop** | **`k`**, or any unbound key — the `else` branch publishes all zeros |
+> | Slow down | `z`, but expect to move as well |
+> | Set a safe speed | `z` repeatedly **before** the first direction key |
+>
+> In a narrow aisle: set the speed first, then steer, and stop with `k`.
+> Confirm the behaviour on your own install with `ros2 topic echo /cmd_vel`
+> while pressing `i` then `z` — you should see the same sign at a lower
+> magnitude.
+
+Each tap moves the chassis for at most 0.5 s: the node publishes once per
+keypress and then blocks for the next one, and `robokit_velocity_controller`
+sends a stop when no `/cmd_vel` has arrived within `cmd_timeout` (0.5 s). At
+0.3 m/s that is ≤15 cm per tap, which makes it the right tool in tight
+spaces — tap-to-move with a built-in deadman.
 
 Verify:
 
