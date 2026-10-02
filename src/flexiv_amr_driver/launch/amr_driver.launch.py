@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 """AMR chassis: velocity control + wheel odometry + status monitor.
 
-Two backends, selected with use_robokit:
-  false (default)  velocity_controller        + config/amr_params.yaml
+Two backends, selected with use_robokit. Prefer true: the flexivamr SDK does
+not support continuous velocity control, so the raw-TCP path is what Nav2 is
+driven through. velocity_controller is kept for its gain-control handshake,
+not as an equal alternative.
+
   true             robokit_velocity_controller + config/amr_params_robokit.yaml
-                   (smooth velocity control; publish_tf off so EKF owns odom->base_link)
+                   Seer API 2010 on port 19205 at 20 Hz, no vendor SDK.
+                   publish_tf off so EKF owns odom->base_link.
+  false (default)  velocity_controller        + config/amr_params.yaml
+                   Requires the flexivamr SDK. Without it this node starts,
+                   fails to connect, and silently drops every /cmd_vel.
+
+NOTE: this default disagrees with full_system.launch.py, which defaults
+use_robokit to true. Pass it explicitly rather than relying on either.
 
 Usage:
   ros2 launch flexiv_amr_driver amr_driver.launch.py

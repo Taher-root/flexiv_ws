@@ -225,6 +225,20 @@ That leaves `status_monitor` as the SDK's only consumer, and all it provides is
 workspace subscribes to.** So on a machine without the SDK you lose chassis
 status reporting and nothing else.
 
+**Why it is done this way.** The `flexivamr` SDK does not support continuous
+velocity control, at least in the versions available when this was built. Nav2
+needs a steady stream of `/cmd_vel` at the controller rate, so the raw-TCP path
+was written to send API 2010 directly at 20 Hz. That is the reason
+`use_robokit` defaults to `true` and the reason the API numbers above are
+hard-coded in `robokit_protocol.py` rather than called through a vendor
+wrapper.
+
+Treat `velocity_controller` as **superseded**, not as an equally valid
+alternative. It is kept because it is the only code that holds the
+gain-control handshake, which is useful reference if that ever turns out to
+matter — but it cannot drive Nav2, and selecting it on a machine without the
+SDK silently stops the chassis from moving at all.
+
 **But its absence is silent, and that has cost real debugging time.**
 `status_monitor` and `velocity_controller` both catch the `ImportError`, log it
 **once** at startup, and then run forever as no-ops. The nodes appear in

@@ -116,15 +116,23 @@ def generate_launch_description():
         DeclareLaunchArgument("use_camera", default_value="true",
                               description="Launch both RealSense cameras + depth-to-laserscan"),
         DeclareLaunchArgument("use_robokit", default_value="true",
-                              description="true: robokit_velocity_controller, "
-                                          "raw TCP to port 19205. false: "
-                                          "velocity_controller, which uses the "
-                                          "flexivamr SDK and calls "
-                                          "gain_control() before commanding. "
-                                          "The Robokit one never acquires "
-                                          "control and discards the chassis "
-                                          "reply, so a refused command looks "
-                                          "identical to an accepted one"),
+                              description="true (default): "
+                                          "robokit_velocity_controller, raw "
+                                          "TCP sending Seer API 2010 to port "
+                                          "19205 at 20 Hz. false: "
+                                          "velocity_controller, which needs "
+                                          "the flexivamr SDK. The SDK does "
+                                          "not do continuous velocity "
+                                          "control, which is why the raw path "
+                                          "exists and is the default -- false "
+                                          "cannot drive Nav2, and on a "
+                                          "machine without the SDK it stops "
+                                          "the chassis moving at all. The raw "
+                                          "path does discard the chassis "
+                                          "reply, so a protocol error is "
+                                          "invisible; it does not need a "
+                                          "gain-control handshake, which was "
+                                          "confirmed on hardware"),
         DeclareLaunchArgument("use_top_camera", default_value="false",
                               description="Also bring up the head-mounted top "
                                           "D456 (adds /scan/top to the merged "
