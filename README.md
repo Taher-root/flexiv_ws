@@ -204,8 +204,26 @@ FAILURE and the lifecycle node refuses to activate.
 `ros2 node list` and their topics appear in `ros2 topic list` — they simply
 never publish. Check it explicitly:
 
+**Installing them.** `flexivrdk` is distributed as a PyPI wheel. Pin the
+version — see [`docs/rdk_version_and_compliance.md`](docs/rdk_version_and_compliance.md)
+for why 2.x is the wrong SDK for this robot, not a newer one:
+
 ```bash
-python3 -c "import flexivrdk; print('rdk ok')"
+python3 -m pip install "flexivrdk==1.9.0"
+```
+
+It must be installed for the **same Python that ROS uses** — python3.12 on
+Jazzy. Installing into a virtualenv ROS does not see is a common way to get an
+`ImportError` from a node while `python3 -c "import flexivrdk"` succeeds in
+your shell.
+
+`flexivamr` is a vendor SDK and its distribution channel is not recorded in
+this repo — obtain it from Flexiv. Do not guess at a package name.
+
+**Verify both, against the interpreter ROS will use:**
+
+```bash
+python3 -c "import flexivrdk; print('rdk', flexivrdk.__version__ if hasattr(flexivrdk,'__version__') else 'ok')"
 python3 -c "import flexivamr; print('amr ok')"
 ros2 topic hz /amr/status          # silence here means status_monitor is dead
 ```
@@ -295,26 +313,6 @@ rm -rf build install log && colcon build --symlink-install
 
 `--cmake-clean-cache` is the lighter version for CMake-only staleness.
 
-**Test the pure-Python logic without hardware:**
-
-```bash
-colcon test --packages-select aico2_left_arm_driver aico2_moveit_config
-colcon test-result --verbose
-```
-
-**Verify a whole machine, headless, with no robot attached:**
-
-```bash
-./scripts/smoke_test.sh              # build + all checks
-./scripts/smoke_test.sh --no-build   # checks only, against an existing build
-```
-
-It runs six steps — rosdep resolution, `colcon build`, every mesh the URDF
-references, every launch file's arguments and includes, the unit tests, and a
-mock arm bring-up that must reach `active` with no robot. Exit code 0 means
-the machine is good. Run it first on any new machine; it is faster than
-discovering the same gaps one launch at a time.
-
 ---
 
 ## 5. Running, one layer at a time
@@ -377,6 +375,16 @@ ros2 launch flexiv_amr_sensors sensors.launch.py
 | `camera_serial` | `_333422304124` | Bottom camera |
 | `camera_top_serial` | `_324422301136` | Top camera |
 
+> **The two serial defaults are specific to our cameras and will not match
+> yours.** A wrong serial means the RealSense node finds no device and
+> `/scan/depth` never publishes, which then starves `/scan/merged`. Find yours
+> with `rs-enumerate-devices -s`, and note the leading underscore the launch
+> file expects:
+>
+> ```bash
+> ros2 launch flexiv_amr_sensors sensors.launch.py camera_serial:=_<your serial>
+> ```
+
 Topics: `/scan/nav` and `/scan/avoid` (chassis lidars), `/scan/depth`
 (depth camera), merged into **`/scan/merged`**.
 
@@ -428,7 +436,7 @@ ros2 launch flexiv_amr_nav2 localization.launch.py \
     map:=/path/to/map.yaml
 ```
 
-Verify — this is the single most useful localization check:
+Verify:
 
 ```bash
 ros2 run tf2_ros tf2_echo map base_link
