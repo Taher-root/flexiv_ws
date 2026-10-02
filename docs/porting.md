@@ -15,7 +15,7 @@ ROS 2 **Jazzy** (`ros-jazzy-desktop`), plus two vendor Python SDKs that are
 | module | used by | note |
 |---|---|---|
 | `flexivrdk` | `aico2_left_arm_driver`, `aico2_waist_driver`, the `rdk_*.py` scripts | Flexiv RDK 1.9.0 wheel, matched to controller software v3.11. 2.x does **not** support Rizon — see `rdk_version_and_compliance.md`. |
-| `flexivamr` | `flexiv_amr_driver/velocity_controller.py`, `status_monitor.py` | AMR vendor SDK. `velocity_controller` runs only with `use_robokit:=false`, but **`status_monitor` launches unconditionally** (`amr_driver.launch.py`), so without this module `/amr/status`, `/amr/emergency` and `/amr/blocked` never publish on any configuration. |
+| `flexivamr` | `flexiv_amr_driver/velocity_controller.py`, `status_monitor.py` | AMR vendor SDK, **not required**: the chassis is driven over raw Seer TCP (APIs 1005/1009/1014/2010), so with the default `use_robokit:=true` the only thing the SDK adds is chassis status reporting. `velocity_controller` runs only with `use_robokit:=false`, but **`status_monitor` launches unconditionally** (`amr_driver.launch.py`), so without this module `/amr/status`, `/amr/emergency` and `/amr/blocked` never publish on any configuration. |
 
 Both import lazily, so the workspace builds without them. A missing
 `flexivrdk` is loud — the arm driver refuses to activate. A missing
