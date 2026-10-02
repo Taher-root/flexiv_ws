@@ -140,8 +140,14 @@ risk, not a software error.
 
 1. **Do not move the arms or waist while the chassis is driving.** When the
    AICO2 is in motion the machine must be in the stowed position; movement of
-   the arms and waist joint is prohibited. Nav2 and the arm drivers are
-   completely independent here — nothing prevents you from commanding both.
+   the arms and waist joint is prohibited.
+
+   Nothing in **this workspace** couples the two: no node reads arm state
+   before publishing `/cmd_vel`, and no node reads chassis state before
+   accepting a trajectory. So do not expect a software guard to stop you.
+   Whether the **hardware** refuses the combination is a separate question and
+   is not characterised here — treat the prohibition as the operating rule
+   either way, not as something to probe.
 
 2. **Keep the chassis motor enabled whenever the arms or waist are moving.**
    The chassis motor has no brake, so it must stay enabled to hold position
