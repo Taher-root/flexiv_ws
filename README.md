@@ -142,12 +142,21 @@ risk, not a software error.
    AICO2 is in motion the machine must be in the stowed position; movement of
    the arms and waist joint is prohibited.
 
-   Nothing in **this workspace** couples the two: no node reads arm state
-   before publishing `/cmd_vel`, and no node reads chassis state before
-   accepting a trajectory. So do not expect a software guard to stop you.
-   Whether the **hardware** refuses the combination is a separate question and
-   is not characterised here — treat the prohibition as the operating rule
-   either way, not as something to probe.
+   **Nothing stops you, and this was tested.** With a left-arm trajectory
+   executing, the chassis was driven from keyboard teleop at the same time.
+   The arm goal ran to `SUCCESS` and the chassis moved. Neither side refuses
+   the other, and no alarm was raised. Nothing in this workspace couples them
+   either: no node reads arm state before publishing `/cmd_vel`, and none
+   reads chassis state before accepting a trajectory.
+
+   So the prohibition is **procedural, and the operator is the only thing
+   enforcing it.** Drive with the arms stowed.
+
+   Test conditions, so nobody reads more into it than it shows: wrist roll
+   only (`Left_joint7`, 20°) on an otherwise stowed arm, chassis rotating in
+   place at reduced teleop speed. That establishes the combination is not
+   blocked — not that any combination is safe. The stability and coasting
+   limits in 3 and 4 below are why stowed still matters.
 
 2. **Keep the chassis motor enabled whenever the arms or waist are moving.**
    The chassis motor has no brake, so it must stay enabled to hold position
