@@ -200,18 +200,52 @@ ROS 2 **Jazzy** (`ros-jazzy-desktop`), plus two vendor Python SDKs that are
 | Module | Needed by | Notes |
 |---|---|---|
 | `flexivrdk` | arm drivers, waist driver, `rdk_*.py` scripts | RDK **1.9.0**, matched to controller software v3.11. **2.x does not support Rizon.** |
-| `flexivamr` | `status_monitor`, `velocity_controller` | AMR vendor SDK |
+| `flexivamr` | `status_monitor`, `velocity_controller` | AMR vendor SDK. **Not required** — see below. The chassis is driven over raw Seer TCP, not through this SDK |
 
 Both import lazily, so the workspace builds without them.
 
 **A missing `flexivrdk` is loud:** the arm driver's `on_configure` returns
 FAILURE and the lifecycle node refuses to activate.
 
-**A missing `flexivamr` is silent, and has cost real debugging time.**
+**`flexivamr` is not used by the running system at all.** The chassis is
+driven by hand-rolled TCP against the Seer/Robokit API, not through the SDK:
+
+| Node | Seer API | Port | Needs SDK? |
+|---|---|---|---|
+| `robokit_velocity_controller` | 2010 (motion) | 19205 | no |
+| `odometry_publisher` | 1005 (encoder speed) | 19204 | no |
+| `seer_lidar_publisher` | 1009 (laser point cloud) | 19204 | no |
+| `seer_imu_publisher` | 1014 (IMU) | 19204 | no |
+| `velocity_controller` | — | — | **yes**, and only runs with `use_robokit:=false` |
+| `status_monitor` | — | — | **yes** |
+
+With `use_robokit:=true` (the default), `velocity_controller` never launches.
+That leaves `status_monitor` as the SDK's only consumer, and all it provides is
+`/amr/status`, `/amr/emergency` and `/amr/blocked` — **which nothing in this
+workspace subscribes to.** So on a machine without the SDK you lose chassis
+status reporting and nothing else.
+
+**Why it is done this way.** The `flexivamr` SDK does not support continuous
+velocity control, at least in the versions available when this was built. Nav2
+needs a steady stream of `/cmd_vel` at the controller rate, so the raw-TCP path
+was written to send API 2010 directly at 20 Hz. That is the reason
+`use_robokit` defaults to `true` and the reason the API numbers above are
+hard-coded in `robokit_protocol.py` rather than called through a vendor
+wrapper.
+
+Treat `velocity_controller` as **superseded**, not as an equally valid
+alternative. It is kept because it is the only code that holds the
+gain-control handshake, which is useful reference if that ever turns out to
+matter — but it cannot drive Nav2, and selecting it on a machine without the
+SDK silently stops the chassis from moving at all.
+
+**But its absence is silent, and that has cost real debugging time.**
 `status_monitor` and `velocity_controller` both catch the `ImportError`, log it
 **once** at startup, and then run forever as no-ops. The nodes appear in
 `ros2 node list` and their topics appear in `ros2 topic list` — they simply
-never publish. Check it explicitly:
+never publish. The practical cost is that a chassis E-stop becomes
+unobservable from ROS, so **read the physical light strip instead** (see
+[§1](#chassis-light-strip)). Check it explicitly:
 
 **Installing them.** `flexivrdk` is distributed as a PyPI wheel. Pin the
 version — see [`docs/rdk_version_and_compliance.md`](docs/rdk_version_and_compliance.md)
@@ -226,8 +260,9 @@ Jazzy. Installing into a virtualenv ROS does not see is a common way to get an
 `ImportError` from a node while `python3 -c "import flexivrdk"` succeeds in
 your shell.
 
-`flexivamr` is a vendor SDK and its distribution channel is not recorded in
-this repo — obtain it from Flexiv. Do not guess at a package name.
+`flexivamr` is a vendor SDK, its distribution channel is not recorded in this
+repo, and the default configuration does not need it. Obtain it from Flexiv if
+you want chassis status reporting. Do not guess at a package name.
 
 **Verify both, against the interpreter ROS will use:**
 
