@@ -304,11 +304,6 @@ class ArmDriverNode(LifecycleNode):
         # which is counterintuitive but follows directly from the re-planning
         # behaviour. 0 or less means "use publish_rate_hz", the old behaviour.
         self.declare_parameter("trajectory_send_rate_hz", 0.0)
-        # Multiplier on the trajectory's own peak |dq| / |ddq| when deriving
-        # the per-call caps (see _caps_for_trajectory). 1.0 would leave the
-        # controller no headroom to recover from lag; the configured
-        # default_max_joint_vel / _acc remain the ceiling either way.
-        self.declare_parameter("trajectory_cap_margin", 2.0)
 
     def _validate_joint_names(self) -> None:
         """Catch mis-loaded params (e.g. Right driver publishing Left_joint*)."""
@@ -385,9 +380,6 @@ class ArmDriverNode(LifecycleNode):
                 "max_contact_torque is unset, so nothing bounds the torque the "
                 "impedance law will demand when the arm is obstructed."
             )
-        self._traj_cap_margin = float(
-            self.get_parameter("trajectory_cap_margin").value
-        )
         send_rate = float(self.get_parameter("trajectory_send_rate_hz").value)
         self._traj_send_rate = send_rate if send_rate > 0.0 else self._rate_hz
 
@@ -431,25 +423,6 @@ class ArmDriverNode(LifecycleNode):
                 self.get_logger().info(
                     f"trajectory send rate set to {self._traj_send_rate:.1f} Hz "
                     f"(applies to the next trajectory)")
-                continue
-            if param.name == "trajectory_cap_margin":
-                try:
-                    value = float(param.value)
-                except (TypeError, ValueError):
-                    return SetParametersResult(
-                        successful=False,
-                        reason="trajectory_cap_margin must be a float")
-                if value < 1.0:
-                    return SetParametersResult(
-                        successful=False,
-                        reason="trajectory_cap_margin must be >= 1.0 "
-                               "(1.0 gives the controller no headroom)")
-                self._traj_cap_margin = value
-                self.get_logger().info(
-                    f"trajectory_cap_margin set to {value} (applies to the "
-                    f"next trajectory). A large value restores the previous "
-                    f"behaviour of using default_max_joint_vel/_acc directly, "
-                    f"since the configured values are the ceiling")
                 continue
             if param.name in ("default_max_joint_vel", "default_max_joint_acc"):
                 try:
@@ -794,66 +767,6 @@ class ArmDriverNode(LifecycleNode):
                 q_full[i] = q_arm[src]
                 dq_full[i] = dq_arm[src] if src < len(dq_arm) else 0.0
         return q_full, dq_full
-
-    def _caps_for_trajectory(self, traj) -> tuple[List[float], List[float]]:
-        """Per-joint velocity/acceleration caps for one trajectory.
-
-        The caps handed to SendJointPosition used to be the constants
-        default_max_joint_vel / default_max_joint_acc on every axis, unrelated
-        to the trajectory being run. MoveIt already parameterises the
-        trajectory, so its peak |dq| and |ddq| per joint are in the message:
-        use those with margin instead, and keep the configured value as a
-        ceiling so the parameter still bounds the arm.
-
-        Indices mirror _expand_arm_to_rdk: sampled arm joint i lands at
-        rdk[start + i], and waist joint i at rdk[i].
-        """
-        vel = list(self._max_vel)
-        acc = list(self._max_acc)
-        if not traj.points:
-            return vel, acc
-
-        n_cmd = len(traj.joint_names)
-        peak_dq = [0.0] * n_cmd
-        peak_ddq = [0.0] * n_cmd
-        for pt in traj.points:
-            for i, v in enumerate(pt.velocities[:n_cmd]):
-                peak_dq[i] = max(peak_dq[i], abs(float(v)))
-            for i, a in enumerate(pt.accelerations[:n_cmd]):
-                peak_ddq[i] = max(peak_ddq[i], abs(float(a)))
-
-        start = self._rdk_arm_start_index()
-
-        def place(src: int) -> Optional[int]:
-            """Sampled index -> RDK index, or None if this driver omits it."""
-            if src < self._arm_dof:
-                dst = start + src
-                return dst if dst < len(vel) else None
-            w = src - self._dof
-            if 0 <= w < len(self._waist_joint_names) and w < start:
-                return w
-            return None
-
-        for src in range(n_cmd):
-            dst = place(src)
-            if dst is None:
-                continue
-            # Floor at a fraction of the configured cap so a joint the
-            # trajectory holds still is not given a cap of zero, which would
-            # stop it correcting any drift.
-            if peak_dq[src] > 0.0:
-                vel[dst] = min(
-                    max(peak_dq[src] * self._traj_cap_margin,
-                        self._max_vel[dst] * 0.05),
-                    self._max_vel[dst],
-                )
-            if peak_ddq[src] > 0.0:
-                acc[dst] = min(
-                    max(peak_ddq[src] * self._traj_cap_margin,
-                        self._max_acc[dst] * 0.05),
-                    self._max_acc[dst],
-                )
-        return vel, acc
 
     def _reset_servo_stream_state(self) -> None:
         self._servo_prev_q = None
@@ -1480,7 +1393,6 @@ class ArmDriverNode(LifecycleNode):
         self._active_traj = traj
         self._traj_goal_handle = goal_handle
         duration = trajectory_duration(traj)
-        traj_max_vel, traj_max_acc = self._caps_for_trajectory(traj)
         if not self._mock and self._session:
             # Ensure previous sessions/commands are stopped before switching mode.
             self._session.stop()
@@ -1551,8 +1463,15 @@ class ArmDriverNode(LifecycleNode):
                 if not self._mock and self._session:
                     try:
                         q_send, dq_send = self._expand_arm_to_rdk(q_cmd, dq_cmd)
+                        # The caps stay the configured constants on purpose.
+                        # Deriving them from the trajectory's own peak |dq| and
+                        # |ddq| was tried and made the motion jerky again: see
+                        # docs/open_issues.md issue 1. The controller plans its
+                        # own way to each commanded position and needs
+                        # acceleration headroom to get there, so a cap matched
+                        # to the trajectory starves it.
                         self._session.send_joint_position(
-                            q_send, dq_send, traj_max_vel, traj_max_acc
+                            q_send, dq_send, self._max_vel, self._max_acc
                         )
                         self._note_rdk_send("SendJointPosition/trajectory")
                     except Exception as exc:  # noqa: BLE001

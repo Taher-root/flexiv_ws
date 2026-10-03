@@ -24,13 +24,20 @@ re-planning and GIL contention at once. Three earlier mechanisms recorded
 here — the velocity cap, 50 Hz re-planning, and delivery jitter — were all
 argued from code without the hardware, and all wrong.
 
-**Also fixed:** the caps passed to `SendJointPosition` were the constants
-1.5 and 3.0 on every axis, unrelated to the trajectory. Now derived per
-trajectory from its own peak `|dq|` / `|ddq|` times
-`trajectory_cap_margin` (default 2.0), with the configured
-`default_max_joint_vel` / `_acc` kept as the ceiling and a 5% floor so a
-joint the trajectory holds still is not given a cap of zero. This was not
-the cause of the jerk, but it was wrong on its own terms.
+**Do not "fix" the caps.** `_max_vel` / `_max_acc` passed to
+`SendJointPosition` are the constants 1.5 and 3.0 on every axis, unrelated
+to the trajectory. That looks wrong, and deriving them per trajectory from
+its own peak `|dq|` / `|ddq|` was implemented and **reverted**: it made the
+motion jerky again at the same 50 Hz that was smooth with the constants.
+
+Why, measured: at `velocity_scaling` 0.3 the derived acceleration cap is
+1.44 rad/s^2 against the constant 3.0, and at 0.05 scaling it is 0.24 — a
+12x reduction. The controller plans its own motion to each commanded
+position (see issue 1a: it decelerates toward each setpoint rather than
+blending), so it needs acceleration headroom well above what the trajectory
+itself demands. A cap matched to the trajectory starves it.
+
+The constants are not a mismatch to be tidied up. They are headroom.
 
 ---
 
