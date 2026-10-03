@@ -14,8 +14,23 @@ WAIST = ["AGV_Joint1", "AGV_Joint2"]
 LEFT = [f"Left_joint{i}" for i in range(1, 8)]
 RIGHT = [f"Right_joint{i}" for i in range(1, 8)]
 ALL_JOINTS: List[str] = WAIST + LEFT + RIGHT
-LEFT_SET: Set[str] = set(LEFT)
+
+# The waist is accepted on the LEFT topic. The external axes are shared and
+# the left arm owns them -- the AICO2 manual states the right arm's waist data
+# is transmitted via the left arm's communication module -- so with
+# control_waist:=true the left driver appends AGV_Joint1/2 to its own
+# joint_states. Before this, LEFT_SET held only Left_joint*, so those two were
+# not merely dropped: they hit the unknown-name branch and logged an error per
+# joint about the wrong driver publishing.
+LEFT_SET: Set[str] = set(LEFT) | set(WAIST)
 RIGHT_SET: Set[str] = set(RIGHT)
+
+# Until a real waist reading arrives, publish a pose the robot can actually
+# hold. Measured range on Rizon4-063352 is -87.45..+87.45 deg for AGV_Joint1
+# and +2.50..+87.45 deg for AGV_Joint2, so 0.0 on the pitch axis is below the
+# mechanical limit and every TF consumer downstream was being handed a pose
+# the arm cannot reach. These are the measured minima, not guesses.
+WAIST_SEED: Dict[str, float] = {"AGV_Joint1": 0.0, "AGV_Joint2": 0.0436}
 
 
 class JointStateMerger(Node):
@@ -30,6 +45,7 @@ class JointStateMerger(Node):
         rate = float(self.get_parameter("rate_hz").value)
 
         self._positions: Dict[str, float] = {n: 0.0 for n in ALL_JOINTS}
+        self._positions.update(WAIST_SEED)
         self._velocities: Dict[str, float] = {n: 0.0 for n in ALL_JOINTS}
         self._warned_left: Set[str] = set()
         self._warned_right: Set[str] = set()
@@ -50,8 +66,10 @@ class JointStateMerger(Node):
         self._timer = self.create_timer(1.0 / rate, self._publish)
 
         self.get_logger().info(
-            f"Merging {left_topic} (Left_joint*) + {right_topic} (Right_joint*) "
-            f"-> /joint_states ({len(ALL_JOINTS)} joints; waist at 0)"
+            f"Merging {left_topic} (Left_joint* + waist) + {right_topic} "
+            f"(Right_joint*) -> /joint_states ({len(ALL_JOINTS)} joints). "
+            f"The waist holds its seed until the left driver publishes it, "
+            f"which needs control_waist:=true"
         )
 
     def _merge_cb(

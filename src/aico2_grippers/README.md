@@ -2,7 +2,8 @@
 
 Flexiv RDK gripper helpers for AICO2 VR teleop.
 
-**Full context:** [`../../docs/VR_TELEOP.md`](../../docs/VR_TELEOP.md) (gripper section + timeline)
+**Full context:** `docs/VR_TELEOP.md` (gripper section + timeline) — never
+committed to this repo; it lives on the VR teleop machine.
 
 ## Force-grasp teleop (option 2)
 

@@ -110,7 +110,6 @@ def generate_launch_description():
 
     mock_hardware = LaunchConfiguration("mock_hardware")
     enable_waist_driver = LaunchConfiguration("enable_waist_driver")
-    direct_joint_states = LaunchConfiguration("direct_joint_states")
     joint_control_mode = ParameterValue(
         LaunchConfiguration("joint_control_mode"), value_type=str)
     # Without value_type a LaunchConfiguration arrives as a string and the
@@ -124,22 +123,16 @@ def generate_launch_description():
     control_waist = ParameterValue(
         LaunchConfiguration("control_waist"), value_type=bool)
 
-    # joint_state_architecture.md sec 3 / sec 8 step 6: the target state is
-    # every driver publishing its own joints straight to /joint_states, with
-    # robot_state_publisher merging the partial messages by name and no merger
-    # in the middle. Done as a remap rather than a code change so the cutover
-    # is one launch argument and reverting is instant — nothing in this repo
-    # consumes /left_arm/joint_states except the merger, but the VR teleop and
-    # the other machines on this ROS domain are outside it and unverified.
-    #   false (default): "joint_states" -> /<ns>/joint_states, merger stitches
-    #   true:            "joint_states" -> /joint_states, merger not started
-    joint_states_remap = [(
-        "joint_states",
-        PythonExpression([
-            "'/joint_states' if '", direct_joint_states,
-            "' == 'true' else 'joint_states'",
-        ]),
-    )]
+    # Each driver publishes its own joints to /<ns>/joint_states and
+    # joint_state_merger stitches them into the full-robot /joint_states.
+    #
+    # There was a direct_joint_states argument here that remapped straight to
+    # /joint_states and skipped the merger, on the belief that
+    # robot_state_publisher merges partial JointState messages by name. It does
+    # not: robot_state_publisher.cpp declares its joint map as a local rebuilt
+    # per message, so a partial update blanks every joint it omits. The flag
+    # could only ever break TF, so it is gone rather than documented.
+    joint_states_remap = [("joint_states", "joint_states")]
 
     left_driver = LifecycleNode(
         package="aico2_left_arm_driver",
@@ -226,17 +219,6 @@ def generate_launch_description():
                             "aico2_waist_driver/README.md)",
             ),
             DeclareLaunchArgument(
-                "direct_joint_states",
-                default_value="false",
-                description="false: arms publish /<ns>/joint_states and "
-                            "joint_state_merger stitches them into /joint_states "
-                            "(16 joints, waist forced to 0.0). true: arms publish "
-                            "their own joints straight to /joint_states and the "
-                            "merger is not started — robot_state_publisher merges "
-                            "by joint name, so the waist driver's real values are "
-                            "no longer overwritten with zeros",
-            ),
-            DeclareLaunchArgument(
                 "joint_control_mode",
                 default_value="position",
                 description="position: NRT_JOINT_POSITION, a stiff position "
@@ -298,7 +280,6 @@ def generate_launch_description():
                 executable="joint_state_merger",
                 name="joint_state_merger",
                 output="screen",
-                condition=UnlessCondition(direct_joint_states),
                 parameters=[
                     {
                         "left_arm_topic": "/left_arm/joint_states",

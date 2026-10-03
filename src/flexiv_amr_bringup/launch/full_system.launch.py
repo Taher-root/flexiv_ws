@@ -190,10 +190,6 @@ def generate_launch_description():
                               description="Publish real AGV_Joint1/2 from the RDK "
                                           "stream (races joint_state_merger's zeros; "
                                           "see aico2_waist_driver/README.md)"),
-        DeclareLaunchArgument("direct_joint_states", default_value="false",
-                              description="true: arms publish straight to "
-                                          "/joint_states and joint_state_merger is "
-                                          "retired (see arms.launch.py)"),
 
         # ============================================================
         # Arms: both Rizon lifecycle drivers, optional waist, merger
@@ -201,7 +197,6 @@ def generate_launch_description():
         _include("flexiv_amr_bringup", "arms.launch.py", {
             "mock_hardware": mock_arms,
             "enable_waist_driver": LaunchConfiguration("enable_waist_driver"),
-            "direct_joint_states": LaunchConfiguration("direct_joint_states"),
             "joint_control_mode": LaunchConfiguration("joint_control_mode"),
             "joint_stiffness_ratio": LaunchConfiguration("joint_stiffness_ratio"),
             "max_contact_torque": LaunchConfiguration("max_contact_torque"),

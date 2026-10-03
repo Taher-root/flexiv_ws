@@ -40,8 +40,6 @@ class RobokitVelocityController(Node):
         self.cmd_vel_sub = self.create_subscription(
             Twist, '/cmd_vel', self.cmd_vel_callback, 10)
         
-        self.actual_vel_pub = self.create_publisher(Twist, '/amr/actual_velocity', 10)
-        
         self.connect_to_robot()
         
         self.timer = self.create_timer(0.05, self.control_loop)
@@ -91,12 +89,6 @@ class RobokitVelocityController(Node):
                     data = self.sock.recv(16)
                 except socket.timeout:
                     pass
-            
-            actual_vel = Twist()
-            actual_vel.linear.x = vx
-            actual_vel.linear.y = vy
-            actual_vel.angular.z = wz
-            self.actual_vel_pub.publish(actual_vel)
             
         except Exception as e:
             self.get_logger().error(f'Control command failed: {e}')

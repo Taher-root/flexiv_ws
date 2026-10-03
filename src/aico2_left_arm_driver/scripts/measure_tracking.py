@@ -105,9 +105,9 @@ class TrackingRun(Node):
         for name, position in zip(msg.name, msg.position):
             self._latest[name] = position
         # Only a message that actually carries this arm's joints is a sample of
-        # this arm. With direct_joint_states the other arm publishes to the same
-        # topic, and counting its messages as unchanged readings of ours
-        # manufactured a ~50% repeat rate that had nothing to do with the robot.
+        # this arm. When both arms publish to one topic, counting the other
+        # arm's messages as unchanged readings of ours manufactured a ~50%
+        # repeat rate that had nothing to do with the robot.
         if (self._recording and carries_this_arm
                 and all(n in self._latest for n in self._joint_names)):
             self._samples.append((
