@@ -432,6 +432,25 @@ class ArmDriverNode(LifecycleNode):
                     f"trajectory send rate set to {self._traj_send_rate:.1f} Hz "
                     f"(applies to the next trajectory)")
                 continue
+            if param.name == "trajectory_cap_margin":
+                try:
+                    value = float(param.value)
+                except (TypeError, ValueError):
+                    return SetParametersResult(
+                        successful=False,
+                        reason="trajectory_cap_margin must be a float")
+                if value < 1.0:
+                    return SetParametersResult(
+                        successful=False,
+                        reason="trajectory_cap_margin must be >= 1.0 "
+                               "(1.0 gives the controller no headroom)")
+                self._traj_cap_margin = value
+                self.get_logger().info(
+                    f"trajectory_cap_margin set to {value} (applies to the "
+                    f"next trajectory). A large value restores the previous "
+                    f"behaviour of using default_max_joint_vel/_acc directly, "
+                    f"since the configured values are the ceiling")
+                continue
             if param.name in ("default_max_joint_vel", "default_max_joint_acc"):
                 try:
                     value = float(param.value)
