@@ -5,99 +5,62 @@ and what is still a hypothesis. Nothing here is blocking a port.
 
 ---
 
-## 1. RESOLVED — MoveIt execution was jerky: TOTG left jerk unbounded
+## 1. RESOLVED — execution was jerky: TOTG left jerk unbounded
 
-**Root cause, measured 2026-10-02/03.** `AddTimeOptimalParameterization`
-(TOTG) is *time-optimal*, which means it saturates acceleration. The result
-is a trapezoidal velocity profile — accelerate, cruise, decelerate — whose
-acceleration steps discontinuously at the two corners. Jerk is unbounded
-exactly there, and on hardware a single-joint move read as **three distinct
-segments**.
+`AddTimeOptimalParameterization` is time-optimal, so it saturates
+acceleration: the velocity profile is a trapezoid whose acceleration steps
+discontinuously at the two corners. Jerk is unbounded there, and a
+single-joint move read as three distinct segments.
 
 **Fixed** by adding `AddRuckigTrajectorySmoothing` after TOTG in
-`ompl_planning.yaml`, plus the jerk limits it requires in
-`joint_limits.yaml` (there were none for any joint). Ruckig re-times the same
-path under a jerk limit, replacing each corner with a bounded acceleration
-ramp.
+`ompl_planning.yaml`, plus the jerk limits it requires in `joint_limits.yaml`
+(there were none). `max_jerk` is ~10x each joint's acceleration limit, chosen
+for feel — the Rizon4 datasheet publishes no jerk limits. Lower is smoother
+and slower.
 
-### The experiment that identified it
+**Identified by** running the same move at `trajectory_send_rate_hz` 2.0 and
+50.0: identical both times, which ruled out the send loop, the controller's
+re-planning and GIL contention at once. Three earlier mechanisms recorded
+here — the velocity cap, 50 Hz re-planning, and delivery jitter — were all
+argued from code without the hardware, and all wrong.
 
-The same 30-degree joint-4 move at `trajectory_send_rate_hz` **2.0 and 50.0**
-produced **identical** behaviour — three segments both times. A 25x change in
-delivery rate changing nothing ruled out the send loop, the controller's
-internal re-planning, and GIL contention in one comparison, and located the
-problem in the trajectory itself.
-
-### Three wrong mechanisms were recorded here before that
-
-Worth keeping, because each was argued from code and each was wrong:
-
-1. *"`default_max_joint_vel` is a fixed 1.5 rad/s, so the controller sprints
-   and idles 50 times a second."* Arithmetically impossible: at
-   `max_acc` 3.0 rad/s^2, 2 ms of acceleration covers 6e-6 rad, not the
-   ~0.012 rad of a 20 ms segment.
-2. *"`SendJointPosition` re-plans on every call, so the internal generator
-   never completes a segment."* Plausible, and killed by the 2 Hz vs 50 Hz
-   result above.
-3. *"Delivery jitter from GIL starvation produces discrete lurches."* The
-   send loop turned out to be uniformly slow (36.7, 39.6, 37.9 Hz), not
-   bursty — a real bug (see issue 2a) but not this one.
-
-The lesson is in the method: all three were consistent with code that could
-be read, and none required the hardware. The one-parameter sweep settled it.
-
-### Jerk limit values
-
-`max_jerk` is set to roughly 10x each joint's acceleration limit — 10.0 for
-joints 1-2, 12.0 for 3-4, 24.0 for 5-7, 5.0 for the waist axes. The Rizon4
-datasheet does not publish jerk limits, so these were chosen for feel. Lower
-is smoother and slower; that is the knob.
-
-### Still worth doing (not the cause, but wrong)
-
-`_max_vel` / `_max_acc` handed to `SendJointPosition` are still the constants
-1.5 and 3.0, unrelated to the trajectory. MoveIt's effective limits after
-`0.3` scaling are 0.63-1.47 rad/s and 0.3-0.72 rad/s^2, so the caps are
-generous rather than binding — but deriving them from
-`trajectory.points[*].velocities` is ~10 lines and removes a mismatch that is
-wrong on its own terms.
+**Minor, still open:** `_max_vel` / `_max_acc` passed to `SendJointPosition`
+are the constants 1.5 and 3.0, not derived from the trajectory. Generous
+rather than binding (MoveIt's effective limits after 0.3 scaling are
+0.63-1.47 rad/s and 0.3-0.72 rad/s^2), so it was not the cause — but
+deriving them from `trajectory.points[*].velocities` is ~10 lines.
 
 ---
 
-## 1a. The call-rate sweet spot is ~50 Hz, and it is a U-curve
+## 1a. Call rate is a U-curve with a minimum around 50 Hz
 
-**Measured after the Ruckig fix and the acquisition fix, so rates are exact.**
+Measured after the fixes above, so achieved rates are exact:
 
-| `trajectory_send_rate_hz` | achieved | result |
+| configured | achieved | result |
 | --- | --- | --- |
 | 2 | 2 Hz | badly jerky |
 | 50 | 50 Hz | smoothest |
 | 100 | 98 Hz | slightly jerky |
 | 200 | 190 Hz | clearly jerky |
 
-Not a slope — a minimum around 50 Hz. Two readings, both tentative:
+Two tentative readings: 2 Hz being worst suggests the internal generator
+decelerates toward each commanded position rather than blending through the
+velocity passed in `dq_send`; degradation above 100 Hz suggests it is being
+pre-empted before it can produce a smooth segment.
 
-- **2 Hz being bad says the internal generator does not blend.** The driver
-  passes a target velocity in `dq_send`. If the generator honoured it and
-  re-planned from the arm's measured velocity, widely spaced commands would
-  be smooth. They are not, so it appears to decelerate toward each commanded
-  position instead.
-- **Degradation above 100 Hz says the generator is being pre-empted** before
-  it can produce a smooth segment.
+RDK documents NRT joint modes as expecting commands "in a one-shot or
+slow-periodic manner", gives a number for RT (1 kHz) and none for NRT — and
+2 Hz, which is what "slow-periodic" sounds like, is the worst setting
+measured.
 
-That matches the RDK documentation describing NRT joint modes as expecting
-commands "in a one-shot or slow-periodic manner" — except that 2 Hz, which is
-what "slow-periodic" sounds like, is the worst setting measured. The docs give
-a number for RT (1 kHz) and none for NRT.
+**Not swept:** 20 and 30 Hz. The minimum may sit below 50.
 
-**Not yet swept:** 20 and 30 Hz. The minimum may sit below 50.
-
-**Asked of Flexiv support (2026-10-03):** whether there is a recommended call
-rate, whether a complete externally time-parameterised joint trajectory can be
-handed over as one motion, and whether RT control is available for the AICO2-4
-at all. For the record: `flexivrdk` 1.9.0 exposes no RT modes and no `Stream*`
-methods — verified on the robot — and 1.9.0 has no multi-waypoint function
-(`dir(Robot)` gives only `ExecutePlan`, `PausePlan`, `StopPlan`).
+**Asked of Flexiv (2026-10-03):** recommended call rate, whether a complete
+externally time-parameterised joint trajectory can be handed over as one
+motion, and whether RT control is available for the AICO2-4. For the record,
+verified on the robot: 1.9.0 exposes no RT modes and no `Stream*` methods,
+and no multi-waypoint function (`dir(Robot)` gives only `ExecutePlan`,
+`PausePlan`, `StopPlan`).
 
 ---
 
@@ -127,67 +90,33 @@ tolerance, so convergence is not currently failing.
 
 ---
 
-## 2a. RESOLVED — acquisition busy-loop starved the send loop, and segfaulted on teardown
+## 2a. RESOLVED — acquisition busy-loop, and a segfault on teardown
 
-**Measured and fixed 2026-10-02.** Two bugs in the same thread, neither
-causing issue 1, both real.
+Two bugs in the same thread, found while investigating issue 1 and not its
+cause.
 
-### The busy-loop
+**Busy-loop.** `_poll_loop` called `states()` with no sleep. It is a ~1.5 us
+cached read, so the thread ran at ~615,000 polls/s against a device producing
+~1000 samples/s — a core per arm — and stole the GIL from the trajectory send
+loop, which achieved 38 Hz against 50 configured and logged its own
+saturation warning. Fixed with `time.sleep(0.0005)` (still 2 kHz, twice the
+device rate). Rates are now exact: 2/2, 50/50, 98/100, 190/200, warning gone.
+That also showed the ~6.3 ms per cycle was GIL wait, not the RDK round trip.
 
-`_poll_loop` called `states()` with no sleep. `states()` is a ~1.5 us cached
-read, so the thread ran at **~615,000 polls/s** against a device that
-produces ~1000 samples/s — a full CPU core per arm, two cores on a Jetson
-also running Nav2, RTAB-Map and the camera pipelines.
-
-It also stole the GIL. A CPU-bound Python thread holds it for up to
-`sys.getswitchinterval()` at a time, and the trajectory send loop has to
-reacquire it after every `time.sleep()`. The driver's own instrumentation
-caught the result:
-
-```
-trajectory sent 152 setpoints in 4.01s = 38 Hz (configured 50 Hz)
-  <- loop is saturated; the configured rate is not being reached
-```
-
-Per-second: 36.7, 39.6, 37.9 Hz. Uniformly 24% short, not bursty.
-
-**Fixed** with `time.sleep(0.0005)` per iteration — still 2 kHz, twice the
-device rate, so no sample can be missed. After:
-
-| configured | achieved |
-| --- | --- |
-| 2 Hz | 2 Hz |
-| 50 Hz | 50 Hz |
-| 100 Hz | 98 Hz |
-| 200 Hz | 190 Hz |
-
-Exact, and the saturation warning is gone. That also identified what the
-~6.3 ms per cycle had been: **GIL wait, not the RDK round trip.**
-`SendJointPosition` is cheap.
-
-### The teardown crash
-
-A redundant `ACTIVATE` raises `RCLError("Transition is not registered")` from
-inside rclpy's own lifecycle service callback, which propagates out of
-`executor.spin()`. That is not a `KeyboardInterrupt`, so it fell through to
-the bare `finally`, which calls `destroy_node()` — and `destroy_node()` does
-not run lifecycle callbacks, so the poll thread kept calling `states()` while
-the `flexiv::rdk::Robot` it holds was freed. The process died with **SIGSEGV
-(exit code -11)** behind a "Missed 1 heartbeat signal transmission" warning.
-
-This presented later as an unexplained `NOT_ENABLED` — the driver had
-crashed, the RDK session died without a clean release, and the arm was left
-with its servo off. It looked like an E-stop and was not.
-
-**Fixed** by extracting the poll-thread stop into an idempotent
-`stop_acquisition()`, calling it from the `finally` before `destroy_node()`,
-and catching `Exception` so an unexpected error is logged with its cause.
+**Teardown segfault.** A redundant `ACTIVATE` raises
+`RCLError("Transition is not registered")` out of rclpy's lifecycle callback
+and through `executor.spin()`. Not a `KeyboardInterrupt`, so it reached the
+bare `finally`, which calls `destroy_node()` — which does not run lifecycle
+callbacks, so the poll thread kept calling `states()` on a freed
+`flexiv::rdk::Robot`. SIGSEGV, exit code -11. This later presented as an
+unexplained `NOT_ENABLED` that looked like an E-stop. Fixed with an
+idempotent `stop_acquisition()` called from the `finally` before
+`destroy_node()`, plus catching `Exception` so the cause is logged.
 
 **Still unexplained:** where the duplicate `ACTIVATE` came from. The
-autostart handler in `arms.launch.py` pins activate to `start_state:
-"configuring"` precisely to avoid this, so a second launch process is the
-most likely source — two were alive at the time. The crash is now
-non-fatal either way.
+autostart handler pins activate to `start_state: "configuring"` to prevent
+exactly this, so a second launch process is the likely source — two were
+alive at the time. Non-fatal either way now.
 
 ---
 
