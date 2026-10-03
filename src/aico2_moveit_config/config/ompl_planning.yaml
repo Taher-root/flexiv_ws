@@ -9,7 +9,19 @@ request_adapters:
   - default_planning_request_adapters/CheckStartStateBounds
   - default_planning_request_adapters/CheckStartStateCollision
 response_adapters:
+  # TOTG is time-optimal, which means it saturates acceleration: the result is
+  # a trapezoidal velocity profile whose acceleration steps discontinuously at
+  # the two corners. Jerk is unbounded there, and on hardware the move reads as
+  # three distinct segments -- accelerate, cruise, decelerate. Confirmed by
+  # measurement: identical at trajectory_send_rate_hz 2.0 and 50.0, so the
+  # segmentation is in the trajectory, not in how it is delivered.
+  #
+  # Ruckig runs after TOTG and re-times the same path under a jerk limit,
+  # replacing each corner with a bounded acceleration ramp. Order matters:
+  # TOTG supplies the timing, Ruckig smooths it. Requires the jerk limits in
+  # joint_limits.yaml -- without them the adapter has nothing to bound.
   - default_planning_response_adapters/AddTimeOptimalParameterization
+  - default_planning_response_adapters/AddRuckigTrajectorySmoothing
   - default_planning_response_adapters/ValidateSolution
   - default_planning_response_adapters/DisplayMotionPath
 
