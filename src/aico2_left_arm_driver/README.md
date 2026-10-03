@@ -2,8 +2,11 @@
 
 Lifecycle node for one Flexiv Rizon arm (mock or `flexivrdk` 1.9).
 
-VR teleop, gripper, and driver modes are documented in
-[`../../docs/VR_TELEOP.md`](../../docs/VR_TELEOP.md).
+VR teleop, gripper, and driver modes were documented in `docs/VR_TELEOP.md`,
+which has never been committed to this repo — it lives on the VR teleop
+machine alongside the `aico2_vr_teleop` package. The servo path in this
+driver (`teleop_backend`, `servo_joint_command`, the `*_moveit_servo.yaml`
+configs) is what that document describes.
 
 ## Mock mode
 
@@ -18,7 +21,9 @@ ros2 launch aico2_bringup hardware.launch.py
 ```
 
 Requires `flexivrdk==1.9.0`, serial from Flexiv Elements, motion bar Auto Remote.
-See [docs/PHASE0_HARDWARE.md](../../docs/PHASE0_HARDWARE.md).
+See [`../../README.md`](../../README.md) sections 1-3 for the hardware
+reference and setup; `docs/PHASE0_HARDWARE.md` is referenced in older notes
+but was never committed here.
 
 ## Interfaces (namespace `/left_arm`)
 

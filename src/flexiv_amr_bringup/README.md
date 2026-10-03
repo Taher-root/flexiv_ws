@@ -23,7 +23,7 @@ arms_with_navigation.launch.py   arms + mapping_robokit
 mapping_robokit.launch.py        alias: mapping.launch.py use_robokit:=true
 ```
 
-*`joint_state_merger` runs only while `direct_joint_states:=false` — see below.
+*`joint_state_merger` stitches the per-arm topics into `/joint_states`.
 
 Subsystem launches live in `flexiv_amr_nav2` (`ekf`, `slam`, `localization`,
 `rtabmap_localization`, `navigation`, `rtabmap_mapping`) and are reused here.
@@ -49,24 +49,23 @@ navigation localizes against. `rtabmap_params.yaml` holds only the tuning both
 modes share — the three mode keys live in the launch files so neither can
 silently flip the other's behaviour.
 
-### Retiring joint_state_merger
+### /joint_states topology
 
-`direct_joint_states` switches between the two `/joint_states` topologies
-(`joint_state_architecture.md` sec 3, sec 8 step 6):
+Each driver publishes its own joints to `/left_arm/joint_states` and
+`/right_arm/joint_states`, and `joint_state_merger` stitches them into the
+full-robot 16-joint `/joint_states`.
 
-- **`false`** (default) — arms publish `/left_arm/joint_states` and
-  `/right_arm/joint_states`; `joint_state_merger` stitches them into a
-  16-joint `/joint_states` with the waist **forced to 0.0**.
-- **`true`** — each driver publishes only its own joints straight to
-  `/joint_states`, the merger is not started, and `robot_state_publisher`
-  merges the partial messages by joint name. This is what lets
-  `enable_waist_driver:=true` actually reach TF instead of being overwritten
-  with the merger's zeros.
+There is no way to skip the merger. A `direct_joint_states` argument used to
+remap the drivers straight to `/joint_states`, on the belief that
+`robot_state_publisher` merges partial `JointState` messages by joint name. It
+does not — `robot_state_publisher.cpp` declares its joint map as a local
+rebuilt per message, so a partial update blanks every joint it omits. The flag
+could only ever break TF, so it was removed rather than documented.
 
-Implemented as a launch remap, so flipping it back is one argument. Nothing in
-this repo consumes the per-arm topics except the merger, but check anything
-outside it (VR teleop, other machines on the ROS domain) before making `true`
-the default.
+The waist reaches TF through the merger: with `control_waist:=true` the left
+driver appends `AGV_Joint1/2` to its own `joint_states` and the merger accepts
+them on the left topic. Without it, the waist holds the merger's seed (the
+measured mechanical minimum, not 0.0).
 
 ## Common commands
 
@@ -119,7 +118,6 @@ ros2 launch flexiv_amr_bringup arms.launch.py mock_hardware:=true
 | `localization_backend` | navigation, full_system | `rtabmap` | `rtabmap` (against `rtabmap_db:=`) or `amcl` (against `map:=`) |
 | `rtabmap_db` | navigation, full_system | `maps/rtabmap_backup.db` | Database RTAB-Map localizes against (mapping writes to `~/.ros/aico2_map.db`) |
 | `map` | navigation, full_system | `maps/supermarket.yaml` | Map yaml AMCL localizes against |
-| `direct_joint_states` | full_system, arms, arms_with_navigation | `false` | Arms publish straight to `/joint_states`, retiring `joint_state_merger` |
 | `use_rviz` | most | varies | Launch RViz2 |
 
 `full_system.launch.py` turns the top camera on with the rest of the cameras and

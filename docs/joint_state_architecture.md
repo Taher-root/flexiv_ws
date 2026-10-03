@@ -145,7 +145,8 @@ owns, with its own honest timestamp. One physical joint, one publisher.
 > transforms for **only the joints it contains**. Nothing accumulates across
 > messages.
 >
-> Observed consequence with `direct_joint_states:=true` and no waist publisher:
+> Observed consequence when the drivers published straight to `/joint_states`
+> with no waist publisher (the since-removed `direct_joint_states` flag):
 > `AGV_Joint1`/`AGV_Joint2` never appear in any message, so their transforms are
 > never published. Both arms hang off `AGV_Pitch` via those two revolute joints,
 > so the entire upper body loses its transform chain from `base_link` and RViz

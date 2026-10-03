@@ -32,8 +32,6 @@ class VelocityController(Node):
         self.release_control_srv = self.create_service(
             ReleaseControl, 'release_control', self.release_control_callback)
         
-        self.actual_vel_pub = self.create_publisher(Twist, '/amr/actual_velocity', 10)
-        
         self.current_cmd = Twist()
         self.last_cmd_time = self.get_clock().now()
         self.control_seized = False
@@ -143,12 +141,6 @@ class VelocityController(Node):
             
         except Exception as e:
             self.get_logger().error(f'Control command failed: {e}')
-        
-        actual_vel = Twist()
-        actual_vel.linear.x = vx
-        actual_vel.linear.y = vy
-        actual_vel.angular.z = wz
-        self.actual_vel_pub.publish(actual_vel)
     
     def gain_control_callback(self, request, response):
         if self.seize_control():

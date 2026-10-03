@@ -634,7 +634,6 @@ ros2 launch flexiv_amr_bringup arms.launch.py
 | `max_contact_torque` | `0.0` | Nm ceiling per arm axis against the environment; `0` leaves it unbounded |
 | `control_waist` | `false` | `true` lets the left arm driver command the waist |
 | `enable_waist_driver` | `false` | Publishes real `AGV_Joint1/2`; races `joint_state_merger`'s zeros |
-| `direct_joint_states` | `false` | See [§9](#9-known-issues) — currently unusable |
 
 Both drivers are **lifecycle nodes** and must reach `active`:
 
@@ -799,7 +798,6 @@ Full argument list:
 | `joint_stiffness_ratio` | `1.0` |
 | `max_contact_torque` | `0.0` |
 | `enable_waist_driver` | `false` |
-| `direct_joint_states` | `false` |
 
 ### Start-up is staged
 
@@ -1010,18 +1008,14 @@ measured, what the code says, and what is still hypothesis. Summary:
    around 50 Hz — 2 Hz is badly jerky and 190 Hz is jerky again:
    `ros2 param set /left_arm/left_arm_driver trajectory_send_rate_hz 50.0`
 2. **Up to 3 s dead time after a move**, from the goal settle timeout.
-3. **`joint_state_merger` overwrites the waist with 0.0** on `/joint_states`,
-   which is below the mechanical limit.
-4. **`direct_joint_states:=true` is unusable** — `robot_state_publisher` does
-   not merge partial `JointState` messages; it rebuilds its joint map per
-   message, so a partial update blanks the rest.
-5. **Chassis status is invisible.** `status_monitor` needs `flexivamr`, gives up
+3. **Chassis status is invisible.** `status_monitor` needs `flexivamr`, gives up
    permanently if its first connect fails, and nothing consumes `/amr/status`,
-   `/amr/emergency` or `/amr/blocked` even when it works.
-6. Smaller: duplicate `/amr/actual_velocity` publishers; `both_arms` has no IK
-   solver; `longest_valid_segment_fraction: 0.005` is unusually tight; four
-   `.obj` visual meshes and six `.mtl` files are absent, so the URDF points
-   those visuals at collision STLs.
+   `/amr/emergency` or `/amr/blocked` even when it works. This is why a chassis
+   E-stop reads as a Nav2 failure — check the physical light strip.
+4. Smaller: `longest_valid_segment_fraction: 0.005` is unusually tight;
+   `both_arms` plans in joint space but has no IK, so no pose goals or RViz
+   marker (KDL cannot solve a two-tip group); four `.obj` visual meshes and six
+   `.mtl` files are absent, so the URDF points those visuals at collision STLs.
 
 ### Other documentation
 

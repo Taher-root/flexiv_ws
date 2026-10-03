@@ -24,11 +24,13 @@ re-planning and GIL contention at once. Three earlier mechanisms recorded
 here — the velocity cap, 50 Hz re-planning, and delivery jitter — were all
 argued from code without the hardware, and all wrong.
 
-**Minor, still open:** `_max_vel` / `_max_acc` passed to `SendJointPosition`
-are the constants 1.5 and 3.0, not derived from the trajectory. Generous
-rather than binding (MoveIt's effective limits after 0.3 scaling are
-0.63-1.47 rad/s and 0.3-0.72 rad/s^2), so it was not the cause — but
-deriving them from `trajectory.points[*].velocities` is ~10 lines.
+**Also fixed:** the caps passed to `SendJointPosition` were the constants
+1.5 and 3.0 on every axis, unrelated to the trajectory. Now derived per
+trajectory from its own peak `|dq|` / `|ddq|` times
+`trajectory_cap_margin` (default 2.0), with the configured
+`default_max_joint_vel` / `_acc` kept as the ceiling and a 5% floor so a
+joint the trajectory holds still is not given a cap of zero. This was not
+the cause of the jerk, but it was wrong on its own terms.
 
 ---
 
@@ -120,45 +122,41 @@ alive at the time. Non-fatal either way now.
 
 ---
 
-## 3. Waist joints are hardcoded to 0.0
+## 3. RESOLVED — waist was hardcoded to 0.0 in the merger
 
 **Measured 2026-09-30 on Rizon4-063352:** `DoF 9, DoF_m 7, DoF_e 2`.
-`AGV_Joint1` (yaw) range -87.45..+87.45 deg, sitting at 0.09 deg.
-`AGV_Joint2` (pitch) range **+2.50**..+87.45 deg, sitting at 5.85 deg.
+`AGV_Joint1` (yaw) range -87.45..+87.45 deg. `AGV_Joint2` (pitch) range
+**+2.50**..+87.45 deg — so the merger's 0.0 was *below that axis's mechanical
+minimum*, and every TF consumer was handed a pose the robot cannot reach.
 
-So the merger's hardcoded 0.0 for AGV_Joint2 is **below that axis's
-mechanical minimum** -- the rendered model holds the torso in a pose the
-robot cannot reach. The yaw error is 0.09 deg, i.e. nothing. Both axes are
-genuinely commandable; scripts/rdk_waist_move.py moves them.
+The merger was worse than recorded here. `LEFT_SET` held only `Left_joint*`,
+so with `control_waist:=true` the left driver's `AGV_Joint1/2` did not merely
+fail to merge — they hit the unknown-name branch and logged an error per
+joint about the wrong driver publishing.
 
-`joint_state_merger` initialises `AGV_Joint1`/`AGV_Joint2` to `0.0` and never
-updates them — nothing publishes the real values. The torso renders at the
-wrong yaw/pitch, and both arms hang off `AGV_Pitch`, so the whole upper body is
-drawn rotated away from reality.
+**Fixed** by accepting the waist on the left topic
+(`LEFT_SET = set(LEFT) | set(WAIST)`), which is the correct owner: the AICO2
+manual states the right arm's waist data is transmitted via the left arm's
+communication module. The seed is now the measured mechanical minimum
+(`AGV_Joint2 = 0.0436 rad = 2.50 deg`) rather than 0.0, so the pose is
+reachable before the first real reading arrives.
 
-`enable_waist_driver:=true` is **not** the fix: `waist_driver` opens a *second*
-RDK session to the same controller and, as of 2026-09-26, was never observed
-reaching `active`. Suspected connect failure; unverified.
+Needs `control_waist:=true` for real values. `enable_waist_driver:=true` is
+still **not** the route — `waist_driver` opens a *second* RDK session to the
+same controller and was never observed reaching `active`.
 
-**Real fix:** `arm_driver_node._extract_arm_q` already reads the full 9-DoF `q`
-off the left arm's existing session and discards indices 0–1, which are exactly
-the waist. Publishing them needs no second session, no extra node and no flag.
-Proposed as a `publish_waist_joints` parameter, off by default.
+## 4. RESOLVED — `direct_joint_states` removed
 
-**Constraint to respect:** `robot_state_publisher` does **not** merge partial
-JointState messages — see `joint_state_architecture.md`. Exactly one publisher
-must emit all 16 joints in one message, so this change must keep that property.
+The flag remapped the drivers straight to `/joint_states` and skipped the
+merger, on the belief that `robot_state_publisher` merges partial
+`JointState` messages by joint name. It does not: `robot_state_publisher.cpp`
+declares its joint map as a local rebuilt per message, so a partial update
+blanks every joint it omits. Arms publish 7-joint messages, the waist
+transforms never appear, and the upper body detaches.
 
----
-
-## 4. `direct_joint_states:=true` is unusable
-
-Follows from the RSP finding above. Arms publish 7-joint messages, RSP
-publishes transforms only for the joints in each message, waist transforms
-never appear, the upper body detaches. Leave it `false` until issue 3 lands.
-The flag and its docs are corrected in `joint_state_architecture.md`.
-
----
+It could only ever break TF, so it is **deleted** rather than documented —
+all nine references across the three launch files, plus the stale prose in
+`flexiv_amr_bringup/README.md`. The merger is now unconditional.
 
 ## 5. RESOLVED (mostly) — the chassis was inhibited, not the driver
 
@@ -236,13 +234,17 @@ library is missing from that machine and `docs/porting.md` needs it.
 
 ## 7. Smaller items
 
-- `/amr/actual_velocity` has **two publishers**: `odometry_publisher` (real
-  encoder speed, API 1005) and `robokit_velocity_controller` (echoes the
-  *command* back as if measured). Last writer wins. Do not use it to confirm
-  motion — use `/odom_raw`.
-- `both_arms` has a planner config in `ompl_planning.yaml` but no solver in
-  `kinematics.yaml`, so selecting it gives no interactive marker and 14-DoF
-  planning that took ~123 s. Either add a note or remove the config.
+- **Fixed:** `/amr/actual_velocity` had *three* publishers, not two —
+  `odometry_publisher` (real encoder speed, API 1005) plus **both** velocity
+  controllers echoing the *command* back as if measured. The two fake ones
+  are removed; only the measurement remains.
+- **Documented, cannot be fixed with KDL:** `both_arms` has an
+  `ompl_planning.yaml` config and no `kinematics.yaml` entry. It is a
+  composite of two subgroups, so it has two tip links and no single
+  base->tip chain, and `KDLKinematicsPlugin` requires a serial chain.
+  Joint-space planning works without IK (the ~123 s 14-DoF plan); pose goals
+  and the RViz marker do not. A dual-arm Cartesian goal needs a multi-tip
+  solver such as bio_ik. Recorded in `kinematics.yaml`.
 - `longest_valid_segment_fraction: 0.005` is unusually tight; 0.01–0.02 would
   plan 2–4× faster. Not changed — collision-checking resolution needs a
   deliberate decision.

@@ -29,6 +29,17 @@ right_arm:
 #   minimal_displacement_weight: 0.0
 #   gd_step_size: 0.0001
 
+# both_arms has deliberately NO entry, and cannot have a KDL one. It is a
+# composite of the left_arm and right_arm subgroups, so it has two tip links
+# and no single base->tip chain; KDLKinematicsPlugin requires a serial chain
+# and fails to initialise on a multi-tip group.
+#
+# That costs less than it sounds. Joint-space planning works without IK --
+# RRTConnect samples the 14-DoF space directly, which is the ~123 s plan
+# observed on hardware. What is missing is pose goals and the RViz
+# interactive marker, both of which need IK. A dual-arm Cartesian goal needs
+# a multi-tip solver such as bio_ik; pick_ik, like KDL, is single-chain.
+
 # base_link -> Left_flange, i.e. the two waist axes plus the seven arm joints.
 # A 9-DoF redundant chain, so KDL has more null space to wander in than on the
 # 7-DoF groups; the longer timeout and extra attempts are for that.
