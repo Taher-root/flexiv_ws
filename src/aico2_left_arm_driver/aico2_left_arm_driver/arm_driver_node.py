@@ -1043,16 +1043,31 @@ class ArmDriverNode(LifecycleNode):
         )
         return TransitionCallbackReturn.SUCCESS
 
+    def stop_acquisition(self) -> None:
+        """Stop the poll thread and wait for it to leave states().
+
+        Idempotent, and safe to call from a plain shutdown path. It must run
+        before the RDK session is dropped: the poll thread calls states() on
+        the C++ Robot instance, so tearing the session down underneath it is a
+        use-after-free -- which is how an exception out of executor.spin()
+        turned into SIGSEGV rather than a logged error.
+        """
+        self._poll_stop.set()
+        thread, self._poll_thread = self._poll_thread, None
+        if thread is not None:
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                self.get_logger().warn(
+                    "acquisition thread did not exit within 2s"
+                )
+
     def on_deactivate(self, state: LifecycleState) -> TransitionCallbackReturn:
         self._teleop_active = False
         self._cancel_active_trajectory()
         if self._timer is not None:
             self.destroy_timer(self._timer)
             self._timer = None
-        self._poll_stop.set()
-        if self._poll_thread is not None:
-            self._poll_thread.join(timeout=2.0)
-            self._poll_thread = None
+        self.stop_acquisition()
         if not self._mock and self._session:
             self._session.stop()
         for pub in (
@@ -1168,7 +1183,14 @@ class ArmDriverNode(LifecycleNode):
                     tcp_pose=[float(x) for x in st.tcp_pose],
                     ext_wrench=[float(x) for x in st.ext_wrench_in_tcp],
                 )
-            # No sleep: states() is a cached read (~4 us, sec 1).
+            # states() is a cached read (~1.5 us measured: 615k polls/s),
+            # so this loop spun flat out and burned a full core per arm
+            # while the device only produces ~1000 samples/s. A CPU-bound
+            # Python thread holds the GIL for up to sys.getswitchinterval()
+            # at a time, which starves the trajectory send loop -- measured
+            # at 38 Hz against a configured 50 Hz with two of these running.
+            # 500 us still polls at 2 kHz, twice the device rate.
+            time.sleep(0.0005)
             if self._log_rdk_send_rate:
                 elapsed = time.monotonic() - window_t0
                 if elapsed >= self._log_rdk_send_interval:
@@ -1768,6 +1790,17 @@ def spin_arm_driver(node_name: str, namespace: str) -> None:
         executor.spin()
     except KeyboardInterrupt:
         pass
+    except Exception as exc:  # noqa: BLE001
+        # A redundant ACTIVATE raises RCLError("Transition is not registered")
+        # from inside rclpy's own lifecycle service callback, which lands here.
+        # Without this clause the process left via the bare finally below while
+        # the poll thread was still calling states(), and died with SIGSEGV on
+        # the freed flexiv::rdk::Robot instead of logging a cause.
+        node.get_logger().error(f"executor stopped: {exc!r}")
     finally:
+        # Stop acquisition BEFORE the node and its RDK session are destroyed.
+        # on_deactivate/on_cleanup do this too, but destroy_node() does not
+        # run lifecycle callbacks, so an exception-driven exit skipped them.
+        node.stop_acquisition()
         node.destroy_node()
         rclpy.shutdown()
