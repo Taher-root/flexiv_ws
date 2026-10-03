@@ -1007,6 +1007,9 @@ measured, what the code says, and what is still hypothesis. Summary:
    The remaining knob is the call rate, which is a U-curve with a minimum
    around 50 Hz — 2 Hz is badly jerky and 190 Hz is jerky again:
    `ros2 param set /left_arm/left_arm_driver trajectory_send_rate_hz 50.0`
+   Do not narrow `default_max_joint_vel` / `_acc` toward the trajectory's own
+   profile — that was tried and made it jerky again. The controller needs the
+   headroom; see [`docs/open_issues.md`](docs/open_issues.md) issue 1.
 2. **Up to 3 s dead time after a move**, from the goal settle timeout.
 3. **Chassis status is invisible.** `status_monitor` needs `flexivamr`, gives up
    permanently if its first connect fails, and nothing consumes `/amr/status`,
