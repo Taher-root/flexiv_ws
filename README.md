@@ -1001,9 +1001,14 @@ publisher on a topic.
 Tracked in **[`docs/open_issues.md`](docs/open_issues.md)**, with what was
 measured, what the code says, and what is still hypothesis. Summary:
 
-1. **MoveIt execution is jerky.** `default_max_joint_vel` is a fixed 1.5 rad/s,
-   unrelated to the trajectory being run. Workaround:
-   `ros2 param set /left_arm/left_arm_driver default_max_joint_vel 0.6`
+1. **Execution smoothness — resolved, with one knob left.** Motion used to read
+   as three distinct segments. Cause was `AddTimeOptimalParameterization`:
+   time-optimal means saturated acceleration, so the velocity profile is a
+   trapezoid whose acceleration steps discontinuously at the corners.
+   `AddRuckigTrajectorySmoothing` plus jerk limits fixed it.
+   The remaining knob is the call rate, which is a U-curve with a minimum
+   around 50 Hz — 2 Hz is badly jerky and 190 Hz is jerky again:
+   `ros2 param set /left_arm/left_arm_driver trajectory_send_rate_hz 50.0`
 2. **Up to 3 s dead time after a move**, from the goal settle timeout.
 3. **`joint_state_merger` overwrites the waist with 0.0** on `/joint_states`,
    which is below the mechanical limit.

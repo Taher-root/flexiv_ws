@@ -98,5 +98,10 @@ waist joints, since the left controller gains them under `control_waist`.
 - `longest_valid_segment_fraction: 0.005` is unusually tight. 0.01–0.02 would
   plan 2–4× faster, but collision-checking resolution is a deliberate
   trade-off and was left alone.
-- Execution smoothness and the post-move settle delay are driver-side, not
-  MoveIt — see [`open_issues.md`](open_issues.md) issues 1 and 2.
+- Execution smoothness **was** a MoveIt-side problem, not driver-side as
+  previously recorded here. `AddTimeOptimalParameterization` saturates
+  acceleration, so jerk is unbounded at the velocity profile's corners;
+  `AddRuckigTrajectorySmoothing` and the jerk limits in `joint_limits.yaml`
+  fix it. See [`open_issues.md`](open_issues.md) issue 1.
+- The post-move settle delay is driver-side and still open —
+  [`open_issues.md`](open_issues.md) issue 2.
