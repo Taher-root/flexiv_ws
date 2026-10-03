@@ -1010,12 +1010,11 @@ measured, what the code says, and what is still hypothesis. Summary:
    Do not narrow `default_max_joint_vel` / `_acc` toward the trajectory's own
    profile — that was tried and made it jerky again. The controller needs the
    headroom; see [`docs/open_issues.md`](docs/open_issues.md) issue 1.
-2. **Up to 3 s dead time after a move**, from the goal settle timeout.
-3. **Chassis status is invisible.** `status_monitor` needs `flexivamr`, gives up
+2. **Chassis status is invisible.** `status_monitor` needs `flexivamr`, gives up
    permanently if its first connect fails, and nothing consumes `/amr/status`,
    `/amr/emergency` or `/amr/blocked` even when it works. This is why a chassis
    E-stop reads as a Nav2 failure — check the physical light strip.
-4. Smaller: `longest_valid_segment_fraction: 0.005` is unusually tight;
+3. Smaller: `longest_valid_segment_fraction: 0.005` is unusually tight;
    `both_arms` plans in joint space but has no IK, so no pose goals or RViz
    marker (KDL cannot solve a two-tip group); four `.obj` visual meshes and six
    `.mtl` files are absent, so the URDF points those visuals at collision STLs.
