@@ -135,11 +135,20 @@ the route that uses what MoveIt produces as-is.
    needs a lock-free handoff — double buffer with an atomic swap, or an SPSC
    queue. This is the real design work and the examples say nothing about it.
 
-4. **The external axes.** `info().DoF` is 9 on this robot: two waist axes then
-   seven arm joints. `StreamJointPosition` takes the full vector, same as
-   `SendJointPosition`, but whether RT mode accepts or ignores the external
-   axes — and what `LockExternalAxes` does in RT mode — is unknown. The probe
-   is partly there to find out.
+4. **The external axes.** Most of this is already known and does not need
+   asking Flexiv. `robot.info()` reports the split directly, and the Python
+   driver reads all three fields at startup (`_init_rdk_dof_from_robot`): `DoF`
+   9, `DoF_m` 7 for the arm, `DoF_e` 2 for the external waist axes, with the
+   external axes first in the vector. In NRT this is proven on hardware —
+   `SendJointPosition` takes the full 9 and the waist moves under
+   `control_waist:=true`, after `LockExternalAxes(False)` in IDLE before
+   `SwitchMode`.
+
+   What is genuinely unknown is only the RT side: whether `StreamJointPosition`
+   expects the same 9, and whether `LockExternalAxes` behaves the same way with
+   an RT mode active. Neither is checkable from Python — the wheel registers no
+   RT modes — but both are answered by reading `flexiv/rdk/robot.hpp` once the
+   C++ RDK is installed, and confirmed by one run of the probe.
 
 5. **The host.** This is the real risk. `scheduler.max_priority()` requests
    SCHED_FIFO at a high priority; on a kernel **without PREEMPT_RT** that is
