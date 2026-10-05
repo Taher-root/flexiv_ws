@@ -1,0 +1,170 @@
+# aico2_rt_control
+
+Real-time (1 kHz) joint control for the Rizon4 arms via the Flexiv RDK **C++**
+API.
+
+**Nothing here is built or tested yet**, and nothing here changes
+`aico2_left_arm_driver`. That driver is Python, NRT, and works — it stays as it
+is. This package exists so the RT route can be evaluated without putting the
+working path at risk.
+
+---
+
+## Is Flexiv's example enough to write an RT controller through MoveIt?
+
+Short answer: **it is enough to prove RT works, and not enough to be a MoveIt
+controller.** The gap is ROS integration, real-time safety, and the host
+kernel — not the RDK.
+
+### What the examples give you
+
+Support linked the RT *joint torque* example. The one that matters for
+trajectory execution is **`intermediate1_realtime_joint_position_control.cpp`**,
+because it streams positions rather than torques:
+
+```cpp
+robot.SwitchMode(rdk::Mode::RT_JOINT_POSITION);
+...
+robot.StreamJointPosition(target_pos, target_vel, target_acc);   // 1 ms task
+```
+
+Three things come for free, and they are the hard parts:
+
+- **The RT loop itself.** `rdk::Scheduler::AddTask(fn, name, 1, max_priority())`
+  plus `Start()`. You do not write timing code, `clock_nanosleep`, or thread
+  priority handling.
+- **No internal motion generator.** `StreamJointPosition` takes no `max_vel` /
+  `max_acc` and does not re-plan. The controller tracks what you send. Every
+  problem chased in `docs/open_issues.md` issues 1 and 1a — the trapezoid's
+  unbounded jerk, the call-rate U-curve, the controller decelerating toward each
+  setpoint — is structurally absent, because there is no setpoint-to-setpoint
+  planning to interfere with.
+- **The enable / fault / operational pattern**, identical to the Python driver.
+
+The torque example also warns that its own impedance controller is "for demo
+purpose only and has no performance guarantee", pointing at
+`intermediate2_realtime_joint_impedance_control.cpp` for the robot's built-in
+one. Worth reading both before choosing between `RT_JOINT_POSITION` (stiff) and
+`RT_JOINT_IMPEDANCE` (compliant); the compliance work in
+`docs/rdk_version_and_compliance.md` suggests impedance is the more useful mode
+here.
+
+### What you still have to write
+
+1. **ROS 2 integration.** The examples are standalone `main()` functions. A
+   MoveIt controller needs a `FollowJointTrajectory` action server,
+   `/joint_states`, and lifecycle management — all of which exist in Python
+   today and would have to be written again in C++.
+
+2. **Real-time safety, which the examples do not demonstrate.** The periodic
+   task in `intermediate1` constructs three `std::vector<double>` per cycle.
+   That is fine in a demo and wrong in a control loop: `malloc` can block.
+   Nothing in a 1 kHz task may allocate, take a lock a non-RT thread holds, log,
+   or throw. `src/rt_hold_probe.cpp` is written to that standard and the
+   difference from the example is visible.
+
+3. **Trajectory handoff.** MoveIt delivers a whole trajectory on a ROS executor
+   thread; the 1 kHz task has to sample it without blocking on that thread. That
+   needs a lock-free handoff — double buffer with an atomic swap, or an SPSC
+   queue. This is the real design work and the examples say nothing about it.
+
+4. **The external axes.** `info().DoF` is 9 on this robot: two waist axes then
+   seven arm joints. `StreamJointPosition` takes the full vector, same as
+   `SendJointPosition`, but whether RT mode accepts or ignores the external
+   axes — and what `LockExternalAxes` does in RT mode — is unknown. The probe
+   is partly there to find out.
+
+5. **The host.** This is the real risk. `scheduler.max_priority()` requests
+   SCHED_FIFO at a high priority; on a kernel **without PREEMPT_RT** that is
+   best-effort. The Jetson also runs Nav2, RTAB-Map, two camera pipelines and a
+   DDS domain. In NRT a late command is covered by the robot's motion
+   generator; in RT there is nothing covering for you, so a missed deadline is
+   worse than the problem being solved. Measure before building.
+
+### Recommended order
+
+1. Install the C++ RDK (below) and run `rt_hold_probe`. It answers points 4 and
+   5 and whether RT works on this arm at all, for the cost of one small program.
+2. Only if the timing holds, write the ROS controller.
+3. Keep the Python NRT driver as the default either way. It works, and RT is
+   the wrong tool for executing a pre-planned trajectory that the robot can
+   already interpolate well.
+
+---
+
+## Installing the C++ RDK
+
+**The `flexivrdk` Python wheel does not satisfy this.** Verified on the robot:
+the wheel's bindings register no RT modes and no `Stream*` methods. RT lives in
+the C++ library, which is a separate artifact.
+
+```bash
+git clone -b v1.9 https://github.com/flexivrobotics/flexiv_rdk.git
+cd flexiv_rdk
+```
+
+Its dependencies are vendored by a helper script, then the library itself is a
+prebuilt static archive downloaded at configure time from the GitHub release
+(`libflexiv_rdk.aarch64-linux-gnu.ros2-jazzy.a` for this machine, with a SHA256
+check). Follow that repo's README for the current invocation — it changes
+between point releases, so it is deliberately not copied here. The one flag that
+matters:
+
+```
+-DRDK_SUPPORT_ROS2_JAZZY=ON
+```
+
+Without it you get `libflexiv_rdk.aarch64-linux-gnu.a`, which statically links
+Fast-RTPS and Fast-CDR and will collide with ROS 2's copies as soon as anything
+links `rclcpp`.
+
+Install it where CMake can find it, then:
+
+```bash
+cd ~/flexiv_ws
+colcon build --packages-select aico2_rt_control
+```
+
+Until `find_package(flexiv_rdk)` succeeds this package builds nothing and emits
+a warning rather than failing, so it cannot break a workspace build.
+
+---
+
+## rt_hold_probe
+
+Holds every joint where it is for a few seconds and reports what the 1 kHz loop
+actually achieved. The arm should not travel.
+
+```bash
+ros2 run aico2_rt_control rt_hold_probe Rizon4-063352
+ros2 run aico2_rt_control rt_hold_probe Rizon4-063352 --seconds 20
+```
+
+**Stop the Python arm driver first.** The RDK allows one session per robot, so
+`full_system.launch.py` or `arms.launch.py` must not be running. E-stop
+released, motion bar in Auto (Remote), as always.
+
+Output:
+
+```
+cycles          4998
+expected        5000
+mean period     1.0004 ms  (nominal 1.000)
+min period      0.9120 ms
+max period      1.3400 ms
+missed >1.5ms   0
+```
+
+How to read it:
+
+| Result | Meaning |
+|---|---|
+| `SwitchMode` throws | RT is not available on this arm as installed — the answer, cheaply |
+| misses 0, max near 1 ms | the host can hold the loop; RT is worth pursuing |
+| misses over 1% of cycles | not safe to drive the arm with on this host. Either isolate a core (`isolcpus`, `taskset`), move the arms off the Jetson, or stay on NRT |
+| fault during the loop | note what the robot reports; the probe only holds position, so a fault means the stream itself was rejected |
+
+Run it twice: once with the rest of the stack stopped, once with Nav2 and the
+cameras running. The difference between those two numbers is the thing that
+decides whether RT is viable here, and no amount of reading the examples
+answers it.
