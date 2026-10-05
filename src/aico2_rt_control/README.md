@@ -5,8 +5,11 @@ API.
 
 **Nothing here is built or tested yet**, and nothing here changes
 `aico2_left_arm_driver`. That driver is Python, NRT, and works — it stays as it
-is. This package exists so the RT route can be evaluated without putting the
-working path at risk.
+is, as the fallback and as the comparison.
+
+Both arms already carry `RDK-Professional`, so RT is licensed and the API is
+public. The one remaining blocker is installing the C++ library, which is a free
+download. See [the three prerequisites](#the-three-prerequisites-and-where-each-one-stands).
 
 ---
 
@@ -157,20 +160,23 @@ the route that uses what MoveIt produces as-is.
    generator; in RT there is nothing covering for you, so a missed deadline is
    worse than the problem being solved. Measure before building.
 
-### What we have, and what has to be asked for
+### The three prerequisites, and where each one stands
 
-Three separate things are needed, and they fail for different reasons. Checked
-against the public v1.9 headers (`flexivrobotics/flexiv_rdk`, tag `v1.9`):
+Checked against the public v1.9 headers (`flexivrobotics/flexiv_rdk`, tag
+`v1.9`) and against both arms. Nothing here needs asking Flexiv.
 
-| | State | How it is obtained |
+| | State | Evidence |
 |---|---|---|
-| The RT API | **Exists, public** | `include/flexiv/rdk/robot.hpp:501` declares `StreamJointPosition(positions, velocities, accelerations)`, applicable modes `RT_JOINT_IMPEDANCE, RT_JOINT_POSITION`. `mode.hpp` lists `RT_JOINT_TORQUE`, `RT_JOINT_IMPEDANCE`, `RT_JOINT_POSITION`, `RT_CARTESIAN_MOTION_FORCE`. Nothing is hidden. |
-| The C++ library | **Not installed** | A download, free. See below. The Python wheel will never do: upstream names every file in `example_py/` `non_realtime_*` and every RT example is C++. The Jetson reporting `RT modes: []` and `Stream methods: []` is the correct current state of the bindings, not a stale wheel. |
-| A licence permitting the RT modes | **Unknown — the actual gate** | `SwitchMode` "throw[s] `std::invalid_argument` if the requested mode is invalid **or unlicensed**" (`robot.hpp:205`), and `Robot`'s constructor throws "if the connected robot lacks a valid RDK license" (`robot.hpp:41`). This is the thing to ask Flexiv for, if we turn out not to have it. |
+| The RT API | **Public, exists** | `robot.hpp:501` declares `StreamJointPosition(positions, velocities, accelerations)`, applicable modes `RT_JOINT_IMPEDANCE, RT_JOINT_POSITION`. `mode.hpp` lists `RT_JOINT_TORQUE`, `RT_JOINT_IMPEDANCE`, `RT_JOINT_POSITION`, `RT_CARTESIAN_MOTION_FORCE`. Nothing hidden or gated. |
+| A licence permitting RT | **Already held, both arms** | `license_type` reads `RDK-Professional+TDK-Standard` on Rizon4-063352 and Rizon4R-062077, and the RDK logs `Validated license: RDK-Professional` on connect. Robot software v3.11, RDK v1.9. |
+| The C++ library | **Not installed — the only remaining blocker** | A free download, and the one thing left to do. See [Installing the C++ RDK](#installing-the-c-rdk). |
 
-The licence is checkable without asking anyone. `RobotInfo` carries a
-`license_type` field (`data.hpp:124`), in the same struct the driver already
-reads `DoF` / `DoF_m` / `DoF_e` from:
+So the gate that looked like a licence request is not one. `SwitchMode` throws
+`std::invalid_argument` when a mode is "invalid or unlicensed"
+(`robot.hpp:205`), and `Robot`'s constructor throws if the robot "lacks a valid
+RDK license" (`robot.hpp:41`) — neither applies here.
+
+To re-check at any time, per arm (the licence is per robot):
 
 ```bash
 python3 src/aico2_rt_control/scripts/check_rt_license.py Rizon4-063352
@@ -178,8 +184,8 @@ python3 src/aico2_rt_control/scripts/check_rt_license.py Rizon4R-062077
 ```
 
 Read-only — it never enables the robot or switches mode. It does take the one
-RDK session, so stop the Python driver first. Run it on both arms; the licence
-is per robot, and they may differ.
+RDK session, so stop the Python driver first.
+
 
 ### A detail from the header that explains the NRT behaviour
 
@@ -303,13 +309,16 @@ accepted, and check `robot.fault()` every cycle.
 
 ## Installing the C++ RDK
 
+This is the only thing standing between here and RT. Both arms are licensed
+(see above) and the API is public; the library is a free download.
+
 **The `flexivrdk` Python wheel does not satisfy this.** Verified on the robot:
-the wheel's bindings register no RT modes and no `Stream*` methods. RT lives in
-the C++ library, which is a separate artifact.
+the wheel's bindings register no RT modes and no `Stream*` methods. That is
+upstream's design, not a stale install — every file in the RDK's `example_py/`
+is named `non_realtime_*` and every RT example is C++.
 
 ```bash
 git clone -b v1.9 https://github.com/flexivrobotics/flexiv_rdk.git
-cd flexiv_rdk
 ```
 
 **The branch matters.** `v1.x` through `v1.9.3` is Rizon; `v2.x` is Enlight, and
@@ -318,32 +327,59 @@ its API is not source-compatible — on `main` (v2.1) `StreamJointPosition` take
 Cloning the default branch gives code that will not compile against anything
 written for these arms.
 
-Its dependencies are vendored by a helper script, then the library itself is a
-prebuilt static archive downloaded at configure time from the GitHub release
-(`libflexiv_rdk.aarch64-linux-gnu.ros2-jazzy.a` for this machine, with a SHA256
-check). Follow that repo's README for the current invocation — it changes
-between point releases, so it is deliberately not copied here. The one flag that
-matters:
+Dependencies first — Eigen3, spdlog, Fast-RTPS, Fast-CDR, RBDyn — vendored into
+a prefix of your choosing by the RDK's own script:
 
-```
--DRDK_SUPPORT_ROS2_JAZZY=ON
+```bash
+sudo apt install build-essential cmake
+cd flexiv_rdk/thirdparty
+bash build_and_install_dependencies.sh ~/rdk_install
 ```
 
-Without it you get `libflexiv_rdk.aarch64-linux-gnu.a`, which statically links
-Fast-RTPS and Fast-CDR and will collide with ROS 2's copies as soon as anything
-links `rclcpp`.
+Then the library itself. It is a prebuilt static archive the CMake project
+downloads at configure time from the GitHub release, with a SHA256 check against
+`lib/*.sha256`:
 
-Install it where CMake can find it, then:
+```bash
+cd flexiv_rdk
+mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install -DRDK_SUPPORT_ROS2_JAZZY=ON
+cmake --build . --target install --config Release
+```
+
+`-DRDK_SUPPORT_ROS2_JAZZY=ON` is not optional here. It selects
+`libflexiv_rdk.aarch64-linux-gnu.ros2-jazzy.a` instead of
+`libflexiv_rdk.aarch64-linux-gnu.a`; the plain archive statically links Fast-RTPS
+and Fast-CDR, and so does ROS 2, so the two collide as soon as anything links
+`rclcpp`. Flexiv ships the variant precisely so they can coexist. Without the
+flag, `CMakeLists.txt` falls through to the plain archive silently.
+
+Then build this package, pointing CMake at the prefix:
 
 ```bash
 cd ~/flexiv_ws
-colcon build --packages-select aico2_rt_control
+colcon build --packages-select aico2_rt_control \
+    --cmake-args -DCMAKE_PREFIX_PATH=$HOME/rdk_install
 ```
 
 Until `find_package(flexiv_rdk)` succeeds this package builds nothing and emits
-a warning rather than failing, so it cannot break a workspace build.
+a warning rather than failing, so it cannot break a workspace build. The warning
+in a `colcon build` log is the expected state before this is done, not an error.
+
+The dependencies install as shared libraries under the prefix, so a binary needs
+to find them at runtime:
+
+```bash
+LD_LIBRARY_PATH=$HOME/rdk_install/lib ros2 run aico2_rt_control rt_hold_probe Rizon4-063352
+```
+
+If that becomes tiresome, set `BUILD_RPATH`/`INSTALL_RPATH` on the target in
+`CMakeLists.txt` rather than exporting `LD_LIBRARY_PATH` globally — a
+system-wide `LD_LIBRARY_PATH` pointing at a prefix that carries its own Fast-RTPS
+is a good way to break unrelated ROS 2 nodes.
 
 ---
+
 
 ## rt_hold_probe
 
