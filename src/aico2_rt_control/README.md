@@ -157,14 +157,106 @@ the route that uses what MoveIt produces as-is.
    generator; in RT there is nothing covering for you, so a missed deadline is
    worse than the problem being solved. Measure before building.
 
+### Why RT is the target here
+
+The decision is RT. The reason is not raw rate, it is ownership of the
+interpolant.
+
+In NRT the driver streams `SendJointPosition(q, dq, max_vel, max_acc)` and the
+robot's internal motion generator re-plans toward each setpoint under those
+caps. The motion that comes out is therefore a property of a generator that is
+not ours, driven at a rate that was found empirically. That is the whole of
+`docs/open_issues.md` issue 1a: 2 Hz is badly jerky because the generator
+decelerates toward each setpoint, 50 Hz is smoothest, 190 Hz degrades again
+because the robot is being pre-empted. Nothing in that curve is controllable
+from here, and no value of the send rate makes it ours.
+
+`StreamJointPosition(pos, vel, acc)` in `RT_JOINT_POSITION` takes no caps and
+does no planning. The controller tracks what it is given. So the interpolation
+becomes ours, it is deterministic — the same trajectory produces the same joint
+path every run — and the velocity and acceleration from MoveIt go to the
+controller as feedforward instead of as hints to a generator. The rate U-curve
+stops existing, because there is no setpoint-to-setpoint planning left to
+interfere with.
+
+The cost is that nothing covers for a missed deadline. That is what
+`rt_hold_probe` measures, and it is the one thing worth knowing before the arm
+is driven this way.
+
+### Design: trajectory buffer plus a 1 kHz sampler
+
+MoveIt delivers a whole trajectory, sparsely — 22 points for a typical move.
+The 1 kHz task needs 1000 setpoints a second. So the trajectory is buffered once
+and sampled continuously; that resampling is the controller.
+
+**Buffering.** Preallocate the buffers at startup and never allocate again:
+
+```cpp
+struct Waypoint {
+    double t;                      // time_from_start, seconds
+    double q[kMaxDof], dq[kMaxDof], ddq[kMaxDof];
+};
+struct TrajBuffer { Waypoint pts[kMaxPoints]; std::size_t n; };
+
+TrajBuffer                     slots[2];
+std::atomic<TrajBuffer*>       active{nullptr};   // nullptr = hold position
+std::atomic<std::uint64_t>     consumed{0};       // bumped by the RT task
+```
+
+`kMaxPoints` 4096 and `kMaxDof` 9 is about 1.8 MB for both slots, which is
+nothing, and makes an over-long trajectory a rejected goal rather than a
+`malloc` in the control loop.
+
+**Handoff.** One writer (the ROS executor thread), one reader (the RT task).
+The writer fills the inactive slot, then `active.store(ptr, release)`; the
+reader does `active.load(acquire)` once per cycle. Two slots are only safe if
+the writer never overwrites a slot the reader could still be holding, so the RT
+task bumps `consumed` after each swap it observes, and the writer waits for that
+acknowledgement before reusing the old slot. **The writer blocks, never the
+reader** — a few milliseconds on the ROS thread is free, and a new goal arrives
+every few seconds against a loop running every millisecond.
+
+**Sampling.** Per cycle, with `t` from `steady_clock` since the trajectory
+started:
+
+- Advance a cached segment index forward to the span with
+  `pts[i].t <= t < pts[i+1].t`. `t` is monotonic, so this is O(1) amortized and
+  needs no search.
+- Evaluate a **quintic Hermite** on that segment from `(q, dq, ddq)` at both
+  ends. It reproduces MoveIt's values exactly at the knots and is C² inside, so
+  acceleration is continuous across waypoint boundaries. That matters: the
+  discontinuous acceleration at a trapezoid's corners is precisely what made
+  execution jerky before Ruckig, and a cubic interpolant here would reintroduce
+  it at every knot.
+- Past the last waypoint, hold its `q` with `dq = ddq = 0` and set an atomic
+  done flag for the ROS thread to finish the action on.
+- With `active == nullptr`, hold the `q` captured at mode entry — what
+  `rt_hold_probe` already does.
+
+**What must not be in the task:** allocation, locks a non-RT thread can hold,
+logging, `throw`. Statistics accumulate in plain members the RT thread alone
+writes, read after `Stop()`.
+
+**What must be on the ROS thread instead:** the joint name-to-index map. MoveIt
+sends URDF joint names; the RDK vector is external axes first
+(`DoF_e` 2, then `DoF_m` 7). Resolve that when the goal arrives.
+
+**Limit clamping is now mandatory.** In NRT the generator's `max_vel` /
+`max_acc` were a backstop between a bad buffer and the joints. In RT there is
+nothing there. Validate the trajectory against the URDF limits when the goal is
+accepted, and check `robot.fault()` every cycle.
+
 ### Recommended order
 
-1. Install the C++ RDK (below) and run `rt_hold_probe`. It answers points 4 and
-   5 and whether RT works on this arm at all, for the cost of one small program.
-2. Only if the timing holds, write the ROS controller.
-3. Keep the Python NRT driver as the default either way. It works, and RT is
-   the wrong tool for executing a pre-planned trajectory that the robot can
-   already interpolate well.
+1. Install the C++ RDK (below) and run `rt_hold_probe`. It answers point 4,
+   point 5, and whether RT works on this arm at all, for the cost of one small
+   program. If the loop cannot hold on this host, that is worth knowing before
+   any of the above gets written.
+2. Then the sampler and the action server, per the design above.
+3. Keep the Python NRT driver working alongside it. It is the fallback if the
+   host timing turns out not to hold, and the comparison that says whether RT
+   actually improved the motion.
+
 
 ---
 
