@@ -135,20 +135,13 @@ the route that uses what MoveIt produces as-is.
    needs a lock-free handoff — double buffer with an atomic swap, or an SPSC
    queue. This is the real design work and the examples say nothing about it.
 
-4. **The external axes.** Most of this is already known and does not need
-   asking Flexiv. `robot.info()` reports the split directly, and the Python
-   driver reads all three fields at startup (`_init_rdk_dof_from_robot`): `DoF`
-   9, `DoF_m` 7 for the arm, `DoF_e` 2 for the external waist axes, with the
-   external axes first in the vector. In NRT this is proven on hardware —
-   `SendJointPosition` takes the full 9 and the waist moves under
-   `control_waist:=true`, after `LockExternalAxes(False)` in IDLE before
-   `SwitchMode`.
+4. **The external axes — answered, from the header.** `StreamJointPosition`
+   "throw[s] `std::invalid_argument` if size of any input vector does not match
+   robot DoF", so it takes the full 9 exactly as `SendJointPosition` does. The
+   split comes from `robot.info()`, which the Python driver already reads: `DoF`
+   9, `DoF_m` 7 for the arm, `DoF_e` 2 for the external waist axes, external
+   first. Nothing to ask support about.
 
-   What is genuinely unknown is only the RT side: whether `StreamJointPosition`
-   expects the same 9, and whether `LockExternalAxes` behaves the same way with
-   an RT mode active. Neither is checkable from Python — the wheel registers no
-   RT modes — but both are answered by reading `flexiv/rdk/robot.hpp` once the
-   C++ RDK is installed, and confirmed by one run of the probe.
 
 5. **The host.** This is the real risk. `scheduler.max_priority()` requests
    SCHED_FIFO at a high priority; on a kernel **without PREEMPT_RT** that is
@@ -156,6 +149,47 @@ the route that uses what MoveIt produces as-is.
    DDS domain. In NRT a late command is covered by the robot's motion
    generator; in RT there is nothing covering for you, so a missed deadline is
    worse than the problem being solved. Measure before building.
+
+### What we have, and what has to be asked for
+
+Three separate things are needed, and they fail for different reasons. Checked
+against the public v1.9 headers (`flexivrobotics/flexiv_rdk`, tag `v1.9`):
+
+| | State | How it is obtained |
+|---|---|---|
+| The RT API | **Exists, public** | `include/flexiv/rdk/robot.hpp:501` declares `StreamJointPosition(positions, velocities, accelerations)`, applicable modes `RT_JOINT_IMPEDANCE, RT_JOINT_POSITION`. `mode.hpp` lists `RT_JOINT_TORQUE`, `RT_JOINT_IMPEDANCE`, `RT_JOINT_POSITION`, `RT_CARTESIAN_MOTION_FORCE`. Nothing is hidden. |
+| The C++ library | **Not installed** | A download, free. See below. The Python wheel will never do: upstream names every file in `example_py/` `non_realtime_*` and every RT example is C++. The Jetson reporting `RT modes: []` and `Stream methods: []` is the correct current state of the bindings, not a stale wheel. |
+| A licence permitting the RT modes | **Unknown — the actual gate** | `SwitchMode` "throw[s] `std::invalid_argument` if the requested mode is invalid **or unlicensed**" (`robot.hpp:205`), and `Robot`'s constructor throws "if the connected robot lacks a valid RDK license" (`robot.hpp:41`). This is the thing to ask Flexiv for, if we turn out not to have it. |
+
+The licence is checkable without asking anyone. `RobotInfo` carries a
+`license_type` field (`data.hpp:124`), in the same struct the driver already
+reads `DoF` / `DoF_m` / `DoF_e` from:
+
+```bash
+python3 src/aico2_rt_control/scripts/check_rt_license.py Rizon4-063352
+python3 src/aico2_rt_control/scripts/check_rt_license.py Rizon4R-062077
+```
+
+Read-only — it never enables the robot or switches mode. It does take the one
+RDK session, so stop the Python driver first. Run it on both arms; the licence
+is per robot, and they may differ.
+
+### A detail from the header that explains the NRT behaviour
+
+Worth recording, because it is the documented mechanism behind
+`docs/open_issues.md` issue 1a. `SendJointPosition`'s own warning:
+
+> Calling this function a second time while the motion from the previous call is
+> still ongoing will trigger an online re-planning of the joint trajectory, such
+> that the previous command is aborted and the new command starts to execute.
+
+So streaming at 50 Hz means aborting and re-planning every 20 ms, by design.
+Also note the NRT meaning of `velocities`: "Each joint will maintain this amount
+of velocity when it reaches the target position" — a terminal condition for the
+generator's plan, not feedforward. In RT the same argument *is* feedforward, and
+`StreamJointPosition` carries no `max_vel` / `max_acc` because there is no plan
+to bound. That difference is the whole reason for this package.
+
 
 ### Why RT is the target here
 
@@ -271,6 +305,12 @@ git clone -b v1.9 https://github.com/flexivrobotics/flexiv_rdk.git
 cd flexiv_rdk
 ```
 
+**The branch matters.** `v1.x` through `v1.9.3` is Rizon; `v2.x` is Enlight, and
+its API is not source-compatible — on `main` (v2.1) `StreamJointPosition` takes
+`const std::map<JointGroup, RtJointPositionCmd>&` instead of three vectors.
+Cloning the default branch gives code that will not compile against anything
+written for these arms.
+
 Its dependencies are vendored by a helper script, then the library itself is a
 prebuilt static archive downloaded at configure time from the GitHub release
 (`libflexiv_rdk.aarch64-linux-gnu.ros2-jazzy.a` for this machine, with a SHA256
@@ -327,7 +367,7 @@ How to read it:
 
 | Result | Meaning |
 |---|---|
-| `SwitchMode` throws | RT is not available on this arm as installed — the answer, cheaply |
+| `SwitchMode` throws `std::invalid_argument` | the mode is invalid **or unlicensed** (`robot.hpp:205`). Check `license_type` with `scripts/check_rt_license.py`; if RT is not licensed, that is the request to make to Flexiv |
 | misses 0, max near 1 ms | the host can hold the loop; RT is worth pursuing |
 | misses over 1% of cycles | not safe to drive the arm with on this host. Either isolate a core (`isolcpus`, `taskset`), move the arms off the Jetson, or stay on NRT |
 | fault during the loop | note what the robot reports; the probe only holds position, so a fault means the stream itself was rejected |
