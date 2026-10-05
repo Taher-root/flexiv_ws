@@ -49,6 +49,73 @@ one. Worth reading both before choosing between `RT_JOINT_POSITION` (stiff) and
 `docs/rdk_version_and_compliance.md` suggests impedance is the more useful mode
 here.
 
+### Problems in the torque example as shipped
+
+`intermediate3_realtime_joint_torque_control.cpp` is worth reading and is not
+worth copying. Four things are wrong with it on this robot:
+
+1. **It reads past the end of its gain arrays.** `kImpedanceKp` and
+   `kImpedanceKd` have seven entries, and the control loop runs
+   `for (size_t i = 0; i < target_torque.size(); ++i)` where `target_torque` was
+   sized `robot.info().DoF`. On a plain Rizon4 — the `Rizon4s-123456` in the
+   example's own help text — DoF is 7 and it happens to work. On the AICO2 DoF
+   is **9**: two external waist axes plus seven arm joints. Iterations 7 and 8
+   index both gain arrays out of bounds, so the torque commanded to the waist
+   axes is computed from whatever is in adjacent memory. This is worth reporting
+   upstream; it affects any Rizon with external axes, not just this one.
+
+2. **It replaces the robot's controller with a hand-written PD law** and says so:
+   the comment calls it "for demo purpose only" with "no performance guarantee"
+   and points at `intermediate2_realtime_joint_impedance_control.cpp` for the
+   built-in one. For trajectory execution there is no reason to prefer the demo.
+
+3. **The periodic task is not RT-safe.** It constructs two
+   `std::vector<double>` per cycle, calls `robot.states()` twice per joint
+   inside the loop rather than once per cycle, and can `throw` from inside the
+   1 ms task. Allocation and exceptions in a 1 kHz loop are exactly what a
+   missed deadline is made of.
+
+4. **Smaller things.** `static unsigned int loop_counter` is function-local
+   state that breaks if two arms ever run in one process; `ExecutePlan("PLAN-Home")`
+   needs a plan of that name authored on the robot; and the "trajectory" is a
+   hardcoded sine with no external input, so none of the handoff problem is
+   demonstrated.
+
+### What MoveIt actually hands a controller
+
+This decides which RT mode is the right target, so it is worth being precise.
+A `trajectory_msgs/JointTrajectoryPoint` has five fields:
+
+`positions`, `velocities`, `accelerations`, `effort`, `time_from_start`.
+
+MoveIt's planning pipeline fills the first three and the timestamp.
+`effort` is left empty — OMPL plans in configuration space and the time
+parameterization adapters produce a kinematic profile, not a dynamic one.
+Nothing in `aico2_moveit_config` changes that.
+
+Two consequences:
+
+- **A torque controller cannot be driven from MoveIt output directly.** There
+  are no torques in the message to forward. What you *can* do is write a
+  control law that turns the kinematic triple into torque — a PD term on
+  position and velocity error plus an inverse-dynamics feedforward on
+  `accelerations`. That is computed-torque control, it is a real option, and it
+  is precisely the thing `intermediate3` sketches badly: the gains are
+  hardcoded constants with no feedforward term at all. Doing it properly needs
+  the robot's dynamics (the RDK's `Model` class, per its dynamics example) and
+  gain tuning on hardware.
+- **`RT_JOINT_POSITION` is a field-for-field match.**
+  `StreamJointPosition(pos, vel, acc)` takes the same three vectors the
+  trajectory point carries, so the controller body is a lookup into the
+  trajectory at the current time and one call. `RT_JOINT_IMPEDANCE` takes
+  positions too and adds compliance using Flexiv's own tuned controller — the
+  thing the torque demo warns it is not.
+
+So: torque is reachable but means authoring and tuning a controller that the
+robot already contains a better version of. Impedance or position streaming is
+the route that uses what MoveIt produces as-is.
+
+
 ### What you still have to write
 
 1. **ROS 2 integration.** The examples are standalone `main()` functions. A
