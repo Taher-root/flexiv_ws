@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>aico2_rt_control</name>
+  <version>0.0.1</version>
+  <description>
+    Real-time (1 kHz) joint control for the AICO2 Rizon4 arms via the Flexiv
+    RDK C++ API. Separate from aico2_left_arm_driver on purpose: that driver is
+    Python and NRT, it works, and nothing here changes it.
+
+    Status: UNBUILT AND UNTESTED. Needs the RDK C++ library, which is a
+    different artifact from the flexivrdk Python wheel. See README.md.
+  </description>
+  <maintainer email="taherk@seas.upenn.edu">Taher Kapadia</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Only needed once the ROS-integrated controller exists; the standalone
+       RT probe in src/ links nothing from ROS. -->
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>trajectory_msgs</depend>
+  <depend>control_msgs</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

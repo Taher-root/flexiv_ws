@@ -64,12 +64,27 @@ measured.
 
 **Not swept:** 20 and 30 Hz. The minimum may sit below 50.
 
-**Asked of Flexiv (2026-10-03):** recommended call rate, whether a complete
+**Answered by Flexiv support (2026-10-05):** RT control **is** available on
+the Rizon series with the RDK-Professional licence we hold, but only from
+**C++** — the Python bindings are NRT-only by design, which matches what we
+measured. RDK v1.x up to v1.9.3 is the Rizon line; v2.x is Enlight only, so
+the 2.x `ProductModel` enum reading was right.
+
+`RT_JOINT_POSITION` + `StreamJointPosition(pos, vel, acc)` takes no
+`max_vel` / `max_acc` and does no internal planning, so this whole U-curve is
+structurally absent in RT: there is no setpoint-to-setpoint planning to
+pre-empt or starve. It is the real fix rather than a tuning exercise.
+
+Not pursued yet, and NRT stays the default: RT means owning a 1 kHz loop on a
+Jetson with no PREEMPT_RT kernel that also runs Nav2, RTAB-Map and two camera
+pipelines, and a missed deadline in RT is worse than NRT because nothing
+interpolates for you. Evaluation scaffolding is in `aico2_rt_control`, which
+builds nothing until the C++ RDK is installed and changes nothing in the
+existing driver. Start with its `rt_hold_probe`.
+
+Still unanswered: the recommended NRT call rate, and whether a complete
 externally time-parameterised joint trajectory can be handed over as one
-motion, and whether RT control is available for the AICO2-4. For the record,
-verified on the robot: 1.9.0 exposes no RT modes and no `Stream*` methods,
-and no multi-waypoint function (`dir(Robot)` gives only `ExecutePlan`,
-`PausePlan`, `StopPlan`).
+motion.
 
 ---
 
