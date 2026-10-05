@@ -140,7 +140,14 @@ the route that uses what MoveIt produces as-is.
    robot DoF", so it takes the full 9 exactly as `SendJointPosition` does. The
    split comes from `robot.info()`, which the Python driver already reads: `DoF`
    9, `DoF_m` 7 for the arm, `DoF_e` 2 for the external waist axes, external
-   first. Nothing to ask support about.
+   first.
+
+   `LockExternalAxes` is answered too: applicable control mode `IDLE`, taking
+   effect "during primitive execution, **direct joint control**, and direct
+   Cartesian control modes" (`robot.hpp:272`). Direct joint control covers the
+   RT joint modes as much as the NRT ones, so the existing order — call it while
+   IDLE, before `SwitchMode` — carries over unchanged. Nothing to ask support
+   about on either count.
 
 
 5. **The host.** This is the real risk. `scheduler.max_priority()` requests
