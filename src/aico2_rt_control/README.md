@@ -603,37 +603,59 @@ or `rm -rf build/aico2_rt_control install/aico2_rt_control` first.
 
 **`*** stack smashing detected ***: terminated`** shortly after the RDK banner.
 
-Do not trust where it appears to stop. `abort()` discards buffered stdout and
-`ros2 run` pipes it, so the last line you see is the last one that happened to
-flush — which is the RDK's startup banner, potentially many calls earlier than
-the fault. Establish where it actually dies before theorising:
+**Confirmed on hardware (2026-10-06) to be the library, not this workspace.**
+Flexiv's own `basics1_display_robot_states`, built from their unmodified
+`example/CMakeLists.txt` against the same prefix, aborts identically:
 
-```bash
-# unbuffered, and straight to a terminal rather than through ros2 run
-stdbuf -o0 -e0 ./install/aico2_rt_control/lib/aico2_rt_control/rt_hold_probe Rizon4-063352
+```
+[info] | | | | | |  Flexiv RDK v1.9  | | | | | |
+*** stack smashing detected ***: terminated
+Aborted (core dumped)
 ```
 
-Then decide whether the fault is in this package or in the RDK install, by
-building Flexiv's own example against the same prefix:
+The combination is the v1.9 **`ros2-jazzy`** prebuilt archive linked against the
+Fast-DDS and Fast-CDR that ROS 2 Jazzy currently ships. From the example's own
+link line:
 
-```bash
-source /opt/ros/jazzy/setup.bash
-cd ~/flexiv_rdk/example && mkdir -p build && cd build
-cmake .. -DCMAKE_PREFIX_PATH=$HOME/rdk_install
-cmake --build . --config Release -j"$(nproc)"
-./basics1_display_robot_states Rizon4-063352
+```
+/root/rdk_install/lib/libflexiv_rdk.a
+/opt/ros/jazzy/lib/libfastrtps.so.2.14.6
+/opt/ros/jazzy/lib/libfastcdr.so.2.2.7
 ```
 
-- The example **also** crashes → the library and its dependencies are the
-  problem, not this package. That is a clean reproducer worth sending to Flexiv,
-  since the prebuilt `ros2-jazzy` archive is being combined with whatever
-  Fast-DDS and Fast-CDR versions ROS 2 Jazzy happens to ship (here 2.14.6 and
-  2.2.7) and nothing documents which it was built against.
-- The example **works** → the difference is in this package's build. Compare
-  against `example/CMakeLists.txt`, which is deliberately minimal: C++17,
-  `target_link_libraries(... flexiv::flexiv_rdk)`, and `CMAKE_BUILD_TYPE`
-  forced to `Release` when unset. The last of those is the one colcon gets
-  wrong by default, which is why this package now forces it too.
+Nothing states which versions that archive was built against, and a struct
+layout change in a patch release would present exactly this way: it links
+cleanly, then overruns a stack buffer inside the `Robot` constructor. Worth
+reporting — it is a two-command reproducer using only Flexiv's own example and
+stock Jazzy.
+
+Note the apparent crash point is not the real one. `abort()` discards buffered
+stdout, so the last line shown is simply the last one that flushed. Run the
+binary directly rather than through `ros2 run`, and under `stdbuf -o0 -e0`, to
+see how far it really gets.
+
+**The way round it:** the plain (non-ROS 2) archive with Flexiv's own vendored
+dependency versions, in a separate prefix, built with ROS 2 *not* sourced:
+
+```bash
+bash src/aico2_rt_control/scripts/install_rdk.sh --standalone
+
+cd src/aico2_rt_control/standalone
+cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/rdk_standalone
+cmake --build build -j
+./build/rt_hold_probe Rizon4-063352
+```
+
+That archive statically links Fast-RTPS and Fast-CDR, which only matters for a
+binary that also links `rclcpp` — and `rt_hold_probe` does not; it is RDK plus
+`iostream`. So the measurement this package exists to take can be made now,
+while the ROS 2 integration waits on either the archive being fixed or the robot
+software supporting v1.9.4+, where one self-contained `.so` makes the collision
+impossible.
+
+Check Flexiv's `basics1` against the standalone prefix first — if that also
+crashes, the problem is not the Fast-DDS versions and the reproducer to send is
+stronger still.
 
 **`ignoring unknown package 'aico2_rt_control' in --packages-select`.**
 `colcon` was run from somewhere other than the workspace root, so it saw no
