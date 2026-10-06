@@ -218,6 +218,11 @@ int main(int argc, char** argv)
 
         // Limits from the robot's own software limits, except acceleration,
         // which RobotInfo does not carry.
+        // How wide the waist pin window is. Printed at startup, because a
+        // stale binary with a narrower window refuses every goal and the
+        // symptom ("outside joint limits") does not say which build is running.
+        constexpr double kPinEpsilon = 1e-3;
+
         aico2_rt::Limits limits{};
         for (std::uint32_t j = 0; j < dof; ++j) {
             limits.q_min[j] = info.q_min[j];
@@ -251,15 +256,15 @@ int main(int argc, char** argv)
             //
             // 1e-3 rad is 0.057 degrees: far too small to be motion anyone
             // would notice, and roughly 60 times the observed tracking error.
-            constexpr double kPinEpsilon = 1e-3;
             for (std::uint32_t j = 0; j < ext && j < dof; ++j) {
                 limits.q_min[j] = q_now[j] - kPinEpsilon;
                 limits.q_max[j] = q_now[j] + kPinEpsilon;
                 limits.dq_max[j] = kPinEpsilon;
                 limits.ddq_max[j] = kPinEpsilon;
             }
-            std::printf("waist NOT commanded: axes 0..%u pinned at their current position\n",
-                ext ? ext - 1 : 0);
+            std::printf("waist NOT commanded: axes 0..%u pinned within +/-%.1e rad"
+                        " (%.4f deg) of their current position\n",
+                ext ? ext - 1 : 0, kPinEpsilon, kPinEpsilon * 57.29577951308232);
         } else {
             std::printf("waist WILL be commanded (--control-waist)\n");
         }

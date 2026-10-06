@@ -188,6 +188,18 @@ private:
         return aico2_rt::RejectReason::kNone;
     }
 
+    /**
+     * @brief Accept almost everything, and let Execute explain any refusal.
+     *
+     * A REJECTED goal carries no result message in ROS 2 -- the caller learns
+     * only that it was refused, and the reason exists solely in this node's
+     * log. That made every failed goal a trip to another terminal. So the real
+     * validation happens in Execute, which can abort with the detail in
+     * error_string, where the caller and MoveIt both see it.
+     *
+     * Only genuine impossibilities are rejected here: no running server, and no
+     * readable state. Neither has anything useful to say beyond itself.
+     */
     rclcpp_action::GoalResponse HandleGoal(
         const rclcpp_action::GoalUUID&, std::shared_ptr<const FollowJointTrajectory::Goal> goal)
     {
@@ -197,59 +209,60 @@ private:
                 aico2_rt::RejectReasonName(aico2_rt::RejectReason::kServerNotRunning));
             return rclcpp_action::GoalResponse::REJECT;
         }
-        aico2_rt::Measured meas{};
-        if (!aico2_rt::ReadMeasured(*shm_, meas)) {
-            RCLCPP_ERROR(get_logger(), "rejecting: no coherent state from the server");
-            return rclcpp_action::GoalResponse::REJECT;
-        }
-        if (meas.operational == 0u || meas.fault != 0u) {
-            RCLCPP_ERROR(get_logger(), "rejecting: %s",
-                aico2_rt::RejectReasonName(aico2_rt::RejectReason::kNotOperational));
-            return rclcpp_action::GoalResponse::REJECT;
-        }
+        (void)goal;  // read in Execute via handle->get_goal()
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+    }
 
-        std::vector<aico2_rt::Point> pts;
-        const auto convert_why = Convert(goal->trajectory, pts);
+    /** @return an empty string when the goal is usable, else why not. */
+    std::string Validate(const trajectory_msgs::msg::JointTrajectory& jt,
+        std::vector<aico2_rt::Point>& pts, const aico2_rt::Measured& meas)
+    {
+        const auto convert_why = Convert(jt, pts);
         if (convert_why != aico2_rt::RejectReason::kNone) {
-            RCLCPP_ERROR(get_logger(), "rejecting goal: %s",
-                aico2_rt::RejectReasonName(convert_why));
-            return rclcpp_action::GoalResponse::REJECT;
+            return aico2_rt::RejectReasonName(convert_why);
         }
         const auto why = aico2_rt::ValidateTrajectory(
             pts.data(), static_cast<std::uint32_t>(pts.size()), meas.q, Config());
-        if (!why.ok()) {
-            // Name the joint and the numbers: "outside joint limits" across
-            // nine joints and hundreds of points is not something a caller can
-            // act on.
-            RCLCPP_ERROR(get_logger(),
-                "rejecting goal: %s -- joint %u (%s), point %u: asked for %.6f, bound %.6f,"
-                " difference %.3g",
-                aico2_rt::RejectReasonName(why.reason), why.joint,
-                why.joint < joint_names_.size() ? joint_names_[why.joint].c_str() : "?",
-                why.point, why.value, why.bound, why.value - why.bound);
-            return rclcpp_action::GoalResponse::REJECT;
+        if (why.ok()) {
+            return {};
         }
-        pending_ = std::move(pts);
-        RCLCPP_INFO(get_logger(), "accepted goal: %zu points, %.2f s", pending_.size(),
-            pending_.back().t);
-        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+        // Name the joint and the numbers: "outside joint limits" across nine
+        // joints and hundreds of points is not something a caller can act on.
+        char buf[512];
+        std::snprintf(buf, sizeof(buf),
+            "%s -- joint %u (%s), point %u: asked for %.6f, bound %.6f, difference %.3g,"
+            " measured %.6f",
+            aico2_rt::RejectReasonName(why.reason), why.joint,
+            why.joint < joint_names_.size() ? joint_names_[why.joint].c_str() : "?", why.point,
+            why.value, why.bound, why.value - why.bound,
+            why.joint < aico2_rt::kMaxDof ? meas.q[why.joint] : 0.0);
+        return buf;
     }
 
     void Execute(const std::shared_ptr<GoalHandle> handle)
     {
         auto result = std::make_shared<FollowJointTrajectory::Result>();
         std::vector<aico2_rt::Point> pts;
+        std::string why;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            pts = std::move(pending_);
-            pending_.clear();
+            aico2_rt::Measured meas{};
+            if (!aico2_rt::ReadMeasured(*shm_, meas)) {
+                why = "no coherent state from the RT server";
+            } else if (meas.operational == 0u || meas.fault != 0u) {
+                why = aico2_rt::RejectReasonName(aico2_rt::RejectReason::kNotOperational);
+            } else {
+                why = Validate(handle->get_goal()->trajectory, pts, meas);
+            }
         }
-        if (pts.empty()) {
+        if (!why.empty()) {
             result->error_code = FollowJointTrajectory::Result::INVALID_GOAL;
-            result->error_string = "no validated trajectory to execute";
+            result->error_string = why;
+            RCLCPP_ERROR(get_logger(), "goal refused: %s", why.c_str());
             handle->abort(result);
             return;
         }
+        RCLCPP_INFO(get_logger(), "executing: %zu points, %.2f s", pts.size(), pts.back().t);
 
         const auto n = static_cast<std::uint32_t>(pts.size());
         const std::uint32_t slot = aico2_rt::PickFreeSlot(*shm_);
@@ -368,7 +381,6 @@ private:
     aico2_rt::Shm* shm_ = nullptr;
     std::uint64_t goal_counter_ = 0;
     std::mutex mutex_;
-    std::vector<aico2_rt::Point> pending_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp_action::Server<FollowJointTrajectory>::SharedPtr action_server_;
