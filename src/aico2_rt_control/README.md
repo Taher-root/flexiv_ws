@@ -13,43 +13,57 @@ except one. The last blocker is installing the C++ library, a free download. See
 
 ---
 
-## RT works on these arms — measured
+## The RT path works on hardware, end to end
 
-Run on `qc-ubuntu` against `Rizon4-063352`, 2026-10-06, with the stack stopped:
+Run on `qc-ubuntu` against `Rizon4-063352`, 2026-10-06. `rt_server` holding at
+1 kHz, `traj_publish` publishing a 3-degree single-joint move into shared
+memory, no ROS anywhere:
 
 ```
-Validated license: RDK-Professional
-DoF reported as 9
-Holding at 0.002 0.157 0.023 -0.701 0.052 1.754 -0.054 1.519 0.552
-Control mode switched to [RT_JOINT_POSITION]
+joint 6: -3.00 -> 0.00 deg over 3.0 s, 24 points. Validated.
+published slot 0, seq 1
+  state 1  t 0.00 s  q[6] -3.00 deg      <- adopted, running
+  state 2  t 3.00 s  q[6]  0.00 deg      <- finished, holding the last point
 
---- 1 kHz loop, achieved ---
-cycles          5005
-expected        5000
-mean period     0.999999 ms  (nominal 1.000)
-min period      0.983855 ms
-max period      1.01729 ms
-missed >1.5ms   0
+final state 2
+commanded 0.003 deg, measured 0.004 deg, error 0.001 deg
+clamped during execution: no
+loop: cycles 30931, missed 0, max period 1.023 ms
 ```
 
-Every question this package was created to answer is answered:
+and from the server, across the whole session:
+
+```
+cycles 54378  missed 0  max 1.023 ms   state 0 -> 1 -> 2
+```
+
+**Tracking error 0.001 degrees — about 17 microradians — with zero missed
+deadlines over 54 seconds.** Every part of the design is exercised here: the
+trajectory was stored in a slot by another process, published with one atomic
+store, adopted on the next 1 kHz cycle, resampled by quintic Hermite at every
+millisecond, clamped, and streamed through `StreamJointPosition`. The state
+machine walked idle to running to finished, and nothing clamped, which means the
+validated trajectory asked for nothing the limits forbid.
 
 | question | answer |
 |---|---|
-| Is RT available on these arms at all? | **Yes.** `SwitchMode(RT_JOINT_POSITION)` succeeds and the robot confirms the mode. |
-| Does `StreamJointPosition` take the full 9-element vector? | **Yes.** It held all nine, waist axes included, with no `invalid_argument`. |
-| Can this host hold a 1 kHz loop? | **Yes.** Zero missed deadlines, mean period within 1 ns of nominal, worst-case excursion ±17 µs. |
+| Is RT available on these arms? | **Yes.** `SwitchMode(RT_JOINT_POSITION)` succeeds. |
+| Does `StreamJointPosition` take all 9 elements? | **Yes**, waist axes included. |
+| Can this host hold 1 kHz? | **Yes.** Zero misses over 54k cycles, worst case 1.023 ms. |
+| Does the two-process handoff work? | **Yes.** Cross-process, lock-free, no allocation after startup. |
+| Does the arm track the plan? | **Yes.** 0.001 degrees. |
 
-±17 µs of jitter on a 1 ms period is roughly 1.7%, which is what a PREEMPT_RT
-kernel with a performance governor should give and is far better than the
-NRT path could offer. For comparison, the NRT send loop's rate was itself the
-dominant variable in execution smoothness (`docs/open_issues.md` issue 1a).
+**What remains is ROS, and only ROS.** `aico2_rt_bridge` has to turn a
+`FollowJointTrajectory` goal into what `traj_publish` already writes, and the
+`Measured` region into `/joint_states`. The validation, remapping and execution
+it needs are in `traj_ingest.hpp` and `rt_executor.hpp`, both tested; the node
+itself is boilerplate around them.
 
-**Still to measure.** This was an idle host. The number that decides the
-architecture is the same run with Nav2, RTAB-Map and both camera pipelines
-going; see [the host section](#what-you-still-have-to-write) for what to do if
-misses appear under load. Also worth repeating on `Rizon4R-062077` and over a
-longer window than 5 s.
+**Earlier NRT comparison.** The same arm on the NRT path needed its send rate
+tuned empirically and still showed jerk, because the robot's own generator
+re-planned toward every setpoint with no jerk limit — `docs/open_issues.md`
+issue 1a. The rate U-curve does not exist here: there is no generator between
+the plan and the joints.
 
 ### The joint map, settled
 
