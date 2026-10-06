@@ -98,6 +98,9 @@ struct Options {
     bool control_waist = false;
     double max_acc = 3.0;   // rad/s^2; matches the Python driver's constant
     double duration = 0.0;  // 0 = until signalled
+    /** 0 = stiff position control. >0 selects impedance at this fraction of
+     *  the robot's nominal joint stiffness. */
+    double stiffness_ratio = 0.0;
 };
 
 bool ParseArgs(int argc, char** argv, Options& opt)
@@ -113,7 +116,13 @@ bool ParseArgs(int argc, char** argv, Options& opt)
             "  --max-acc A         acceleration clamp, rad/s^2 (default 3.0).\n"
             "                      RobotInfo carries no acceleration limit, so\n"
             "                      this cannot be read from the robot.\n"
-            "  --duration S        stop after S seconds (default: until Ctrl-C)\n",
+            "  --duration S        stop after S seconds (default: until Ctrl-C)\n"
+            "  --impedance R       compliant instead of stiff: use RT_JOINT_IMPEDANCE\n"
+            "                      with R * K_q_nom joint stiffness, R in (0, 1].\n"
+            "                      R=1 is nominal stiffness, lower yields more.\n"
+            "                      Arm axes only -- the external axes report an\n"
+            "                      infinite K_q_nom and are not impedance\n"
+            "                      controlled, so they stay rigid either way.\n",
             argv[0], aico2_rt::kDefaultShmName);
         return false;
     }
@@ -129,6 +138,8 @@ bool ParseArgs(int argc, char** argv, Options& opt)
             opt.max_acc = std::atof(argv[++i]);
         } else if (a == "--duration" && has_next) {
             opt.duration = std::atof(argv[++i]);
+        } else if (a == "--impedance" && has_next) {
+            opt.stiffness_ratio = std::atof(argv[++i]);
         } else {
             std::fprintf(stderr, "unrecognised argument: %s\n", a.c_str());
             return false;
@@ -136,6 +147,11 @@ bool ParseArgs(int argc, char** argv, Options& opt)
     }
     if (opt.max_acc <= 0.0) {
         std::fprintf(stderr, "--max-acc must be positive\n");
+        return false;
+    }
+    if (opt.stiffness_ratio < 0.0 || opt.stiffness_ratio > 1.0) {
+        std::fprintf(stderr, "--impedance must be in (0, 1]: it is a fraction of the"
+                             " robot's own nominal stiffness\n");
         return false;
     }
     return true;
@@ -275,8 +291,34 @@ int main(int argc, char** argv)
         }
 
         std::printf("holding at %s\n", flexiv::rdk::utility::Vec2Str(q_now).c_str());
-        std::printf("switching to RT_JOINT_POSITION\n");
-        robot.SwitchMode(flexiv::rdk::Mode::RT_JOINT_POSITION);
+
+        const bool impedance = opt.stiffness_ratio > 0.0;
+        if (impedance) {
+            std::printf("switching to RT_JOINT_IMPEDANCE (compliant)\n");
+            robot.SwitchMode(flexiv::rdk::Mode::RT_JOINT_IMPEDANCE);
+            // SetJointImpedance is only applicable in the impedance modes, so
+            // it has to follow the switch, never precede it.
+            //
+            // The external axes report K_q_nom as infinite: they are not
+            // impedance controlled, and the Python driver already established
+            // that the right thing is to pass their nominal value straight
+            // through and scale only the arm axes. Scaling infinity would be
+            // meaningless, and substituting a finite number would be inventing
+            // a stiffness the robot never offered.
+            std::vector<double> K_q(info.K_q_nom);
+            for (std::uint32_t j = ext; j < dof; ++j) {
+                K_q[j] = info.K_q_nom[j] * opt.stiffness_ratio;
+            }
+            robot.SetJointImpedance(K_q);
+            std::printf("joint stiffness set to %.0f%% of nominal on axes %u..%u:\n  %s\n",
+                opt.stiffness_ratio * 100.0, ext, dof - 1,
+                flexiv::rdk::utility::Vec2Str(K_q).c_str());
+            std::printf("NOTE: a compliant arm does not track as closely by design."
+                        " Position error is expected to grow as stiffness falls.\n");
+        } else {
+            std::printf("switching to RT_JOINT_POSITION (stiff)\n");
+            robot.SwitchMode(flexiv::rdk::Mode::RT_JOINT_POSITION);
+        }
 
         RobotAdapter adapter(robot, dof);
         aico2_rt::RtExecutor<RobotAdapter> executor;

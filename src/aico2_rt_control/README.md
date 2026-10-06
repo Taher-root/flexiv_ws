@@ -159,6 +159,41 @@ ros2 run aico2_rt_control send_goal.py --ros-args -r __ns:=/left_arm -- \
 The `--` is required: `ros2 run` passes `--ros-args ... --` through, and
 argparse would otherwise swallow the script's own flags.
 
+### Compliant instead of stiff
+
+By default `rt_server` uses `RT_JOINT_POSITION`: **stiff position control**. The
+arm holds the commanded trajectory and resists being pushed off it, which is why
+tracking error measures 0.001°.
+
+For compliance, `StreamJointPosition` is also applicable in
+`RT_JOINT_IMPEDANCE` — the same call, a different mode — so it is one flag:
+
+```bash
+./build/rt_server Rizon4-063352 --impedance 0.3     # 30% of nominal stiffness
+```
+
+`--impedance 1.0` is the robot's nominal stiffness; lower yields more. The
+server prints the stiffness vector it set.
+
+Three things to know before relying on it:
+
+- **The waist cannot be made compliant.** `joint_map_probe` reports `K_q_nom` as
+  **infinite** on the external axes: they are not impedance controlled. Their
+  nominal value is passed through untouched and only the arm axes are scaled,
+  which is what `aico2_left_arm_driver` already does. A compliant configuration
+  is compliant in the arm only.
+- **Tracking error grows on purpose.** A compliant joint yields to load, so the
+  0.001° figure belongs to the stiff mode and should not be expected here.
+  Validation and clamping are unchanged; what changes is how closely the robot
+  chooses to follow.
+- **It is untested on hardware.** The mode switch and `SetJointImpedance` call
+  follow the RDK's documented contract and the pattern the Python driver uses,
+  but no one has yet run it on an arm. Start at a high ratio (0.8) with a small
+  move and work down.
+
+The nominal stiffnesses on this arm, for reference: 6000, 6000, 4200, 4200,
+1500, 1500, 1500 Nm/rad on axes 2–8.
+
 ### 10. MoveIt
 
 No configuration change. `moveit_controllers.yaml` builds the action name from

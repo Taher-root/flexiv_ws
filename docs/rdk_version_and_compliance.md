@@ -9,9 +9,27 @@ Installed on the Jetson: `flexivrdk 1.9.0` (python3.12), robot software
 
 ## 1. Can we get RT control modes?
 
-Not on this arm. Verified by importing each PyPI wheel off-robot and reading
-what the bindings actually expose, rather than reading docs for a release we
-do not run:
+**Yes — this section's original conclusion was wrong, and is kept below because
+the evidence in it is still correct.** RT control works on these arms and is
+running: see [`../src/aico2_rt_control/README.md`](../src/aico2_rt_control/README.md).
+1 kHz with zero missed deadlines over 388 439 cycles, 0.001° of tracking error,
+driven by `FollowJointTrajectory`.
+
+What was right: **no Python wheel exposes the RT modes**, on any version, and
+that is by design rather than oversight — upstream names every file in
+`example_py/` `non_realtime_*` and every RT example is C++.
+
+What was wrong: concluding from that that the arm cannot do RT. RT lives in the
+**C++** library, which is a different artifact from the wheel, and the v1.9 C++
+headers declare `StreamJointPosition` with applicable modes
+`RT_JOINT_IMPEDANCE, RT_JOINT_POSITION`. Both arms carry the
+`RDK-Professional` licence it needs. The table below measures the wrong thing:
+the wheel, not the SDK.
+
+Also wrong by implication: v2.x is indeed Enlight-only, but that does not matter,
+because v1.9 has RT already.
+
+The original evidence, which stands as a statement about the Python bindings:
 
 | flexivrdk | RT modes in `Mode` | `Stream*` methods |
 | --------- | ------------------ | ----------------- |
@@ -21,7 +39,9 @@ do not run:
 | 1.9.3     | no                 | no                |
 | 2.1.0     | `RT_JOINT_TORQUE`, `RT_JOINT_IMPEDANCE`, `RT_JOINT_POSITION`, `RT_CARTESIAN_MOTION_FORCE` | `StreamJointTorque`, `StreamJointPosition`, `StreamCartesianMotionForce` |
 
-So RT lives only in 2.x — and 2.x is not for this robot. Its
+So RT is absent from the Python bindings at every version, and present in 2.x
+only there. That is not the same as RT being absent from the SDK: it is in the
+v1.9 C++ library, which this table does not examine. 2.x is not for this robot, Its
 `ProductModel` enum is `{Enlight-L, Enlight-LL, MICO-Core, MICO-Plus,
 MICO-Ultra}`. There is no Rizon in it. RDK 2.x is the SDK for Flexiv's newer
 product line, not a newer SDK for ours.
