@@ -32,6 +32,10 @@ ament_target_dependencies(rt_bridge
 target_link_libraries(rt_bridge rt)
 
 install(TARGETS rt_bridge DESTINATION lib/${PROJECT_NAME})
+# The ROS-side twin of traj_publish: builds a goal rt_bridge will accept, which
+# cannot reasonably be typed as YAML because it must cover every joint and start
+# at the measured position.
+install(PROGRAMS scripts/send_goal.py DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 
 ament_package()
