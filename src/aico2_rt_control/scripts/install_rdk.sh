@@ -153,6 +153,26 @@ step "Dependencies (Boost, SpaceVecAlg, RBDyn only)"
 deps="$SRC/thirdparty/build_and_install_dependencies_not_in_ros2.sh"
 fi
 [[ -f "$deps" ]] || die "missing $deps -- wrong tag?"
+# Flexiv's dependency script clones into thirdparty/cloned/ and builds in place,
+# leaving a CMakeCache.txt per dependency. Those caches remember the environment
+# they were configured in -- so a tree first built with ROS 2 sourced keeps
+# resolving /opt/ros/jazzy even after the environment is scrubbed, and
+# foonathan_memory_vendor (an ament package) then fails on a ROS CMake module it
+# can no longer satisfy. Wipe the clones when the variant changes; keep them
+# when it has not, since rebuilding Boost is not free.
+stamp="$SRC/.rdk_build_variant"
+want=$([[ $STANDALONE -eq 1 ]] && echo standalone || echo ros2-jazzy)
+if [[ -d "$SRC/thirdparty/cloned" ]]; then
+    had="$(cat "$stamp" 2>/dev/null || echo unknown)"
+    if [[ "$had" != "$want" ]]; then
+        echo "previous dependency build was '$had', now '$want' -- clearing clones"
+        rm -rf "$SRC/thirdparty/cloned"
+    else
+        echo "reusing dependency clones from a previous '$want' build"
+    fi
+fi
+printf '%s\n' "$want" > "$stamp"
+
 ( cd "$SRC/thirdparty" && bash "$deps" "$PREFIX" "$JOBS" )
 
 step "Configuring"

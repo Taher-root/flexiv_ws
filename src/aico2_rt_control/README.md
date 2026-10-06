@@ -667,6 +667,28 @@ Check Flexiv's `basics1` against the standalone prefix first — if that also
 crashes, the problem is not the Fast-DDS versions and the reproducer to send is
 stronger still.
 
+**`ModuleNotFoundError: No module named 'ament_package'`** while the dependency
+script builds `foonathan_memory_vendor`.
+
+A dependency tree first configured with ROS 2 sourced is being reused after the
+environment was scrubbed. Flexiv's script clones into `thirdparty/cloned/` and
+builds in place, so each dependency keeps a `CMakeCache.txt` that remembers the
+paths it was configured with; `foonathan_memory_vendor` is an ament package, so
+it still finds `/opt/ros/jazzy/share/ament_cmake_core` and then fails because
+`PYTHONPATH` no longer reaches `ament_package`.
+
+`install_rdk.sh` now records which variant built the tree and clears
+`thirdparty/cloned/` when it changes, so this resolves itself on the next run.
+To clear it by hand:
+
+```bash
+rm -rf ~/flexiv_rdk_standalone/thirdparty/cloned
+```
+
+If it recurs with a scrubbed environment and no stale clones, check the CMake
+user package registry (`~/.cmake/packages/`), which `find_package` also
+consults and which can point at ROS packages.
+
 **`ignoring unknown package 'aico2_rt_control' in --packages-select`.**
 `colcon` was run from somewhere other than the workspace root, so it saw no
 `src/`. `cd ~/flexiv_ws` first.
