@@ -37,14 +37,6 @@
 
 namespace aico2_rt {
 
-/** Per-joint bounds. The RT task clamps to these every cycle. */
-struct Limits {
-    double q_min[kMaxDof];
-    double q_max[kMaxDof];
-    double dq_max[kMaxDof];
-    double ddq_max[kMaxDof];
-};
-
 template <typename Robot>
 class RtExecutor {
 public:
@@ -253,27 +245,38 @@ private:
         for (std::uint32_t j = 0; j < dof_; ++j) {
             if (cmd_.q[j] < limits_.q_min[j]) {
                 cmd_.q[j] = limits_.q_min[j];
-                clamped_ = true;
+                NoteClamp(j, ClampKind::kPositionLow);
             } else if (cmd_.q[j] > limits_.q_max[j]) {
                 cmd_.q[j] = limits_.q_max[j];
-                clamped_ = true;
+                NoteClamp(j, ClampKind::kPositionHigh);
             }
             const double vmax = limits_.dq_max[j];
             if (cmd_.dq[j] > vmax) {
                 cmd_.dq[j] = vmax;
-                clamped_ = true;
+                NoteClamp(j, ClampKind::kVelocity);
             } else if (cmd_.dq[j] < -vmax) {
                 cmd_.dq[j] = -vmax;
-                clamped_ = true;
+                NoteClamp(j, ClampKind::kVelocity);
             }
             const double amax = limits_.ddq_max[j];
             if (cmd_.ddq[j] > amax) {
                 cmd_.ddq[j] = amax;
-                clamped_ = true;
+                NoteClamp(j, ClampKind::kAcceleration);
             } else if (cmd_.ddq[j] < -amax) {
                 cmd_.ddq[j] = -amax;
-                clamped_ = true;
+                NoteClamp(j, ClampKind::kAcceleration);
             }
+        }
+    }
+
+    /** Record only the first clamp: it is the one with a cause, and later ones
+     *  are usually consequences of it. */
+    void NoteClamp(std::uint32_t joint, ClampKind kind)
+    {
+        if (!clamped_) {
+            clamped_ = true;
+            clamp_joint_ = joint;
+            clamp_kind_ = kind;
         }
     }
 
@@ -292,6 +295,8 @@ private:
         st.exec_state = static_cast<std::uint32_t>(state_);
         st.reject_reason = static_cast<std::uint32_t>(reject_);
         st.clamped = clamped_ ? 1u : 0u;
+        st.clamp_joint = clamp_joint_;
+        st.clamp_kind = static_cast<std::uint32_t>(clamp_kind_);
         st.active_id = active_id_;
         st.traj_time = traj_time_;
         st.cycles = cycles_;
@@ -317,6 +322,8 @@ private:
     double traj_time_ = 0.0;
     bool stop_requested_ = false;
     bool clamped_ = false;
+    std::uint32_t clamp_joint_ = 0;
+    ClampKind clamp_kind_ = ClampKind::kNone;
 
     bool have_prev_ = false;
     double prev_ = 0.0;

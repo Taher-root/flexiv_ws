@@ -234,11 +234,20 @@ int main(int argc, char** argv)
         // control loop. The external axes are indices 0..DoF_e-1, confirmed by
         // joint_map_probe.
         if (!opt.control_waist) {
+            // A window, not exact equality. The sampler evaluates
+            // H0*q0 + H3*q1 where H0 + H3 is 1 analytically but not in
+            // floating point, so pinning to a single value leaves the result
+            // a ULP outside it and the clamp fires on every cycle. That turns
+            // the clamp indicator -- which should mean "a trajectory asked for
+            // something the limits forbid" -- into noise. 1e-6 rad is 6e-5
+            // degrees: physically nothing, and many orders of magnitude above
+            // the round-off.
+            constexpr double kPinEpsilon = 1e-6;
             for (std::uint32_t j = 0; j < ext && j < dof; ++j) {
-                limits.q_min[j] = q_now[j];
-                limits.q_max[j] = q_now[j];
-                limits.dq_max[j] = 0.0;
-                limits.ddq_max[j] = 0.0;
+                limits.q_min[j] = q_now[j] - kPinEpsilon;
+                limits.q_max[j] = q_now[j] + kPinEpsilon;
+                limits.dq_max[j] = kPinEpsilon;
+                limits.ddq_max[j] = kPinEpsilon;
             }
             std::printf("waist NOT commanded: axes 0..%u pinned at their current position\n",
                 ext ? ext - 1 : 0);
@@ -258,7 +267,12 @@ int main(int argc, char** argv)
         RobotAdapter adapter(robot, dof);
         aico2_rt::RtExecutor<RobotAdapter> executor;
         executor.Init(shm, &adapter, dof, limits, q_now.data());
+        // Publish the configuration a writer needs in order to produce a
+        // trajectory this server will accept without clamping.
         shm->dof = dof;
+        shm->n_external = ext;
+        shm->control_waist = opt.control_waist ? 1u : 0u;
+        shm->limits = limits;
 
         // Anything thrown out of the periodic task would cross the scheduler
         // boundary, so it is caught here and reported through a flag the main

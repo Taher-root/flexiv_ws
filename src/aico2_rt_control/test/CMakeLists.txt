@@ -29,3 +29,12 @@ endforeach()
 
 # shm_open/shm_unlink live in librt on glibc before 2.34; harmless after.
 target_link_libraries(test_shm_protocol PRIVATE rt)
+
+# Not a test: rt_server with the robot replaced by a model, so the two-process
+# handshake can be rehearsed without hardware. Built here because it needs no
+# RDK. Not registered with ctest -- it runs until stopped.
+add_executable(fake_server fake_server.cpp)
+target_include_directories(fake_server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_compile_features(fake_server PRIVATE cxx_std_17)
+target_compile_options(fake_server PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_link_libraries(fake_server PRIVATE Threads::Threads rt)
