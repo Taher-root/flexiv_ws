@@ -385,80 +385,85 @@ upstream's design, not a stale install — every file in the RDK's `example_py/`
 is named `non_realtime_*` and every RT example is C++.
 
 ```bash
-git clone -b v1.9 https://github.com/flexivrobotics/flexiv_rdk.git
+git clone -b v1.x https://github.com/flexivrobotics/flexiv_rdk.git
 ```
 
-**The branch matters.** `v1.x` through `v1.9.3` is Rizon; `v2.x` is Enlight, and
-its API is not source-compatible — on `main` (v2.1) `StreamJointPosition` takes
-`const std::map<JointGroup, RtJointPositionCmd>&` instead of three vectors.
-Cloning the default branch gives code that will not compile against anything
-written for these arms.
+**Use the `v1.x` branch, not the `v1.9` tag.** `v1.x` is the head of the 1.x
+line and currently equals the tag `v1.9.4.1`. `v1.9` is a tag, not a branch, so
+`-b v1.9` does work — it just gives an older release, and that release is much
+harder to build here. Do not use the default branch: `main` is `v2.1`/`v2.2`,
+which is Enlight, and its `StreamJointPosition` takes
+`const std::map<JointGroup, RtJointPositionCmd>&` rather than three vectors.
 
-**The install needs outbound internet, and the robot network does not provide
-it.** The dependency script clones ten repositories (Eigen, spdlog, Fast-DDS,
-Fast-CDR, foonathan_memory, RBDyn, SpaceVecAlg, tinyxml2, yaml-cpp) and fetches
-a Boost tarball, and `CMakeLists.txt` downloads the prebuilt archive from the
-GitHub release at configure time. None of that is optional, and an anonymous
-public clone needs no GitHub account.
+What changed between `v1.9` and `v1.9.4.1`, in its own words:
 
-If this host reaches the arms on one interface and the internet on another, two
-rules matter. The route to `192.168.1.0/24` must keep pointing at the robot
-interface, and any new default route must not displace it — the RT loop depends
-on that link, and the measured 0.009 ms ping deviation is the baseline to
-protect. Re-run `scripts/check_rt_host.sh` after any network change and confirm
-both arms still resolve to the wired interface at the same latency.
+> RDK is shipped as a self-contained shared library: all of its thirdparty
+> dependencies except Eigen are statically embedded into it and their symbols
+> are hidden, so Eigen is the only dependency a user application has to install,
+> and it can freely use its own version of any other library.
 
-**Source ROS 2 first, and use the ROS 2 dependency script.** There are two
-scripts in `thirdparty/`, and picking the wrong one produces a few hundred
-undefined-symbol errors at link time rather than any clear message:
+That removes the entire failure mode this package originally hit. On `v1.9` the
+library was a static archive published in two variants, and the plain one
+statically linked Fast-RTPS and Fast-CDR so it collided with ROS 2's copies;
+avoiding that needed `-DRDK_SUPPORT_ROS2_JAZZY=ON` plus the right one of two
+dependency scripts, and the wrong combination fails with several hundred
+undefined `eprosima::fastcdr::*` symbols. On `v1.9.4.1` there is one `.so`, one
+dependency script, no ROS 2 flag, and no version to mismatch.
 
-| script | installs | use it for |
-|---|---|---|
-| `build_and_install_dependencies.sh` | Eigen, spdlog, tinyxml2, yaml-cpp, foonathan_memory, **Fast-CDR v1.0.28**, **Fast-DDS v2.6.10**, Boost, SpaceVecAlg, RBDyn | the standalone (non-ROS 2) archive |
-| `build_and_install_dependencies_not_in_ros2.sh` | **Boost, SpaceVecAlg, RBDyn only** | the `ros2-jazzy` archive — everything else comes from ROS 2 |
-
-The `ros2-jazzy` archive is compiled against ROS 2 Jazzy's Fast-CDR 2.x and
-Fast-DDS 2.14.x. The standalone script installs Fast-CDR 1.0.28 and Fast-DDS
-2.6.10, which do not have the symbols that archive needs. Upstream's README
-documents neither the flag nor the second script — both are only visible in
-`CMakeLists.txt` and the `thirdparty/` listing.
+The API we depend on is unchanged: `StreamJointPosition(positions, velocities,
+accelerations)` has the same signature, `mode.hpp` still has
+`RT_JOINT_POSITION` and `RT_JOINT_IMPEDANCE`, and `RobotInfo` still carries
+`license_type`, `DoF_m` and `DoF_e`.
 
 ```bash
 sudo apt install build-essential cmake
-source /opt/ros/jazzy/setup.bash          # before anything else
-
 cd flexiv_rdk/thirdparty
-bash build_and_install_dependencies_not_in_ros2.sh ~/rdk_install
+bash build_and_install_dependencies.sh ~/rdk_install   # Eigen only on v1.x
+
+cd ..
+mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install
+cmake --build . --target install --config Release
 ```
 
-Then the library itself, with ROS 2 still sourced. It is a prebuilt static
-archive the CMake project downloads at configure time from the GitHub release,
-with a SHA256 check against `lib/*.sha256`:
+No `RDK_SUPPORT_ROS2_JAZZY`, and ROS 2 does not need to be sourced for this
+part. The archive is still downloaded at configure time from the GitHub release
+with a SHA256 check against `lib/*.sha256`, so this step needs network.
+
+One caveat worth knowing: neither release documents which robot software
+versions it supports. These arms run **v3.11** and the installed Python wheel is
+**v1.9**, so the C++ side moving to 1.9.4.1 is a version skew that is untested
+here. The two talk to the robot independently rather than to each other, and the
+Python driver is untouched either way, so the fallback is simply to rebuild from
+the `v1.9` tag using the procedure below.
+
+<details>
+<summary>Building from the older <code>v1.9</code> tag, if ever needed</summary>
+
+Two scripts exist in `thirdparty/` and the wrong one produces the
+undefined-symbol wall described above:
+
+| script | installs | for |
+|---|---|---|
+| `build_and_install_dependencies.sh` | Eigen, spdlog, tinyxml2, yaml-cpp, foonathan_memory, **Fast-CDR v1.0.28**, **Fast-DDS v2.6.10**, Boost, SpaceVecAlg, RBDyn | the standalone archive |
+| `build_and_install_dependencies_not_in_ros2.sh` | **Boost, SpaceVecAlg, RBDyn only** | the `ros2-jazzy` archive |
+
+The `ros2-jazzy` archive needs ROS 2 Jazzy's Fast-CDR 2.x and Fast-DDS 2.14.x,
+so ROS 2 must be sourced first and the second script used:
 
 ```bash
-cd flexiv_rdk
-mkdir build && cd build
+source /opt/ros/jazzy/setup.bash
+cd flexiv_rdk/thirdparty
+bash build_and_install_dependencies_not_in_ros2.sh ~/rdk_install
+cd .. && mkdir build && cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install -DRDK_SUPPORT_ROS2_JAZZY=ON
 cmake --build . --target install --config Release
 ```
 
-`-DRDK_SUPPORT_ROS2_JAZZY=ON` is not optional here. It selects
-`libflexiv_rdk.aarch64-linux-gnu.ros2-jazzy.a` instead of
-`libflexiv_rdk.aarch64-linux-gnu.a`; the plain archive statically links Fast-RTPS
-and Fast-CDR, and so does ROS 2, so the two collide as soon as anything links
-`rclcpp`. `CMakeLists.txt:50` defaults it `OFF` and falls through to the plain
-archive silently.
+Verify from the configure output that `fastrtps` and `fastcdr` resolve under
+`/opt/ros/jazzy` and not under the prefix.
 
-**Check the configure output before building.** The dependency paths say whether
-this is right:
-
-```
--- Found fastrtps v2.14.x: /opt/ros/jazzy/share/fastrtps/cmake     correct
--- Found fastcdr  v2.x:    /opt/ros/jazzy/lib/cmake/fastcdr        correct
-
--- Found fastrtps v2.6.10:  /root/rdk_install/share/fastrtps/cmake  WRONG script
--- Found fastcdr  v1.0.28:  /root/rdk_install/lib/cmake/fastcdr     WRONG script
-```
+</details>
 
 Then build this package, pointing CMake at the prefix:
 
@@ -492,27 +497,25 @@ is a good way to break unrelated ROS 2 nodes.
 **Hundreds of `undefined reference to eprosima::fastcdr::Cdr::...` plus
 `fmt::v9::...` and `spdlog::details::log_msg::log_msg`.**
 
-The wrong dependency script was used. Symbols like `CdrSizeCalculator`,
-`CdrVersion`, `Cdr::set_encoding_flag` and `PortBasedTransportDescriptor` exist
-only in Fast-CDR 2.x / Fast-DDS 2.14.x, which is what the `ros2-jazzy` archive
-is built against. `build_and_install_dependencies.sh` installs Fast-CDR 1.0.28
-and Fast-DDS 2.6.10 into the prefix, where they shadow ROS 2's copies.
+This is the `v1.9` static-archive problem. `CdrSizeCalculator`, `CdrVersion`,
+`Cdr::set_encoding_flag` and `PortBasedTransportDescriptor` exist only in
+Fast-CDR 2.x / Fast-DDS 2.14.x, which is what the `ros2-jazzy` archive expects;
+`build_and_install_dependencies.sh` installs Fast-CDR 1.0.28 and Fast-DDS 2.6.10
+into the prefix, where they shadow ROS 2's copies.
 
-The prefix has to be rebuilt — reconfiguring is not enough, because the wrong
-versions are installed into it:
+The fix is to move to `v1.x`, where the library is a self-contained `.so` and
+this cannot happen. The prefix has to be rebuilt rather than reconfigured,
+because the wrong versions are installed into it:
 
 ```bash
-rm -rf ~/rdk_install ~/flexiv_rdk/build
-source /opt/ros/jazzy/setup.bash
-cd ~/flexiv_rdk/thirdparty
-bash build_and_install_dependencies_not_in_ros2.sh ~/rdk_install
-cd ~/flexiv_rdk && mkdir build && cd build
-cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install -DRDK_SUPPORT_ROS2_JAZZY=ON
+rm -rf ~/rdk_install ~/flexiv_rdk
+git clone -b v1.x https://github.com/flexivrobotics/flexiv_rdk.git
+cd flexiv_rdk/thirdparty
+bash build_and_install_dependencies.sh ~/rdk_install
+cd .. && mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install
 cmake --build . --target install --config Release
 ```
-
-Confirm from the configure output that `fastrtps` and `fastcdr` resolve under
-`/opt/ros/jazzy`, not under the prefix.
 
 **`ignoring unknown package 'aico2_rt_control' in --packages-select`.**
 `colcon` was run from somewhere other than the workspace root, so it saw no
