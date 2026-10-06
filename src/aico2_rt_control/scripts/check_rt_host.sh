@@ -82,6 +82,28 @@ say "running as" "$(id -un) (uid $(id -u))"
 say "sched_rt_runtime_us" "$(cat /proc/sys/kernel/sched_rt_runtime_us 2>/dev/null || echo unavailable)"
 say "  note" "950000 of 1000000 is the default RT throttle; -1 disables it"
 
+hdr "Interface inventory"
+printf '  %-8s %-7s %-18s %-9s %s\n' IFACE CARRIER ADDRESS SPEED MAC
+for dev in $(ls /sys/class/net | grep -v '^lo$'); do
+    carrier="$(cat /sys/class/net/$dev/carrier 2>/dev/null)"
+    case "$carrier" in 1) c=up ;; 0) c=NO-LINK ;; *) c=? ;; esac
+    addr="$(ip -4 -o addr show "$dev" 2>/dev/null | awk '{print $4}' | paste -sd, -)"
+    speed="$(cat /sys/class/net/$dev/speed 2>/dev/null)"
+    mac="$(cat /sys/class/net/$dev/address 2>/dev/null)"
+    printf '  %-8s %-7s %-18s %-9s %s\n' \
+        "$dev" "$c" "${addr:--}" "${speed:+${speed}Mb}" "$mac"
+done
+# Several ports sharing one MAC, or a MAC whose device half is all zeros, means
+# an unprogrammed address. Such ports usually will not pass traffic as shipped.
+dupes="$(for d in $(ls /sys/class/net | grep -v '^lo$'); do
+    cat /sys/class/net/$d/address 2>/dev/null; done | sort | uniq -d)"
+[ -n "$dupes" ] && printf '  %s\n' "WARNING: MAC shared by several interfaces: $dupes"
+
+hdr "ARP neighbours on the robot subnet"
+ip neigh show 2>/dev/null | grep -E '^192\.168\.1\.' | sed 's/^/  /' \
+    || echo "  none"
+echo "  (an arm that is powered and cabled appears here as REACHABLE or STALE)"
+
 hdr "Link to the arms (Flexiv requires wired)"
 for ip in "${ROBOTS[@]}"; do
     dev="$(ip -o route get "$ip" 2>/dev/null | grep -o 'dev [^ ]*' | awk '{print $2}')"
