@@ -601,6 +601,40 @@ colcon build --packages-select aico2_rt_control \
 
 or `rm -rf build/aico2_rt_control install/aico2_rt_control` first.
 
+**`*** stack smashing detected ***: terminated`** shortly after the RDK banner.
+
+Do not trust where it appears to stop. `abort()` discards buffered stdout and
+`ros2 run` pipes it, so the last line you see is the last one that happened to
+flush — which is the RDK's startup banner, potentially many calls earlier than
+the fault. Establish where it actually dies before theorising:
+
+```bash
+# unbuffered, and straight to a terminal rather than through ros2 run
+stdbuf -o0 -e0 ./install/aico2_rt_control/lib/aico2_rt_control/rt_hold_probe Rizon4-063352
+```
+
+Then decide whether the fault is in this package or in the RDK install, by
+building Flexiv's own example against the same prefix:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+cd ~/flexiv_rdk/example && mkdir -p build && cd build
+cmake .. -DCMAKE_PREFIX_PATH=$HOME/rdk_install
+cmake --build . --config Release -j"$(nproc)"
+./basics1_display_robot_states Rizon4-063352
+```
+
+- The example **also** crashes → the library and its dependencies are the
+  problem, not this package. That is a clean reproducer worth sending to Flexiv,
+  since the prebuilt `ros2-jazzy` archive is being combined with whatever
+  Fast-DDS and Fast-CDR versions ROS 2 Jazzy happens to ship (here 2.14.6 and
+  2.2.7) and nothing documents which it was built against.
+- The example **works** → the difference is in this package's build. Compare
+  against `example/CMakeLists.txt`, which is deliberately minimal: C++17,
+  `target_link_libraries(... flexiv::flexiv_rdk)`, and `CMAKE_BUILD_TYPE`
+  forced to `Release` when unset. The last of those is the one colcon gets
+  wrong by default, which is why this package now forces it too.
+
 **`ignoring unknown package 'aico2_rt_control' in --packages-select`.**
 `colcon` was run from somewhere other than the workspace root, so it saw no
 `src/`. `cd ~/flexiv_ws` first.
