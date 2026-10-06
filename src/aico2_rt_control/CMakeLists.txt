@@ -43,15 +43,53 @@ if(flexiv_rdk_FOUND)
   # file".
   set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
+  # Which RDK version is installed changes what else has to be linked, so both
+  # cases are handled rather than hard-coding one.
+  #
+  #   v1.9 .. v1.9.3  the library is a static archive that references spdlog and
+  #                   fmt without carrying them, so a consumer must provide
+  #                   both or the link fails with undefined spdlog::details::
+  #                   log_msg::log_msg and fmt::v9::* symbols.
+  #   v1.9.4 onwards  the library is a self-contained .so with its internal
+  #                   symbols hidden; neither is needed.
+  #
+  # These arms run robot software v3.11, which rejects a v1.9.4.1 client
+  # outright ("Version of this client is incompatible with robot"), so the
+  # static-archive case is the live one. See README.md.
+  find_package(spdlog QUIET)
+  find_package(fmt QUIET)
+
   add_executable(rt_hold_probe src/rt_hold_probe.cpp)
   target_link_libraries(rt_hold_probe flexiv::flexiv_rdk)
+  if(spdlog_FOUND)
+    message(STATUS "aico2_rt_control: linking spdlog ${spdlog_VERSION}")
+    target_link_libraries(rt_hold_probe spdlog::spdlog)
+  endif()
+  if(fmt_FOUND)
+    message(STATUS "aico2_rt_control: linking fmt ${fmt_VERSION}")
+    target_link_libraries(rt_hold_probe fmt::fmt)
+  endif()
 
   install(TARGETS rt_hold_probe DESTINATION lib/${PROJECT_NAME})
 else()
+  # Print what was actually searched. The common cause is not a broken install
+  # but the wrong machine: the RDK prefix is per host and per user, so a build
+  # on a second machine, or as a different user, finds nothing even though the
+  # first one works. Naming the host and the search path makes that obvious
+  # instead of looking like a packaging fault.
+  cmake_host_system_information(RESULT _rt_host QUERY HOSTNAME)
   message(WARNING
-    "aico2_rt_control: flexiv_rdk (C++) not found -- skipping RT targets.\n"
-    "  This is expected until the C++ RDK is installed; see "
-    "src/aico2_rt_control/README.md.\n"
+    "aico2_rt_control: flexiv_rdk (C++) not found -- skipping RT targets, so "
+    "no rt_hold_probe will be installed and `ros2 run` will say \"No "
+    "executable found\".\n"
+    "  host:              ${_rt_host}\n"
+    "  CMAKE_PREFIX_PATH: ${CMAKE_PREFIX_PATH}\n"
+    "  HOME:              $ENV{HOME}\n"
+    "  Install the C++ RDK on THIS machine and pass its prefix, e.g.\n"
+    "    colcon build --packages-select aico2_rt_control \\\n"
+    "      --cmake-args -DCMAKE_PREFIX_PATH=$ENV{HOME}/rdk_install\n"
+    "  The prefix is per host and per user -- installing it elsewhere does not "
+    "count. See src/aico2_rt_control/README.md.\n"
     "  The Python flexivrdk wheel does NOT satisfy this: it has no RT modes.")
 endif()
 
