@@ -407,6 +407,65 @@ The cost is that nothing covers for a missed deadline. That is what
 `rt_hold_probe` measures, and it is the one thing worth knowing before the arm
 is driven this way.
 
+### How a trajectory travels, end to end
+
+```
+ MoveIt            ~22 points: q, dq, ddq, time_from_start      (already
+   |                                                             jerk-limited
+   |  FollowJointTrajectory goal                                 by Ruckig)
+   v
+ aico2_rt_bridge   ROS process, links rclcpp, no RDK
+   |                 validate -> reorder joints by name -> copy into a free
+   |                 slot -> atomically publish the slot index
+   v
+ shared memory     3 preallocated slots, 1.6 MB each
+   |                 slot = {id, n_points, n_joints, Point[4096]}
+   |                 Point = {t, q[16], dq[16], ddq[16]} = 392 bytes
+   v
+ aico2_rt_server   RDK process, no ROS. 1 kHz scheduler.
+   |                 every 1 ms: t = now - t_adopt
+   |                             quintic Hermite between bracketing waypoints
+   |                             clamp to limits
+   |                             StreamJointPosition(q, dq, ddq)
+   v
+ robot             tracks the setpoints. No internal motion generator.
+```
+
+**Stored** once, as plain data. The bridge writes a whole trajectory into one
+slot and then publishes its index with a single atomic store. Nothing is
+allocated after startup on either side: the slots are part of the mapping, so
+the handoff is a memory copy plus an integer store. Three slots and an atomic
+index mean the writer always has one that is neither published nor being read,
+so neither side ever waits for the other.
+
+**"Smoothed" is the wrong word for what the sampler does, and the distinction
+matters.** It does not filter anything. It reconstructs a continuous curve that
+passes *exactly* through MoveIt's waypoints with MoveIt's own velocities and
+accelerations at each one — verified to 1e-9 rad at the knots. The smoothness
+comes from MoveIt, where TOTG plus Ruckig already produced a jerk-limited
+profile; the sampler's job is to not damage it. Quintic Hermite is chosen
+because it is C², so interpolation introduces no acceleration steps of its own.
+A cubic would match position and velocity and then step the acceleration at
+every waypoint — reintroducing exactly the discontinuity Ruckig was added
+upstream to remove.
+
+So: a bad plan still executes badly. What changes versus NRT is that nothing
+*between* the plan and the joints adds jerk of its own. In NRT the robot's
+generator re-planned toward each setpoint with no jerk limit and no knowledge of
+when the next command was due, which is what produced the rate U-curve in
+`docs/open_issues.md` issue 1a.
+
+**Sent** at exactly 1 kHz by `rdk::Scheduler`, measured on this host at
+0.999999 ms mean with zero missed deadlines. Execution time is taken from the
+trajectory's own `time_from_start`, so a plan MoveIt timed at 3.4 s takes 3.4 s
+— that is what "your exact timing" means and what no NRT path could offer.
+
+**Mid-motion pre-emption** works the same way: the bridge writes the new
+trajectory to a different slot and publishes it, and the RT task adopts it on
+its next cycle, resetting `t_adopt`. For the result to be continuous the new
+trajectory has to start where the robot currently is, which is one of the two
+constraints Flexiv state and which the bridge enforces at goal acceptance.
+
 ### Design: trajectory buffer plus a 1 kHz sampler
 
 MoveIt delivers a whole trajectory, sparsely — 22 points for a typical move.
