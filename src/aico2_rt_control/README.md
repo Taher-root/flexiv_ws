@@ -51,14 +51,37 @@ going; see [the host section](#what-you-still-have-to-write) for what to do if
 misses appear under load. Also worth repeating on `Rizon4R-062077` and over a
 longer window than 5 s.
 
-**One thing to confirm before the sampler relies on it:** which indices are the
-waist. `basics1_display_robot_states` reports `temperature` as
-`[0, 0, 31, 33, 37, 35, 33, 33, 33]` and `tau_ext` as `[0, 0, ...]`, which hints
-that indices 0 and 1 are the external axes — consistent with `DoF_e` preceding
-`DoF_m`. But the held pose has plausible waist values at indices 7 and 8
-(1.519 rad ≈ 87°, 0.552 rad ≈ 32°, both inside the measured waist range), so
-this is not yet unambiguous. Settle it by commanding one waist axis a few degrees
-through the Python driver and seeing which index moves, rather than inferring it.
+### The joint map, settled
+
+`joint_map_probe` on `Rizon4-063352` — read-only, nothing commanded:
+
+| index | limits (deg) | `tau_max` | `K_q_nom` | temp | what |
+|---|---|---|---|---|---|
+| **0** | −87.45 … 87.45 | 400 Nm | **inf** | 0 °C | **waist yaw, `AGV_Joint1`** |
+| **1** | **+2.50** … 87.45 | 1000 Nm | **inf** | 0 °C | **waist pitch, `AGV_Joint2`** |
+| 2 | −160 … 160 | 123 Nm | 6000 | 32 °C | arm |
+| 3 | −130 … 130 | 123 Nm | 6000 | 34 °C | arm |
+| 4 | −170 … 170 | 64 Nm | 4200 | 38 °C | arm |
+| 5 | −107 … 154 | 64 Nm | 4200 | 36 °C | arm |
+| 6 | −170 … 170 | 39 Nm | 1500 | 35 °C | arm |
+| 7 | −80 … 260 | 39 Nm | 1500 | 34 °C | arm |
+| 8 | −170 … 170 | 39 Nm | 1500 | 34 °C | arm |
+
+**The external axes are indices 0 and 1**, so `DoF_e` does precede `DoF_m`.
+Five independent fields agree: index 1's `+2.50°` lower limit matches the
+measured waist envelope exactly and no arm joint has a positive lower limit;
+`tau_max` is 400 and 1000 Nm against 39–123 for the arm, which is what lifting
+a torso takes; `K_q_nom` is **infinite** on both; `dq_max` is 60 °/s against
+120–280; and neither reports a temperature.
+
+My earlier reading of "plausible waist values at 7 and 8" was simply wrong —
+index 7 is the wrist joint, whose −80…260° range comfortably contains the
+86.6° that looked like a waist angle.
+
+**`K_q_nom` being infinite on the external axes matters beyond the joint map:**
+the waist is not impedance-controlled, so `RT_JOINT_IMPEDANCE` cannot soften it
+and `SetJointImpedance` has nothing meaningful to set there. A compliant
+configuration is therefore compliant in the arm only.
 
 ---
 
@@ -383,6 +406,65 @@ interfere with.
 The cost is that nothing covers for a missed deadline. That is what
 `rt_hold_probe` measures, and it is the one thing worth knowing before the arm
 is driven this way.
+
+### How a trajectory travels, end to end
+
+```
+ MoveIt            ~22 points: q, dq, ddq, time_from_start      (already
+   |                                                             jerk-limited
+   |  FollowJointTrajectory goal                                 by Ruckig)
+   v
+ aico2_rt_bridge   ROS process, links rclcpp, no RDK
+   |                 validate -> reorder joints by name -> copy into a free
+   |                 slot -> atomically publish the slot index
+   v
+ shared memory     3 preallocated slots, 1.6 MB each
+   |                 slot = {id, n_points, n_joints, Point[4096]}
+   |                 Point = {t, q[16], dq[16], ddq[16]} = 392 bytes
+   v
+ aico2_rt_server   RDK process, no ROS. 1 kHz scheduler.
+   |                 every 1 ms: t = now - t_adopt
+   |                             quintic Hermite between bracketing waypoints
+   |                             clamp to limits
+   |                             StreamJointPosition(q, dq, ddq)
+   v
+ robot             tracks the setpoints. No internal motion generator.
+```
+
+**Stored** once, as plain data. The bridge writes a whole trajectory into one
+slot and then publishes its index with a single atomic store. Nothing is
+allocated after startup on either side: the slots are part of the mapping, so
+the handoff is a memory copy plus an integer store. Three slots and an atomic
+index mean the writer always has one that is neither published nor being read,
+so neither side ever waits for the other.
+
+**"Smoothed" is the wrong word for what the sampler does, and the distinction
+matters.** It does not filter anything. It reconstructs a continuous curve that
+passes *exactly* through MoveIt's waypoints with MoveIt's own velocities and
+accelerations at each one — verified to 1e-9 rad at the knots. The smoothness
+comes from MoveIt, where TOTG plus Ruckig already produced a jerk-limited
+profile; the sampler's job is to not damage it. Quintic Hermite is chosen
+because it is C², so interpolation introduces no acceleration steps of its own.
+A cubic would match position and velocity and then step the acceleration at
+every waypoint — reintroducing exactly the discontinuity Ruckig was added
+upstream to remove.
+
+So: a bad plan still executes badly. What changes versus NRT is that nothing
+*between* the plan and the joints adds jerk of its own. In NRT the robot's
+generator re-planned toward each setpoint with no jerk limit and no knowledge of
+when the next command was due, which is what produced the rate U-curve in
+`docs/open_issues.md` issue 1a.
+
+**Sent** at exactly 1 kHz by `rdk::Scheduler`, measured on this host at
+0.999999 ms mean with zero missed deadlines. Execution time is taken from the
+trajectory's own `time_from_start`, so a plan MoveIt timed at 3.4 s takes 3.4 s
+— that is what "your exact timing" means and what no NRT path could offer.
+
+**Mid-motion pre-emption** works the same way: the bridge writes the new
+trajectory to a different slot and publishes it, and the RT task adopts it on
+its next cycle, resetting `t_adopt`. For the result to be continuous the new
+trajectory has to start where the robot currently is, which is one of the two
+constraints Flexiv state and which the bridge enforces at goal acceptance.
 
 ### Design: trajectory buffer plus a 1 kHz sampler
 

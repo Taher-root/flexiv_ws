@@ -65,10 +65,22 @@ set_target_properties(joint_map_probe PROPERTIES
   CXX_STANDARD_REQUIRED ON)
 target_link_options(joint_map_probe PRIVATE "-Wl,--disable-new-dtags")
 
+# The RT server. Links the RDK and nothing from ROS, which is the whole point
+# of the two-process split.
+add_executable(rt_server ../src/rt_server.cpp)
+target_include_directories(rt_server PRIVATE ../include)
+target_link_libraries(rt_server flexiv::flexiv_rdk)
+set_target_properties(rt_server PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON)
+target_link_options(rt_server PRIVATE "-Wl,--disable-new-dtags")
+find_package(Threads REQUIRED)
+target_link_libraries(rt_server Threads::Threads rt)
+
 # The static archive references spdlog and fmt without carrying them.
 find_package(spdlog QUIET)
 find_package(fmt QUIET)
-foreach(tgt rt_hold_probe joint_map_probe)
+foreach(tgt rt_hold_probe joint_map_probe rt_server)
   if(spdlog_FOUND)
     target_link_libraries(${tgt} spdlog::spdlog)
   endif()

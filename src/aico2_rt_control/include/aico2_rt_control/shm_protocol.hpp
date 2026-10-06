@@ -95,23 +95,48 @@ struct Slot {
     Point points[kMaxPoints];
 };
 
-/** Robot state, written by the RT task and read by the bridge. */
-struct State {
-    double stamp_mono;             ///< CLOCK_MONOTONIC seconds, RT side
+/**
+ * @brief What the RT task publishes. Written only by the 1 kHz thread.
+ *
+ * Deliberately contains no measured joint data. `Robot::states()` is documented
+ * as returning "a value copy of RobotStates struct", and RobotStates holds
+ * twelve std::vector<double> -- so every call allocates, which is forbidden in
+ * the control loop. Measured state is published separately by a non-RT thread,
+ * where allocation is free. This is also why rt_hold_probe's timing result is
+ * trustworthy: its periodic task called only fault(), never states().
+ */
+struct RtStatus {
+    double stamp_mono;             ///< CLOCK_MONOTONIC seconds
+    double cmd_q[kMaxDof];         ///< last commanded position
+    double cmd_dq[kMaxDof];
+    double cmd_ddq[kMaxDof];
+    std::uint32_t dof;
+    std::uint32_t exec_state;      ///< ExecState
+    std::uint32_t reject_reason;   ///< RejectReason
+    std::uint32_t clamped;         ///< a limit was hit at least once
+    std::uint64_t active_id;       ///< goal currently adopted, 0 if none
+    double traj_time;              ///< seconds into the active trajectory
+    std::uint64_t cycles;
+    std::uint64_t missed_deadlines;
+    double max_period_sec;
+    double min_period_sec;
+};
+
+/**
+ * @brief Measured robot state. Written only by rt_server's non-RT thread.
+ *
+ * Separate from RtStatus so each has exactly one writer -- a seqlock with two
+ * writers is not a seqlock. The bridge turns this into /joint_states.
+ */
+struct Measured {
+    double stamp_mono;
     double q[kMaxDof];
     double dq[kMaxDof];
     double tau[kMaxDof];
     std::uint32_t dof;
     std::uint32_t operational;     ///< bool
     std::uint32_t fault;           ///< bool
-    std::uint32_t exec_state;      ///< ExecState
-    std::uint32_t reject_reason;   ///< RejectReason
-    std::uint64_t active_id;       ///< goal currently adopted, 0 if none
-    double traj_time;              ///< seconds into the active trajectory
-    /** Loop health, so the bridge can publish it without a second channel. */
-    std::uint64_t cycles;
-    std::uint64_t missed_deadlines;
-    double max_period_sec;
+    std::uint32_t _pad;
 };
 
 /**
@@ -144,11 +169,17 @@ struct Shm {
     std::atomic<std::uint32_t> reading_slot;
     /** Echo of publish_seq once adopted; the bridge waits on this. */
     std::atomic<std::uint64_t> adopted_seq;
-    /** Seqlock: even and unchanged across a read means `state` is coherent. */
-    std::atomic<std::uint64_t> state_seq;
+    /** Seqlock over `status`: even and unchanged across a read means coherent. */
+    std::atomic<std::uint64_t> status_seq;
     /** RT heartbeat, so the bridge can tell a dead server from an idle one. */
     std::atomic<std::uint64_t> rt_heartbeat;
-    State state;
+    RtStatus status;
+
+    alignas(64) char _pad3[64];
+
+    // ---- rt_server's non-RT thread -> bridge -----------------------------
+    std::atomic<std::uint64_t> measured_seq;
+    Measured measured;
 
     alignas(64) char _pad2[64];
 
@@ -220,41 +251,60 @@ inline void AcknowledgeSeq(Shm& shm, std::uint64_t seq)
 }
 
 /**
- * @brief Publish `state` under the seqlock. Writer never waits.
+ * @brief Seqlock write, one pair per publisher. The writer never waits.
  *
  * Odd while writing, even when settled. A reader that sees an odd value, or two
  * different values either side of its read, retries.
  */
-inline void BeginStateWrite(Shm& shm)
+inline void BeginStatusWrite(Shm& shm)
 {
-    shm.state_seq.fetch_add(1, std::memory_order_release);
+    shm.status_seq.fetch_add(1, std::memory_order_release);
 }
-inline void EndStateWrite(Shm& shm)
+inline void EndStatusWrite(Shm& shm)
 {
-    shm.state_seq.fetch_add(1, std::memory_order_release);
+    shm.status_seq.fetch_add(1, std::memory_order_release);
+}
+inline void BeginMeasuredWrite(Shm& shm)
+{
+    shm.measured_seq.fetch_add(1, std::memory_order_release);
+}
+inline void EndMeasuredWrite(Shm& shm)
+{
+    shm.measured_seq.fetch_add(1, std::memory_order_release);
 }
 
 /**
- * @brief Read a coherent copy of `state`.
+ * @brief Read a coherent copy from a seqlock-protected region.
  * @return false if no stable copy was seen within `max_tries`.
  *
  * Bounded rather than a spin: the caller is the ROS side and would rather
  * publish nothing this cycle than block on a 1 kHz writer.
  */
-inline bool ReadState(const Shm& shm, State& out, int max_tries = 8)
+template <typename T>
+inline bool ReadSeqlocked(
+    const std::atomic<std::uint64_t>& seq, const T& src, T& out, int max_tries = 8)
 {
     for (int i = 0; i < max_tries; ++i) {
-        const std::uint64_t before = shm.state_seq.load(std::memory_order_acquire);
+        const std::uint64_t before = seq.load(std::memory_order_acquire);
         if (before & 1u) {
             continue;  // a write is in progress
         }
-        out = shm.state;
+        out = src;
         std::atomic_thread_fence(std::memory_order_acquire);
-        if (shm.state_seq.load(std::memory_order_acquire) == before) {
+        if (seq.load(std::memory_order_acquire) == before) {
             return true;
         }
     }
     return false;
+}
+
+inline bool ReadStatus(const Shm& shm, RtStatus& out, int max_tries = 8)
+{
+    return ReadSeqlocked(shm.status_seq, shm.status, out, max_tries);
+}
+inline bool ReadMeasured(const Shm& shm, Measured& out, int max_tries = 8)
+{
+    return ReadSeqlocked(shm.measured_seq, shm.measured, out, max_tries);
 }
 
 }  // namespace aico2_rt
