@@ -408,18 +408,32 @@ on that link, and the measured 0.009 ms ping deviation is the baseline to
 protect. Re-run `scripts/check_rt_host.sh` after any network change and confirm
 both arms still resolve to the wired interface at the same latency.
 
-Dependencies first — Eigen3, spdlog, Fast-RTPS, Fast-CDR, RBDyn — vendored into
-a prefix of your choosing by the RDK's own script:
+**Source ROS 2 first, and use the ROS 2 dependency script.** There are two
+scripts in `thirdparty/`, and picking the wrong one produces a few hundred
+undefined-symbol errors at link time rather than any clear message:
+
+| script | installs | use it for |
+|---|---|---|
+| `build_and_install_dependencies.sh` | Eigen, spdlog, tinyxml2, yaml-cpp, foonathan_memory, **Fast-CDR v1.0.28**, **Fast-DDS v2.6.10**, Boost, SpaceVecAlg, RBDyn | the standalone (non-ROS 2) archive |
+| `build_and_install_dependencies_not_in_ros2.sh` | **Boost, SpaceVecAlg, RBDyn only** | the `ros2-jazzy` archive — everything else comes from ROS 2 |
+
+The `ros2-jazzy` archive is compiled against ROS 2 Jazzy's Fast-CDR 2.x and
+Fast-DDS 2.14.x. The standalone script installs Fast-CDR 1.0.28 and Fast-DDS
+2.6.10, which do not have the symbols that archive needs. Upstream's README
+documents neither the flag nor the second script — both are only visible in
+`CMakeLists.txt` and the `thirdparty/` listing.
 
 ```bash
 sudo apt install build-essential cmake
+source /opt/ros/jazzy/setup.bash          # before anything else
+
 cd flexiv_rdk/thirdparty
-bash build_and_install_dependencies.sh ~/rdk_install
+bash build_and_install_dependencies_not_in_ros2.sh ~/rdk_install
 ```
 
-Then the library itself. It is a prebuilt static archive the CMake project
-downloads at configure time from the GitHub release, with a SHA256 check against
-`lib/*.sha256`:
+Then the library itself, with ROS 2 still sourced. It is a prebuilt static
+archive the CMake project downloads at configure time from the GitHub release,
+with a SHA256 check against `lib/*.sha256`:
 
 ```bash
 cd flexiv_rdk
@@ -432,8 +446,19 @@ cmake --build . --target install --config Release
 `libflexiv_rdk.aarch64-linux-gnu.ros2-jazzy.a` instead of
 `libflexiv_rdk.aarch64-linux-gnu.a`; the plain archive statically links Fast-RTPS
 and Fast-CDR, and so does ROS 2, so the two collide as soon as anything links
-`rclcpp`. Flexiv ships the variant precisely so they can coexist. Without the
-flag, `CMakeLists.txt` falls through to the plain archive silently.
+`rclcpp`. `CMakeLists.txt:50` defaults it `OFF` and falls through to the plain
+archive silently.
+
+**Check the configure output before building.** The dependency paths say whether
+this is right:
+
+```
+-- Found fastrtps v2.14.x: /opt/ros/jazzy/share/fastrtps/cmake     correct
+-- Found fastcdr  v2.x:    /opt/ros/jazzy/lib/cmake/fastcdr        correct
+
+-- Found fastrtps v2.6.10:  /root/rdk_install/share/fastrtps/cmake  WRONG script
+-- Found fastcdr  v1.0.28:  /root/rdk_install/lib/cmake/fastcdr     WRONG script
+```
 
 Then build this package, pointing CMake at the prefix:
 
@@ -461,6 +486,42 @@ is a good way to break unrelated ROS 2 nodes.
 
 ---
 
+
+## Troubleshooting the build
+
+**Hundreds of `undefined reference to eprosima::fastcdr::Cdr::...` plus
+`fmt::v9::...` and `spdlog::details::log_msg::log_msg`.**
+
+The wrong dependency script was used. Symbols like `CdrSizeCalculator`,
+`CdrVersion`, `Cdr::set_encoding_flag` and `PortBasedTransportDescriptor` exist
+only in Fast-CDR 2.x / Fast-DDS 2.14.x, which is what the `ros2-jazzy` archive
+is built against. `build_and_install_dependencies.sh` installs Fast-CDR 1.0.28
+and Fast-DDS 2.6.10 into the prefix, where they shadow ROS 2's copies.
+
+The prefix has to be rebuilt — reconfiguring is not enough, because the wrong
+versions are installed into it:
+
+```bash
+rm -rf ~/rdk_install ~/flexiv_rdk/build
+source /opt/ros/jazzy/setup.bash
+cd ~/flexiv_rdk/thirdparty
+bash build_and_install_dependencies_not_in_ros2.sh ~/rdk_install
+cd ~/flexiv_rdk && mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install -DRDK_SUPPORT_ROS2_JAZZY=ON
+cmake --build . --target install --config Release
+```
+
+Confirm from the configure output that `fastrtps` and `fastcdr` resolve under
+`/opt/ros/jazzy`, not under the prefix.
+
+**`ignoring unknown package 'aico2_rt_control' in --packages-select`.**
+`colcon` was run from somewhere other than the workspace root, so it saw no
+`src/`. `cd ~/flexiv_ws` first.
+
+**`ros2: command not found`.** ROS 2 is not sourced in that shell:
+`source /opt/ros/jazzy/setup.bash && source install/setup.bash`.
+
+---
 
 ## rt_hold_probe
 
