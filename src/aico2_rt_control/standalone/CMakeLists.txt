@@ -56,12 +56,23 @@ set_target_properties(rt_hold_probe PROPERTIES
 # LD_LIBRARY_PATH=<prefix>/lib at runtime instead; see README.md.
 target_link_options(rt_hold_probe PRIVATE "-Wl,--disable-new-dtags")
 
+# Read-only: reports the per-joint limits so the waist indices can be
+# identified without commanding anything. See src/joint_map_probe.cpp.
+add_executable(joint_map_probe ../src/joint_map_probe.cpp)
+target_link_libraries(joint_map_probe flexiv::flexiv_rdk)
+set_target_properties(joint_map_probe PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON)
+target_link_options(joint_map_probe PRIVATE "-Wl,--disable-new-dtags")
+
 # The static archive references spdlog and fmt without carrying them.
 find_package(spdlog QUIET)
 find_package(fmt QUIET)
-if(spdlog_FOUND)
-  target_link_libraries(rt_hold_probe spdlog::spdlog)
-endif()
-if(fmt_FOUND)
-  target_link_libraries(rt_hold_probe fmt::fmt)
-endif()
+foreach(tgt rt_hold_probe joint_map_probe)
+  if(spdlog_FOUND)
+    target_link_libraries(${tgt} spdlog::spdlog)
+  endif()
+  if(fmt_FOUND)
+    target_link_libraries(${tgt} fmt::fmt)
+  endif()
+endforeach()

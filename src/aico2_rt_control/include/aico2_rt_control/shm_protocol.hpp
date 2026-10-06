@@ -67,8 +67,14 @@ enum class ExecState : std::uint32_t {
     kRunning = 1,    ///< sampling a trajectory
     kFinished = 2,   ///< ran to the end, holding the last point
     kRejected = 3,   ///< validation failed; see reject_reason
-    kAborted = 4,    ///< stopped early (fault, or cancel)
+    kAborted = 4,    ///< stopped early (fault, or cancel), holding
+    kStopping = 5,   ///< decelerating to a stop after a cancel
 };
+
+/** The RT loop's nominal period, and the interval beyond which a cycle counts
+ *  as having missed its deadline. */
+constexpr double kLoopPeriodSec = 0.001;
+constexpr double kDeadlineSec = 0.0015;
 
 enum class RejectReason : std::uint32_t {
     kNone = 0,

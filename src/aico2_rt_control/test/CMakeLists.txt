@@ -18,7 +18,7 @@ endif()
 enable_testing()
 find_package(Threads REQUIRED)
 
-foreach(t test_traj_sampler test_shm_protocol)
+foreach(t test_traj_sampler test_shm_protocol test_rt_executor)
   add_executable(${t} ${t}.cpp)
   target_include_directories(${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
   target_compile_features(${t} PRIVATE cxx_std_17)
