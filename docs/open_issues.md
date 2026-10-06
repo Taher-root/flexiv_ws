@@ -87,19 +87,29 @@ the 2.x `ProductModel` enum reading was right.
 structurally absent in RT: there is no setpoint-to-setpoint planning to
 pre-empt or starve. It is the real fix rather than a tuning exercise.
 
-**RT is now confirmed working (2026-10-06).** `aico2_rt_control`'s
-`rt_hold_probe` holds all nine joints on `Rizon4-063352` at 1 kHz with **zero
-missed deadlines**, a mean period of 0.999999 ms and a worst case of 1.01729 ms
-— ±17 µs of jitter. The host turned out to be far better suited than assumed:
+**RT is now confirmed working end to end (2026-10-06).** Not just the loop:
+`rt_server` plus `traj_publish` executed a 3-degree single-joint move through
+shared memory with **0.001 degrees of tracking error**, no clamping, and **zero
+missed deadlines over 54 378 cycles** (worst period 1.023 ms). The trajectory
+was stored by one process, adopted by the 1 kHz task on its next cycle,
+resampled by quintic Hermite every millisecond and streamed through
+`StreamJointPosition`. `rt_hold_probe` separately holds all nine joints with a
+mean period of 0.999999 ms — ±17 µs of jitter. The host turned out to be far better suited than assumed:
 it is not the Jetson but an 18-core x86_64 machine running a `PREEMPT_RT`
 kernel with `rcu_nocbs` on every core and a performance governor, wired to both
 arms at 0.2 ms. So the concern recorded here — a 1 kHz loop on a non-RT kernel
 competing with perception — does not apply to this host as configured.
 
-That measurement was taken with the rest of the stack stopped; repeating it
-under Nav2, RTAB-Map and the cameras is the remaining question, and the one that
-decides whether the RT controller is worth building. NRT stays the default until
-then, and `aico2_rt_control` still changes nothing in the existing driver.
+Those measurements were taken with the rest of the stack stopped, which is how
+RT will be used — the decision is to run RT only when Nav2 and the cameras are
+not running, so contention under load stops being a question to answer and
+becomes a mode not to mix. NRT stays the default for everything else, and
+`aico2_rt_control` still changes nothing in the existing driver.
+
+What remains is the ROS bridge: a `FollowJointTrajectory` action server and a
+`/joint_states` publisher over the same shared memory. Its validation,
+remapping and execution logic are already written and tested in
+`traj_ingest.hpp` and `rt_executor.hpp`.
 
 Getting there took four separate build problems, all from the prebuilt library
 rather than this workspace: the RDK version the robot accepts, which of two
