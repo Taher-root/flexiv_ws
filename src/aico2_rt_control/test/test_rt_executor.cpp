@@ -37,14 +37,10 @@ constexpr std::uint32_t kDof = 9;
 struct FakeRobot {
     bool faulted = false;
     bool op = true;
-    double q_[kMaxDof]{}, dq_[kMaxDof]{}, tau_[kMaxDof]{};
     std::vector<Setpoint> streamed;
 
     bool fault() const { return faulted; }
     bool operational() const { return op; }
-    const double* q() const { return q_; }
-    const double* dq() const { return dq_; }
-    const double* tau() const { return tau_; }
     void Stream(const double* q, const double* dq, const double* ddq)
     {
         Setpoint s{};
@@ -144,7 +140,7 @@ void TestAdoptAndRunToCompletion()
     Check(ex.state() == ExecState::kRunning, "adopted and running");
     Check(shm->adopted_seq.load() == seq, "acknowledged the publish sequence");
     Check(shm->reading_slot.load() == slot, "marked the slot as in use");
-    Check(shm->state.active_id == 77, "reported the goal id");
+    Check(shm->status.active_id == 77, "reported the goal id");
 
     // Run past the end.
     for (int i = 1; i <= 700; ++i) {
@@ -277,9 +273,10 @@ void TestFaultStopsAndReports()
     Check(ex.state() == ExecState::kAborted, "aborted on fault");
     Check(ex.stop_requested(), "shutdown requested");
     Check(robot.streamed.size() == before, "nothing streamed into a faulted robot");
-    State st{};
-    Check(ReadState(*shm, st), "state still readable");
-    Check(st.fault == 1u, "fault reported through shared memory");
+    RtStatus st{};
+    Check(ReadStatus(*shm, st), "status still readable");
+    Check(st.exec_state == static_cast<std::uint32_t>(ExecState::kAborted),
+        "abort reported through shared memory");
 }
 
 void TestRejectsMalformedSlot()
@@ -299,8 +296,8 @@ void TestRejectsMalformedSlot()
     Check(ex.state() == ExecState::kRejected, "rejected the wrong-DoF slot");
     Check(shm->adopted_seq.load() == seq, "still acknowledged, so the bridge is not left waiting");
     Close(ex.command().q[0], 0.4, 1e-12, "kept holding after rejection");
-    State st{};
-    Check(ReadState(*shm, st), "state readable");
+    RtStatus st{};
+    Check(ReadStatus(*shm, st), "status readable");
     Check(st.reject_reason == static_cast<std::uint32_t>(RejectReason::kDofMismatch),
         "reported the reason");
 }
@@ -320,7 +317,7 @@ void TestSecondTrajectoryPreemptsFirst()
     for (int i = 0; i <= 200; ++i) {
         ex.Cycle(i * kLoopPeriodSec);
     }
-    Check(shm->state.active_id == 100, "running the first goal");
+    Check(shm->status.active_id == 100, "running the first goal");
 
     const std::uint32_t b = PickFreeSlot(*shm);
     Check(b != a, "the second trajectory went to a different slot");
@@ -328,7 +325,7 @@ void TestSecondTrajectoryPreemptsFirst()
     PublishSlot(*shm, b);
     ex.Cycle(201 * kLoopPeriodSec);
     Check(ex.state() == ExecState::kRunning, "still running");
-    Check(shm->state.active_id == 200, "switched to the second goal");
+    Check(shm->status.active_id == 200, "switched to the second goal");
     Check(shm->reading_slot.load() == b, "now reading the second slot");
 }
 

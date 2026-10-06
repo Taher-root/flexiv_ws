@@ -13,10 +13,14 @@
  *
  *   bool fault() const;
  *   bool operational() const;
- *   const double* q() const;        // dof values
- *   const double* dq() const;
- *   const double* tau() const;
  *   void Stream(const double* q, const double* dq, const double* ddq);
+ *
+ * Note what is NOT in that list: any way to read measured joint state. The
+ * RDK's `states()` returns a value copy of a struct holding twelve
+ * std::vector<double>, so it allocates on every call and cannot appear in a
+ * 1 kHz task. rt_server publishes measured state from a separate, non-RT
+ * thread, which is also why rt_hold_probe's timing figures are trustworthy --
+ * its periodic task called only fault().
  *
  * RT rules, enforced by construction: nothing here allocates, takes a lock,
  * logs, or throws. Every buffer is a fixed-size member.
@@ -80,7 +84,7 @@ public:
         if (robot_->fault() || !robot_->operational()) {
             state_ = ExecState::kAborted;
             stop_requested_ = true;
-            PublishState(now);
+            PublishStatus(now);
             return;
         }
 
@@ -133,7 +137,7 @@ public:
 
         Clamp();
         robot_->Stream(cmd_.q, cmd_.dq, cmd_.ddq);
-        PublishState(now);
+        PublishStatus(now);
     }
 
     bool stop_requested() const { return stop_requested_; }
@@ -273,30 +277,28 @@ private:
         }
     }
 
-    void PublishState(double now)
+    /** Publish what this thread knows: the command and the loop's health. */
+    void PublishStatus(double now)
     {
-        BeginStateWrite(*shm_);
-        State& st = shm_->state;
+        BeginStatusWrite(*shm_);
+        RtStatus& st = shm_->status;
         st.stamp_mono = now;
-        const double* q = robot_->q();
-        const double* dq = robot_->dq();
-        const double* tau = robot_->tau();
         for (std::uint32_t j = 0; j < dof_; ++j) {
-            st.q[j] = q[j];
-            st.dq[j] = dq[j];
-            st.tau[j] = tau[j];
+            st.cmd_q[j] = cmd_.q[j];
+            st.cmd_dq[j] = cmd_.dq[j];
+            st.cmd_ddq[j] = cmd_.ddq[j];
         }
         st.dof = dof_;
-        st.operational = robot_->operational() ? 1u : 0u;
-        st.fault = robot_->fault() ? 1u : 0u;
         st.exec_state = static_cast<std::uint32_t>(state_);
         st.reject_reason = static_cast<std::uint32_t>(reject_);
+        st.clamped = clamped_ ? 1u : 0u;
         st.active_id = active_id_;
         st.traj_time = traj_time_;
         st.cycles = cycles_;
         st.missed_deadlines = missed_;
         st.max_period_sec = max_period_;
-        EndStateWrite(*shm_);
+        st.min_period_sec = min_period_;
+        EndStatusWrite(*shm_);
         shm_->rt_heartbeat.store(cycles_, std::memory_order_release);
     }
 

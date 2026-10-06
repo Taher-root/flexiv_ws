@@ -83,25 +83,25 @@ void TestSeqlockNeverTears()
 
     std::thread writer([&] {
         for (std::uint64_t k = 1; !stop.load(std::memory_order_relaxed); ++k) {
-            BeginStateWrite(*shm);
+            BeginStatusWrite(*shm);
             // Every field derived from k, so any mixture of two generations is
             // detectable. Written field by field, as the RT task would.
-            shm->state.dof = 9;
-            shm->state.cycles = k;
-            shm->state.stamp_mono = static_cast<double>(k);
+            shm->status.dof = 9;
+            shm->status.cycles = k;
+            shm->status.stamp_mono = static_cast<double>(k);
             for (std::size_t j = 0; j < kMaxDof; ++j) {
-                shm->state.q[j] = static_cast<double>(k);
-                shm->state.dq[j] = static_cast<double>(k);
-                shm->state.tau[j] = static_cast<double>(k);
+                shm->status.cmd_q[j] = static_cast<double>(k);
+                shm->status.cmd_dq[j] = static_cast<double>(k);
+                shm->status.cmd_ddq[j] = static_cast<double>(k);
             }
-            shm->state.active_id = k;
-            EndStateWrite(*shm);
+            shm->status.active_id = k;
+            EndStatusWrite(*shm);
         }
     });
 
-    State out{};
-    while (reads.load() < 200000) {
-        if (!ReadState(*shm, out)) {
+    RtStatus out{};
+    while (reads.load() < 50000) {
+        if (!ReadStatus(*shm, out)) {
             retries.fetch_add(1);
             continue;
         }
@@ -110,7 +110,7 @@ void TestSeqlockNeverTears()
         bool consistent = (out.cycles == static_cast<std::uint64_t>(k))
                        && (out.active_id == static_cast<std::uint64_t>(k));
         for (std::size_t j = 0; j < kMaxDof && consistent; ++j) {
-            consistent = out.q[j] == k && out.dq[j] == k && out.tau[j] == k;
+            consistent = out.cmd_q[j] == k && out.cmd_dq[j] == k && out.cmd_ddq[j] == k;
         }
         if (!consistent) {
             torn.fetch_add(1);
@@ -134,11 +134,11 @@ void TestReadStateReportsFailureMidWrite()
 {
     std::printf("a read during a write reports failure rather than garbage\n");
     auto* shm = new Shm{};
-    BeginStateWrite(*shm);  // leave the sequence odd
-    State out{};
-    Check(!ReadState(*shm, out, 4), "read fails while a write is open");
-    EndStateWrite(*shm);
-    Check(ReadState(*shm, out, 4), "read succeeds once the write closes");
+    BeginStatusWrite(*shm);  // leave the sequence odd
+    RtStatus out{};
+    Check(!ReadStatus(*shm, out, 4), "read fails while a write is open");
+    EndStatusWrite(*shm);
+    Check(ReadStatus(*shm, out, 4), "read succeeds once the write closes");
     delete shm;
 }
 

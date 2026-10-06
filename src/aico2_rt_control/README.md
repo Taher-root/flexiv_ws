@@ -51,14 +51,37 @@ going; see [the host section](#what-you-still-have-to-write) for what to do if
 misses appear under load. Also worth repeating on `Rizon4R-062077` and over a
 longer window than 5 s.
 
-**One thing to confirm before the sampler relies on it:** which indices are the
-waist. `basics1_display_robot_states` reports `temperature` as
-`[0, 0, 31, 33, 37, 35, 33, 33, 33]` and `tau_ext` as `[0, 0, ...]`, which hints
-that indices 0 and 1 are the external axes — consistent with `DoF_e` preceding
-`DoF_m`. But the held pose has plausible waist values at indices 7 and 8
-(1.519 rad ≈ 87°, 0.552 rad ≈ 32°, both inside the measured waist range), so
-this is not yet unambiguous. Settle it by commanding one waist axis a few degrees
-through the Python driver and seeing which index moves, rather than inferring it.
+### The joint map, settled
+
+`joint_map_probe` on `Rizon4-063352` — read-only, nothing commanded:
+
+| index | limits (deg) | `tau_max` | `K_q_nom` | temp | what |
+|---|---|---|---|---|---|
+| **0** | −87.45 … 87.45 | 400 Nm | **inf** | 0 °C | **waist yaw, `AGV_Joint1`** |
+| **1** | **+2.50** … 87.45 | 1000 Nm | **inf** | 0 °C | **waist pitch, `AGV_Joint2`** |
+| 2 | −160 … 160 | 123 Nm | 6000 | 32 °C | arm |
+| 3 | −130 … 130 | 123 Nm | 6000 | 34 °C | arm |
+| 4 | −170 … 170 | 64 Nm | 4200 | 38 °C | arm |
+| 5 | −107 … 154 | 64 Nm | 4200 | 36 °C | arm |
+| 6 | −170 … 170 | 39 Nm | 1500 | 35 °C | arm |
+| 7 | −80 … 260 | 39 Nm | 1500 | 34 °C | arm |
+| 8 | −170 … 170 | 39 Nm | 1500 | 34 °C | arm |
+
+**The external axes are indices 0 and 1**, so `DoF_e` does precede `DoF_m`.
+Five independent fields agree: index 1's `+2.50°` lower limit matches the
+measured waist envelope exactly and no arm joint has a positive lower limit;
+`tau_max` is 400 and 1000 Nm against 39–123 for the arm, which is what lifting
+a torso takes; `K_q_nom` is **infinite** on both; `dq_max` is 60 °/s against
+120–280; and neither reports a temperature.
+
+My earlier reading of "plausible waist values at 7 and 8" was simply wrong —
+index 7 is the wrist joint, whose −80…260° range comfortably contains the
+86.6° that looked like a waist angle.
+
+**`K_q_nom` being infinite on the external axes matters beyond the joint map:**
+the waist is not impedance-controlled, so `RT_JOINT_IMPEDANCE` cannot soften it
+and `SetJointImpedance` has nothing meaningful to set there. A compliant
+configuration is therefore compliant in the arm only.
 
 ---
 
