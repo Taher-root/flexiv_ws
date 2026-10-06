@@ -581,6 +581,74 @@ than things the RT task can fix:
 
 ---
 
+## Running it
+
+Three processes, and the Python arm driver must be stopped for all of it: both
+it and `rt_server` want the single RDK session the robot allows.
+
+```bash
+#  A: the RT half. Needs a ROS-free shell -- see noros.sh above.
+bash src/aico2_rt_control/scripts/noros.sh
+cd src/aico2_rt_control/standalone
+cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/rdk_standalone && cmake --build build -j
+./build/rt_server Rizon4-063352            # add --control-waist to drive the torso
+
+#  B: the ROS half, in the namespace aico2_moveit_config already expects
+source /opt/ros/jazzy/setup.bash && source install/setup.bash
+ros2 run aico2_rt_control rt_bridge --ros-args -r __ns:=/left_arm
+
+#  C: check, then move
+ros2 topic hz /left_arm/joint_states       # ~100 Hz
+ros2 action list | grep follow             # /left_arm/follow_joint_trajectory
+
+ros2 run aico2_rt_control send_goal.py --ros-args -r __ns:=/left_arm   # --list
+ros2 run aico2_rt_control send_goal.py --ros-args -r __ns:=/left_arm \
+    -p use_sim_time:=false -- --joint Left_joint6 --degrees 3 --yes-move
+```
+
+Then MoveIt, with no configuration change — `moveit_controllers.yaml` builds the
+action name from the controller name `left_arm`, which is exactly what the
+bridge serves in that namespace:
+
+```bash
+ros2 launch flexiv_amr_bringup full_system.launch.py \
+    use_moveit:=true use_nav:=false use_slam:=false
+```
+
+### Two ways in, and why both exist
+
+`traj_publish` writes a slot directly and needs no ROS; `send_goal.py` sends a
+`FollowJointTrajectory` goal through the bridge. Keeping both is deliberate:
+when a move misbehaves, running the same motion through each says immediately
+whether the problem is in the RT path or in ROS. The first one is how the
+hardware result above was measured.
+
+Neither will move anything without `--yes-move`, and both cap travel.
+
+### What a goal has to look like
+
+Not arbitrary. The bridge refuses anything that would be unsafe or
+silently wrong to execute, so a hand-written goal usually gets rejected until it
+satisfies all of:
+
+- **every joint the server commands**, in any order — a partial goal would leave
+  the rest of the vector wherever the previous trajectory left it
+- **positions, velocities and accelerations** on every point; a goal missing the
+  latter two is refused rather than zero-padded, because zeros would validate as
+  "starts at rest" and then be interpolated as though the plan really had no
+  velocity
+- **starting within 0.05 rad of the measured position**, and at rest
+- **ending at rest**, since holding the final point is only continuous if it
+  stopped there
+- **inside the limits** `rt_server` published, which are the robot's own
+- **no waist motion** unless `rt_server` was started with `--control-waist`
+
+MoveIt satisfies all of this naturally. That is the point: the constraints are
+Flexiv's, and a planner that produces a jerk-limited profile meets them without
+being asked.
+
+---
+
 ## Installing the C++ RDK
 
 This is the only thing standing between here and RT. Both arms are licensed
