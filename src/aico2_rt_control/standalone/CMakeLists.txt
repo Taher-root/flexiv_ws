@@ -39,6 +39,20 @@ set_target_properties(rt_hold_probe PROPERTIES
   CXX_STANDARD 17
   CXX_STANDARD_REQUIRED ON)
 
+# Emit DT_RPATH rather than DT_RUNPATH, so transitive dependencies resolve.
+#
+# The RDK links Fast-RTPS, which in turn needs foonathan_memory; both live in
+# the prefix. Modern linkers default to DT_RUNPATH, and ld.so applies an
+# object's RUNPATH only to that object's OWN direct dependencies -- so the
+# executable's RUNPATH finds libfastrtps.so but not the libfoonathan_memory.so
+# that libfastrtps itself requires, which fails at startup with
+# "cannot open shared object file". DT_RPATH is inherited down the chain and
+# does resolve it. Verified both behaviours directly.
+#
+# Flexiv's example project does not do this, so their examples need
+# LD_LIBRARY_PATH=<prefix>/lib at runtime instead; see README.md.
+target_link_options(rt_hold_probe PRIVATE "-Wl,--disable-new-dtags")
+
 # The static archive references spdlog and fmt without carrying them.
 find_package(spdlog QUIET)
 find_package(fmt QUIET)

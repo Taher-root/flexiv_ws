@@ -649,12 +649,32 @@ cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/rdk_standalone
 cmake --build build -j
 ./build/basics1_display_robot_states Rizon4-063352
 
+# Flexiv's examples need this: see the note below
+export LD_LIBRARY_PATH=$HOME/rdk_standalone/lib
+./build/basics1_display_robot_states Rizon4-063352
+
 # if that prints robot states, the archive works; then
 cd ~/flexiv_ws/src/aico2_rt_control/standalone
 cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/rdk_standalone
 cmake --build build -j
 ./build/rt_hold_probe Rizon4-063352
 ```
+
+**Flexiv's examples need `LD_LIBRARY_PATH` set to the prefix's `lib`**, and
+`rt_hold_probe` does not. The reason is `DT_RUNPATH` versus `DT_RPATH`. The RDK
+links Fast-RTPS, which itself needs foonathan_memory; both are in the prefix.
+Modern linkers emit `DT_RUNPATH`, and `ld.so` applies an object's `RUNPATH`
+only to that object's *own* direct dependencies — so the executable's `RUNPATH`
+finds `libfastrtps.so` but not the `libfoonathan_memory.so` that libfastrtps
+requires, and startup fails with `cannot open shared object file`. `DT_RPATH`
+*is* inherited down the chain. `standalone/CMakeLists.txt` therefore links with
+`-Wl,--disable-new-dtags`; Flexiv's `example/CMakeLists.txt` does not, so set
+the variable for theirs.
+
+This does not contradict the warning elsewhere about `LD_LIBRARY_PATH`. That
+warning is about *assigning* it in a shell that has ROS 2 sourced, which drops
+ROS's own `lib` directory and breaks `ros2`. Here ROS 2 is deliberately absent,
+so setting it is correct and affects nothing else.
 
 `noros.sh` is the single definition of "ROS-free" here — it unsets
 `CMAKE_PREFIX_PATH`, `AMENT_PREFIX_PATH`, `LD_LIBRARY_PATH`, `PYTHONPATH`,
