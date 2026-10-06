@@ -14,6 +14,20 @@ namespace {
 
 int g_failures = 0;
 
+void Expect(const RejectDetail& d, RejectReason want, const char* what)
+{
+    if (d.reason != want) {
+        ++g_failures;
+        std::printf("  FAIL  %s: got '%s', want '%s'\n", what, RejectReasonName(d.reason),
+            RejectReasonName(want));
+    } else if (want != RejectReason::kNone) {
+        // The detail has to be usable, not merely present.
+        std::printf("    (joint %u, point %u, value %.6g vs bound %.6g)\n", d.joint, d.point,
+            d.value, d.bound);
+    }
+}
+/** BuildJointMap has nothing per-joint to report, so it still returns a bare
+ *  reason; both overloads exist so the tests read the same either way. */
 void Expect(RejectReason got, RejectReason want, const char* what)
 {
     if (got != want) {
@@ -22,6 +36,7 @@ void Expect(RejectReason got, RejectReason want, const char* what)
             RejectReasonName(want));
     }
 }
+
 void Check(bool ok, const char* what)
 {
     if (!ok) {
@@ -195,9 +210,9 @@ void TestWaistMotionGatedOnTheServerFlag()
         RejectReason::kWaistMotionNotAllowed, "refused with the waist off");
     // With the waist allowed it is only the rest-at-both-ends rule that this
     // crude ramp breaks, so check it gets past the waist gate specifically.
-    const RejectReason with_waist = ValidateTrajectory(
+    const RejectDetail with_waist = ValidateTrajectory(
         pts.data(), static_cast<std::uint32_t>(pts.size()), q, MakeConfig(true));
-    Check(with_waist != RejectReason::kWaistMotionNotAllowed,
+    Check(with_waist.reason != RejectReason::kWaistMotionNotAllowed,
         "the waist gate no longer fires with --control-waist");
 }
 

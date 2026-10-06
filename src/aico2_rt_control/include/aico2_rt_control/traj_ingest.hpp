@@ -89,32 +89,63 @@ inline RejectReason BuildJointMap(const std::vector<std::string>& goal_names,
 }
 
 /**
+ * @brief Why a goal was refused, with enough detail to act on.
+ *
+ * A bare reason code is not actionable: "outside joint limits" over nine joints
+ * and hundreds of points leaves the caller guessing, and the same lesson
+ * already had to be learned for the clamp indicator. So the offending joint,
+ * point and numbers come back too.
+ */
+struct RejectDetail {
+    RejectReason reason = RejectReason::kNone;
+    std::uint32_t joint = 0;
+    std::uint32_t point = 0;
+    double value = 0.0;   ///< what the trajectory asked for
+    double bound = 0.0;   ///< what it was compared against
+    bool ok() const { return reason == RejectReason::kNone; }
+};
+
+/**
  * @brief Check a trajectory already in robot index order.
  * @param q_meas Measured position, length dof.
  */
-inline RejectReason ValidateTrajectory(
+inline RejectDetail ValidateTrajectory(
     const Point* pts, std::uint32_t n, const double* q_meas, const IngestConfig& cfg)
 {
+    RejectDetail d;
+    const auto fail = [&d](RejectReason r, std::uint32_t j, std::uint32_t i, double v,
+                          double b) {
+        d.reason = r;
+        d.joint = j;
+        d.point = i;
+        d.value = v;
+        d.bound = b;
+        return d;
+    };
+
     if (n == 0 || n > kMaxPoints) {
-        return RejectReason::kTooManyPoints;
+        return fail(RejectReason::kTooManyPoints, 0, 0, static_cast<double>(n),
+            static_cast<double>(kMaxPoints));
     }
     if (pts[0].t < 0.0) {
-        return RejectReason::kNonMonotonicTime;
+        return fail(RejectReason::kNonMonotonicTime, 0, 0, pts[0].t, 0.0);
     }
     for (std::uint32_t i = 1; i < n; ++i) {
         if (!(pts[i].t > pts[i - 1].t)) {
-            return RejectReason::kNonMonotonicTime;
+            return fail(RejectReason::kNonMonotonicTime, 0, i, pts[i].t, pts[i - 1].t);
         }
     }
     for (std::uint32_t j = 0; j < cfg.dof; ++j) {
         if (std::fabs(pts[0].q[j] - q_meas[j]) > cfg.start_tolerance) {
-            return RejectReason::kStartPositionMismatch;
+            return fail(RejectReason::kStartPositionMismatch, j, 0, pts[0].q[j], q_meas[j]);
         }
         if (std::fabs(pts[0].dq[j]) > cfg.rest_tolerance) {
-            return RejectReason::kNonZeroStartVelocity;
+            return fail(RejectReason::kNonZeroStartVelocity, j, 0, pts[0].dq[j],
+                cfg.rest_tolerance);
         }
         if (std::fabs(pts[n - 1].dq[j]) > cfg.rest_tolerance) {
-            return RejectReason::kNonZeroEndVelocity;
+            return fail(RejectReason::kNonZeroEndVelocity, j, n - 1, pts[n - 1].dq[j],
+                cfg.rest_tolerance);
         }
     }
     // Waist motion when the server is not commanding the waist: the executor
@@ -124,21 +155,33 @@ inline RejectReason ValidateTrajectory(
         for (std::uint32_t i = 0; i < n; ++i) {
             for (std::uint32_t j = 0; j < cfg.n_external && j < cfg.dof; ++j) {
                 if (std::fabs(pts[i].q[j] - q_meas[j]) > cfg.start_tolerance) {
-                    return RejectReason::kWaistMotionNotAllowed;
+                    return fail(RejectReason::kWaistMotionNotAllowed, j, i, pts[i].q[j],
+                        q_meas[j]);
                 }
             }
         }
     }
     for (std::uint32_t i = 0; i < n; ++i) {
         for (std::uint32_t j = 0; j < cfg.dof; ++j) {
-            if (pts[i].q[j] < cfg.limits.q_min[j] || pts[i].q[j] > cfg.limits.q_max[j]
-                || std::fabs(pts[i].dq[j]) > cfg.limits.dq_max[j]
-                || std::fabs(pts[i].ddq[j]) > cfg.limits.ddq_max[j]) {
-                return RejectReason::kLimitExceeded;
+            if (pts[i].q[j] < cfg.limits.q_min[j]) {
+                return fail(RejectReason::kLimitExceeded, j, i, pts[i].q[j],
+                    cfg.limits.q_min[j]);
+            }
+            if (pts[i].q[j] > cfg.limits.q_max[j]) {
+                return fail(RejectReason::kLimitExceeded, j, i, pts[i].q[j],
+                    cfg.limits.q_max[j]);
+            }
+            if (std::fabs(pts[i].dq[j]) > cfg.limits.dq_max[j]) {
+                return fail(RejectReason::kLimitExceeded, j, i, pts[i].dq[j],
+                    cfg.limits.dq_max[j]);
+            }
+            if (std::fabs(pts[i].ddq[j]) > cfg.limits.ddq_max[j]) {
+                return fail(RejectReason::kLimitExceeded, j, i, pts[i].ddq[j],
+                    cfg.limits.ddq_max[j]);
             }
         }
     }
-    return RejectReason::kNone;
+    return d;
 }
 
 /** @brief Copy a validated trajectory into a slot. */

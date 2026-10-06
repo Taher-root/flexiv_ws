@@ -209,13 +209,24 @@ private:
         }
 
         std::vector<aico2_rt::Point> pts;
-        auto why = Convert(goal->trajectory, pts);
-        if (why == aico2_rt::RejectReason::kNone) {
-            why = aico2_rt::ValidateTrajectory(
-                pts.data(), static_cast<std::uint32_t>(pts.size()), meas.q, Config());
+        const auto convert_why = Convert(goal->trajectory, pts);
+        if (convert_why != aico2_rt::RejectReason::kNone) {
+            RCLCPP_ERROR(get_logger(), "rejecting goal: %s",
+                aico2_rt::RejectReasonName(convert_why));
+            return rclcpp_action::GoalResponse::REJECT;
         }
-        if (why != aico2_rt::RejectReason::kNone) {
-            RCLCPP_ERROR(get_logger(), "rejecting goal: %s", aico2_rt::RejectReasonName(why));
+        const auto why = aico2_rt::ValidateTrajectory(
+            pts.data(), static_cast<std::uint32_t>(pts.size()), meas.q, Config());
+        if (!why.ok()) {
+            // Name the joint and the numbers: "outside joint limits" across
+            // nine joints and hundreds of points is not something a caller can
+            // act on.
+            RCLCPP_ERROR(get_logger(),
+                "rejecting goal: %s -- joint %u (%s), point %u: asked for %.6f, bound %.6f,"
+                " difference %.3g",
+                aico2_rt::RejectReasonName(why.reason), why.joint,
+                why.joint < joint_names_.size() ? joint_names_[why.joint].c_str() : "?",
+                why.point, why.value, why.bound, why.value - why.bound);
             return rclcpp_action::GoalResponse::REJECT;
         }
         pending_ = std::move(pts);

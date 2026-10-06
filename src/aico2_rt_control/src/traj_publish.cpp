@@ -219,9 +219,13 @@ int main(int argc, char** argv)
     cfg.allow_waist_motion = (shm->control_waist != 0u);
     cfg.limits = shm->limits;
 
-    const RejectReason why = ValidateTrajectory(pts.data(), n, meas.q, cfg);
-    if (why != RejectReason::kNone) {
-        std::fprintf(stderr, "this trajectory would be rejected: %s\n", RejectReasonName(why));
+    const RejectDetail why = ValidateTrajectory(pts.data(), n, meas.q, cfg);
+    if (!why.ok()) {
+        std::fprintf(stderr,
+            "this trajectory would be rejected: %s\n"
+            "  joint %u, point %u: asked for %.6f, bound %.6f (difference %.3g)\n",
+            RejectReasonName(why.reason), why.joint, why.point, why.value, why.bound,
+            why.value - why.bound);
         return 1;
     }
     std::printf("joint %u: %.2f -> %.2f deg over %.1f s, %u points. Validated.\n", j,
