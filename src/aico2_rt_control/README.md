@@ -3,8 +3,8 @@
 Real-time (1 kHz) joint control for the Rizon4 arms via the Flexiv RDK **C++**
 API.
 
-**Nothing here is built or tested yet**, and nothing here changes
-`aico2_left_arm_driver`. That driver is Python, NRT, and works — it stays as it
+**RT is confirmed working on these arms** — see the measurements below. Nothing
+here changes `aico2_left_arm_driver`. That driver is Python, NRT, and works — it stays as it
 is, as the fallback and as the comparison.
 
 Both arms carry `RDK-Professional`, the API is public, and the host runs a
@@ -13,11 +13,122 @@ except one. The last blocker is installing the C++ library, a free download. See
 
 ---
 
-## Is Flexiv's example enough to write an RT controller through MoveIt?
+## RT works on these arms — measured
 
-Short answer: **it is enough to prove RT works, and not enough to be a MoveIt
-controller.** The gap is ROS integration, real-time safety, and the host
-kernel — not the RDK.
+Run on `qc-ubuntu` against `Rizon4-063352`, 2026-10-06, with the stack stopped:
+
+```
+Validated license: RDK-Professional
+DoF reported as 9
+Holding at 0.002 0.157 0.023 -0.701 0.052 1.754 -0.054 1.519 0.552
+Control mode switched to [RT_JOINT_POSITION]
+
+--- 1 kHz loop, achieved ---
+cycles          5005
+expected        5000
+mean period     0.999999 ms  (nominal 1.000)
+min period      0.983855 ms
+max period      1.01729 ms
+missed >1.5ms   0
+```
+
+Every question this package was created to answer is answered:
+
+| question | answer |
+|---|---|
+| Is RT available on these arms at all? | **Yes.** `SwitchMode(RT_JOINT_POSITION)` succeeds and the robot confirms the mode. |
+| Does `StreamJointPosition` take the full 9-element vector? | **Yes.** It held all nine, waist axes included, with no `invalid_argument`. |
+| Can this host hold a 1 kHz loop? | **Yes.** Zero missed deadlines, mean period within 1 ns of nominal, worst-case excursion ±17 µs. |
+
+±17 µs of jitter on a 1 ms period is roughly 1.7%, which is what a PREEMPT_RT
+kernel with a performance governor should give and is far better than the
+NRT path could offer. For comparison, the NRT send loop's rate was itself the
+dominant variable in execution smoothness (`docs/open_issues.md` issue 1a).
+
+**Still to measure.** This was an idle host. The number that decides the
+architecture is the same run with Nav2, RTAB-Map and both camera pipelines
+going; see [the host section](#what-you-still-have-to-write) for what to do if
+misses appear under load. Also worth repeating on `Rizon4R-062077` and over a
+longer window than 5 s.
+
+**One thing to confirm before the sampler relies on it:** which indices are the
+waist. `basics1_display_robot_states` reports `temperature` as
+`[0, 0, 31, 33, 37, 35, 33, 33, 33]` and `tau_ext` as `[0, 0, ...]`, which hints
+that indices 0 and 1 are the external axes — consistent with `DoF_e` preceding
+`DoF_m`. But the held pose has plausible waist values at indices 7 and 8
+(1.519 rad ≈ 87°, 0.552 rad ≈ 32°, both inside the measured waist range), so
+this is not yet unambiguous. Settle it by commanding one waist axis a few degrees
+through the Python driver and seeing which index moves, rather than inferring it.
+
+---
+
+## What stands between here and MoveIt driving the RT loop
+
+RT itself is no longer a question. What remains is one genuine blocker, one
+small unknown, and a body of work with no unknowns in it.
+
+### The blocker: RT and `rclcpp` cannot currently share a process
+
+A MoveIt controller is a ROS node — `FollowJointTrajectory` action server,
+`/joint_states`, lifecycle — so it links `rclcpp`, and `rclcpp` brings ROS 2's
+Fast-DDS. Both RDK archives also need an eprosima, dynamically:
+
+| archive | expects | status here |
+|---|---|---|
+| `ros2-jazzy` | ROS 2 Jazzy's Fast-DDS / Fast-CDR | **stack-smashes** against the 2.14.6 / 2.2.7 Jazzy ships |
+| plain | Flexiv's vendored 2.6.10 / 1.0.28 | **works** — this is what the probe uses |
+
+The `ros2-jazzy` variant exists precisely so the RDK can share ROS 2's copies,
+which is what a single process needs. With it broken, the only working archive
+expects a different eprosima version than `rclcpp` loads. Two incompatible
+eprosima versions in one address space, both defining the same symbols, is not
+made safe by their sonames differing — it is the same class of fault as the
+stack smash, and worth no time until one of the following resolves it.
+
+**Three ways out, in order of preference:**
+
+1. **A fixed `ros2-jazzy` archive from Flexiv**, built against the Fast-DDS that
+   Jazzy currently ships. We have a clean reproducer to ask with.
+2. **Robot software supporting RDK v1.9.4+**, where the library is one
+   self-contained `.so` with its internal symbols hidden and the question cannot
+   arise. The robot runs v3.11 and rejects a v1.9.4.1 client, so this needs
+   Flexiv too — but it is the better end state and makes every build problem in
+   this file disappear.
+3. **Two processes.** The RT loop links the plain RDK and no ROS; a separate ROS
+   node owns the action server and hands trajectories over shared memory or a
+   socket. Flexiv suggested this shape themselves. It needs no cooperation from
+   anyone and has no unknowns — the handoff described below is already
+   non-RT-producer to RT-consumer, so it becomes cross-process rather than
+   cross-thread. The cost is a process boundary on the path a goal travels, and
+   that it must be built even though options 1 and 2 would make it unnecessary.
+
+Options 1 and 2 are both requests to Flexiv, so asking costs one email and
+nothing is lost by starting option 3 meanwhile.
+
+### The small unknown: which indices are the waist
+
+Settle it by moving one waist axis through the Python driver and watching which
+index changes. The sampler's joint mapping depends on it, and the evidence from
+`basics1` is genuinely ambiguous — see the measurement section above.
+
+### The work, which has no unknowns left
+
+Unchanged from the design below: the lock-free trajectory handoff, the quintic
+resampler, the action server, and goal-acceptance validation for Flexiv's two
+stated RT constraints (start at the current position with zero velocity;
+continuous stream). What *has* changed is that none of it is speculative any
+more — the loop holds, the mode works, the vector length is confirmed.
+
+### And one measurement that could still change the answer
+
+The 1 kHz result was on an idle host. Repeat it with Nav2, RTAB-Map and both
+cameras running. If misses appear there, the fix is to pin the RT process to a
+core the stack does not use, and that is worth knowing before any of the above
+is built.
+
+---
+
+## Is Flexiv's example enough to write an RT controller through MoveIt?
 
 ### What the examples give you
 
@@ -464,10 +575,15 @@ hundred undefined `eprosima::fastcdr::*` symbols rather than any clear message:
 
 `-DRDK_SUPPORT_ROS2_JAZZY=ON` is not optional. It selects
 `libflexiv_rdk.aarch64-linux-gnu.ros2-jazzy.a` instead of
-`libflexiv_rdk.aarch64-linux-gnu.a`; the plain archive statically links
-Fast-RTPS and Fast-CDR, as does ROS 2, so the two collide the moment anything
-links `rclcpp`. `CMakeLists.txt:50` defaults it `OFF` and falls through to the
-plain archive silently.
+`libflexiv_rdk.aarch64-linux-gnu.a`. The two differ in **which eprosima
+version they were compiled against**, not in static versus dynamic linking:
+neither archive contains Fast-CDR (the first link failure showed undefined
+`eprosima::fastcdr::*` symbols coming out of `libflexiv_rdk.a` itself), and both
+resolve it dynamically. The plain archive expects Flexiv's vendored Fast-DDS
+2.6.10 / Fast-CDR 1.0.28; the `ros2-jazzy` one expects ROS 2 Jazzy's. So mixing
+them up is an ABI mismatch, which is what the stack smash was.
+`CMakeLists.txt:50` defaults the flag `OFF` and falls through to the plain
+archive silently.
 
 `libspdlog-dev` and `libfmt-dev` are needed because the static archive
 references spdlog and fmt without carrying them. Ubuntu 24.04 ships spdlog
@@ -702,9 +818,13 @@ while the ROS 2 integration waits on either the archive being fixed or the robot
 software supporting v1.9.4+, where one self-contained `.so` makes the collision
 impossible.
 
-Check Flexiv's `basics1` against the standalone prefix first — if that also
-crashes, the problem is not the Fast-DDS versions and the reproducer to send is
-stronger still.
+**Confirmed resolved (2026-10-06).** Against the standalone prefix,
+`basics1_display_robot_states` prints robot states normally and `rt_hold_probe`
+runs a clean 1 kHz loop. Same archive version, same host, same robot — only the
+Fast-DDS and Fast-CDR versions differ. So the `ros2-jazzy` archive paired with
+Jazzy's 2.14.6 / 2.2.7 is the fault, and Flexiv's own vendored 2.6.10 / 1.0.28
+works. That is the bug report: it reproduces with their example and clears with
+their own dependency versions.
 
 **`ModuleNotFoundError: No module named 'ament_package'`** while the dependency
 script builds `foonathan_memory_vendor`.

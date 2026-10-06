@@ -87,12 +87,25 @@ the 2.x `ProductModel` enum reading was right.
 structurally absent in RT: there is no setpoint-to-setpoint planning to
 pre-empt or starve. It is the real fix rather than a tuning exercise.
 
-Not pursued yet, and NRT stays the default: RT means owning a 1 kHz loop on a
-Jetson with no PREEMPT_RT kernel that also runs Nav2, RTAB-Map and two camera
-pipelines, and a missed deadline in RT is worse than NRT because nothing
-interpolates for you. Evaluation scaffolding is in `aico2_rt_control`, which
-builds nothing until the C++ RDK is installed and changes nothing in the
-existing driver. Start with its `rt_hold_probe`.
+**RT is now confirmed working (2026-10-06).** `aico2_rt_control`'s
+`rt_hold_probe` holds all nine joints on `Rizon4-063352` at 1 kHz with **zero
+missed deadlines**, a mean period of 0.999999 ms and a worst case of 1.01729 ms
+— ±17 µs of jitter. The host turned out to be far better suited than assumed:
+it is not the Jetson but an 18-core x86_64 machine running a `PREEMPT_RT`
+kernel with `rcu_nocbs` on every core and a performance governor, wired to both
+arms at 0.2 ms. So the concern recorded here — a 1 kHz loop on a non-RT kernel
+competing with perception — does not apply to this host as configured.
+
+That measurement was taken with the rest of the stack stopped; repeating it
+under Nav2, RTAB-Map and the cameras is the remaining question, and the one that
+decides whether the RT controller is worth building. NRT stays the default until
+then, and `aico2_rt_control` still changes nothing in the existing driver.
+
+Getting there took four separate build problems, all from the prebuilt library
+rather than this workspace: the RDK version the robot accepts, which of two
+dependency scripts to use, a stack smash from the ROS 2 archive against Jazzy's
+Fast-DDS, and `DT_RUNPATH` not resolving transitive dependencies. All are
+documented with their symptoms in `src/aico2_rt_control/README.md`.
 
 ### Both remaining questions are now answered
 

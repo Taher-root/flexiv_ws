@@ -10,11 +10,14 @@ project(aico2_rt_control_standalone CXX)
 # anything in this workspace.
 #
 # The plain archive with Flexiv's own vendored dependency versions avoids that.
-# It statically links Fast-RTPS and Fast-CDR, which is only a problem for a
-# binary that also links rclcpp -- and the probe does not: it is RDK plus
-# iostream. So the measurement this package exists to take can be made now,
-# while the ROS 2 integration waits on the archive being fixed or on the robot
-# software supporting v1.9.4+ (one self-contained .so, no collision possible).
+# It expects Flexiv's vendored Fast-DDS 2.6.10 / Fast-CDR 1.0.28, which it
+# resolves dynamically. That is only a problem for a binary that also links
+# rclcpp, since that would pull ROS 2's incompatible eprosima into the same
+# address space -- and the probe does not link rclcpp: it is RDK plus iostream.
+# So the measurement this package exists to take can be made now, while the ROS
+# 2 integration waits on the ros2-jazzy archive being fixed or on the robot
+# software supporting v1.9.4+ (one self-contained .so with hidden symbols, where
+# the question cannot arise).
 #
 # Deliberately mirrors flexiv_rdk/example/CMakeLists.txt, so if this builds and
 # the examples build, nothing here is the difference.
@@ -53,12 +56,23 @@ set_target_properties(rt_hold_probe PROPERTIES
 # LD_LIBRARY_PATH=<prefix>/lib at runtime instead; see README.md.
 target_link_options(rt_hold_probe PRIVATE "-Wl,--disable-new-dtags")
 
+# Read-only: reports the per-joint limits so the waist indices can be
+# identified without commanding anything. See src/joint_map_probe.cpp.
+add_executable(joint_map_probe ../src/joint_map_probe.cpp)
+target_link_libraries(joint_map_probe flexiv::flexiv_rdk)
+set_target_properties(joint_map_probe PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON)
+target_link_options(joint_map_probe PRIVATE "-Wl,--disable-new-dtags")
+
 # The static archive references spdlog and fmt without carrying them.
 find_package(spdlog QUIET)
 find_package(fmt QUIET)
-if(spdlog_FOUND)
-  target_link_libraries(rt_hold_probe spdlog::spdlog)
-endif()
-if(fmt_FOUND)
-  target_link_libraries(rt_hold_probe fmt::fmt)
-endif()
+foreach(tgt rt_hold_probe joint_map_probe)
+  if(spdlog_FOUND)
+    target_link_libraries(${tgt} spdlog::spdlog)
+  endif()
+  if(fmt_FOUND)
+    target_link_libraries(${tgt} fmt::fmt)
+  endif()
+endforeach()
