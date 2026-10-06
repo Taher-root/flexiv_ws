@@ -7,9 +7,9 @@ API.
 `aico2_left_arm_driver`. That driver is Python, NRT, and works — it stays as it
 is, as the fallback and as the comparison.
 
-Both arms already carry `RDK-Professional`, so RT is licensed and the API is
-public. The one remaining blocker is installing the C++ library, which is a free
-download. See [the three prerequisites](#the-three-prerequisites-and-where-each-one-stands).
+Both arms carry `RDK-Professional`, the API is public, and the host runs a
+PREEMPT_RT kernel on wired gigabit — so every prerequisite Flexiv state is met
+except one. The last blocker is installing the C++ library, a free download. See [the three prerequisites](#the-three-prerequisites-and-where-each-one-stands).
 
 ---
 
@@ -162,39 +162,52 @@ the route that uses what MoveIt produces as-is.
    about on either count.
 
 
-5. **The host. This is the real risk, and Flexiv make it a requirement.**
-   Their three RT prerequisites are C++, an RDK Professional licence, and "a
-   real-time capable Linux PC (see the RDK manual's real-time kernel setup)
-   with a wired connection to the robot". The first two we have; the third we
-   do not, as things stand. `scheduler.max_priority()` requests SCHED_FIFO at a
-   high priority, which on a kernel without PREEMPT_RT is best-effort, and the
-   Jetson also runs Nav2, RTAB-Map, two camera pipelines and a DDS domain. In
-   NRT a late command is covered by the robot's motion generator; in RT nothing
-   covers for you, so a missed deadline is worse than the problem being solved.
+5. **The host — measured, and it passes.** Flexiv's three RT prerequisites are
+   C++, an RDK Professional licence, and "a real-time capable Linux PC (see the
+   RDK manual's real-time kernel setup) with a wired connection to the robot".
+   All three are satisfied. Measured on `qc-ubuntu` (2026-10-06) with
+   `scripts/check_rt_host.sh`:
 
-   Check it before installing anything — it is free:
+   | | Result |
+   |---|---|
+   | Kernel | `6.6.110 #1 SMP PREEMPT_RT`, `/sys/kernel/realtime` = 1, `CONFIG_PREEMPT_RT=y` |
+   | Cores | 18, `rcu_nocbs=0-17` already on the kernel command line |
+   | Governor | `performance` |
+   | Link to both arms | `eth0`, wired, 1000 Mb/s |
+   | Ping, 20 packets | 0.194 / 0.200 / 0.238 ms, mdev **0.009 ms** |
+   | `isolcpus` | not set — the one remaining gap |
+   | RT throttle | `sched_rt_runtime_us` 950000 |
 
-   ```bash
-   bash src/aico2_rt_control/scripts/check_rt_host.sh
-   ```
+   This is a better starting point than expected. A PREEMPT_RT kernel with
+   `rcu_nocbs` across all cores and a performance governor is a deliberately
+   RT-tuned configuration, not a default, and a 0.009 ms ping deviation over
+   wired gigabit means the network is not going to be the jitter source.
 
-   It reports the preemption flavour, `/sys/kernel/realtime`, `isolcpus`, the
-   CPU governor and `nvpmodel` state, the RT scheduling limits, and whether the
-   route to each arm is wired. Then measure with `rt_hold_probe` rather than
-   arguing from the kernel name: if misses turn out to be load-dependent,
-   isolating a core may be enough, and if they persist on an idle host the arms
-   want an RT kernel or a different machine.
+   **Note this is not the Jetson.** 18 cores, x86_64, no `nvpmodel`. Earlier
+   notes in this package assumed the arms would be driven from the Jetson
+   alongside Nav2, RTAB-Map and the cameras; on this host that assumption needs
+   re-checking, and if the RT loop and the perception stack live on different
+   machines the contention risk largely goes away. Worth settling before
+   interpreting `rt_hold_probe` under load.
+
+   What is left is to measure, not to argue from the kernel name. Two things
+   stay open until `rt_hold_probe` runs: whether the loop holds while the rest
+   of the stack is running, and whether `isolcpus` or a `taskset` pin is needed.
+   With PREEMPT_RT and a performance governor it may well not be, which is
+   exactly why it is worth measuring before editing the boot configuration.
 
 ### The three prerequisites, and where each one stands
 
 Checked against the public v1.9 headers (`flexivrobotics/flexiv_rdk`, tag
-`v1.9`) and against both arms. Nothing here needs asking Flexiv.
+`v1.9`), against both arms, and against the host. Nothing here needs asking
+Flexiv, and only one item is outstanding.
 
 | | State | Evidence |
 |---|---|---|
 | The RT API | **Public, exists** | `robot.hpp:501` declares `StreamJointPosition(positions, velocities, accelerations)`, applicable modes `RT_JOINT_IMPEDANCE, RT_JOINT_POSITION`. `mode.hpp` lists `RT_JOINT_TORQUE`, `RT_JOINT_IMPEDANCE`, `RT_JOINT_POSITION`, `RT_CARTESIAN_MOTION_FORCE`. Nothing hidden or gated. |
 | A licence permitting RT | **Already held, both arms** | `license_type` reads `RDK-Professional+TDK-Standard` on Rizon4-063352 and Rizon4R-062077, and the RDK logs `Validated license: RDK-Professional` on connect. Robot software v3.11, RDK v1.9. |
 | The C++ library | **Not installed — the only remaining blocker** | A free download, and the one thing left to do. See [Installing the C++ RDK](#installing-the-c-rdk). |
+| A real-time capable host | **Met** | `qc-ubuntu` runs `6.6.110 PREEMPT_RT` with `rcu_nocbs=0-17` and a performance governor, wired gigabit to both arms at 0.2 ms with 0.009 ms deviation. Point 5 of [what you still have to write](#what-you-still-have-to-write) has the measurements. |
 
 So the gate that looked like a licence request is not one. `SwitchMode` throws
 `std::invalid_argument` when a mode is "invalid or unlicensed"
@@ -372,41 +385,85 @@ upstream's design, not a stale install — every file in the RDK's `example_py/`
 is named `non_realtime_*` and every RT example is C++.
 
 ```bash
-git clone -b v1.9 https://github.com/flexivrobotics/flexiv_rdk.git
+git clone -b v1.x https://github.com/flexivrobotics/flexiv_rdk.git
 ```
 
-**The branch matters.** `v1.x` through `v1.9.3` is Rizon; `v2.x` is Enlight, and
-its API is not source-compatible — on `main` (v2.1) `StreamJointPosition` takes
-`const std::map<JointGroup, RtJointPositionCmd>&` instead of three vectors.
-Cloning the default branch gives code that will not compile against anything
-written for these arms.
+**Use the `v1.x` branch, not the `v1.9` tag.** `v1.x` is the head of the 1.x
+line and currently equals the tag `v1.9.4.1`. `v1.9` is a tag, not a branch, so
+`-b v1.9` does work — it just gives an older release, and that release is much
+harder to build here. Do not use the default branch: `main` is `v2.1`/`v2.2`,
+which is Enlight, and its `StreamJointPosition` takes
+`const std::map<JointGroup, RtJointPositionCmd>&` rather than three vectors.
 
-Dependencies first — Eigen3, spdlog, Fast-RTPS, Fast-CDR, RBDyn — vendored into
-a prefix of your choosing by the RDK's own script:
+What changed between `v1.9` and `v1.9.4.1`, in its own words:
+
+> RDK is shipped as a self-contained shared library: all of its thirdparty
+> dependencies except Eigen are statically embedded into it and their symbols
+> are hidden, so Eigen is the only dependency a user application has to install,
+> and it can freely use its own version of any other library.
+
+That removes the entire failure mode this package originally hit. On `v1.9` the
+library was a static archive published in two variants, and the plain one
+statically linked Fast-RTPS and Fast-CDR so it collided with ROS 2's copies;
+avoiding that needed `-DRDK_SUPPORT_ROS2_JAZZY=ON` plus the right one of two
+dependency scripts, and the wrong combination fails with several hundred
+undefined `eprosima::fastcdr::*` symbols. On `v1.9.4.1` there is one `.so`, one
+dependency script, no ROS 2 flag, and no version to mismatch.
+
+The API we depend on is unchanged: `StreamJointPosition(positions, velocities,
+accelerations)` has the same signature, `mode.hpp` still has
+`RT_JOINT_POSITION` and `RT_JOINT_IMPEDANCE`, and `RobotInfo` still carries
+`license_type`, `DoF_m` and `DoF_e`.
 
 ```bash
 sudo apt install build-essential cmake
 cd flexiv_rdk/thirdparty
-bash build_and_install_dependencies.sh ~/rdk_install
+bash build_and_install_dependencies.sh ~/rdk_install   # Eigen only on v1.x
+
+cd ..
+mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install
+cmake --build . --target install --config Release
 ```
 
-Then the library itself. It is a prebuilt static archive the CMake project
-downloads at configure time from the GitHub release, with a SHA256 check against
-`lib/*.sha256`:
+No `RDK_SUPPORT_ROS2_JAZZY`, and ROS 2 does not need to be sourced for this
+part. The archive is still downloaded at configure time from the GitHub release
+with a SHA256 check against `lib/*.sha256`, so this step needs network.
+
+One caveat worth knowing: neither release documents which robot software
+versions it supports. These arms run **v3.11** and the installed Python wheel is
+**v1.9**, so the C++ side moving to 1.9.4.1 is a version skew that is untested
+here. The two talk to the robot independently rather than to each other, and the
+Python driver is untouched either way, so the fallback is simply to rebuild from
+the `v1.9` tag using the procedure below.
+
+<details>
+<summary>Building from the older <code>v1.9</code> tag, if ever needed</summary>
+
+Two scripts exist in `thirdparty/` and the wrong one produces the
+undefined-symbol wall described above:
+
+| script | installs | for |
+|---|---|---|
+| `build_and_install_dependencies.sh` | Eigen, spdlog, tinyxml2, yaml-cpp, foonathan_memory, **Fast-CDR v1.0.28**, **Fast-DDS v2.6.10**, Boost, SpaceVecAlg, RBDyn | the standalone archive |
+| `build_and_install_dependencies_not_in_ros2.sh` | **Boost, SpaceVecAlg, RBDyn only** | the `ros2-jazzy` archive |
+
+The `ros2-jazzy` archive needs ROS 2 Jazzy's Fast-CDR 2.x and Fast-DDS 2.14.x,
+so ROS 2 must be sourced first and the second script used:
 
 ```bash
-cd flexiv_rdk
-mkdir build && cd build
+source /opt/ros/jazzy/setup.bash
+cd flexiv_rdk/thirdparty
+bash build_and_install_dependencies_not_in_ros2.sh ~/rdk_install
+cd .. && mkdir build && cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install -DRDK_SUPPORT_ROS2_JAZZY=ON
 cmake --build . --target install --config Release
 ```
 
-`-DRDK_SUPPORT_ROS2_JAZZY=ON` is not optional here. It selects
-`libflexiv_rdk.aarch64-linux-gnu.ros2-jazzy.a` instead of
-`libflexiv_rdk.aarch64-linux-gnu.a`; the plain archive statically links Fast-RTPS
-and Fast-CDR, and so does ROS 2, so the two collide as soon as anything links
-`rclcpp`. Flexiv ships the variant precisely so they can coexist. Without the
-flag, `CMakeLists.txt` falls through to the plain archive silently.
+Verify from the configure output that `fastrtps` and `fastcdr` resolve under
+`/opt/ros/jazzy` and not under the prefix.
+
+</details>
 
 Then build this package, pointing CMake at the prefix:
 
@@ -420,20 +477,71 @@ Until `find_package(flexiv_rdk)` succeeds this package builds nothing and emits
 a warning rather than failing, so it cannot break a workspace build. The warning
 in a `colcon build` log is the expected state before this is done, not an error.
 
-The dependencies install as shared libraries under the prefix, so a binary needs
-to find them at runtime:
+The RDK is a shared library in its own prefix, which is not on the default
+loader path. `CMakeLists.txt` sets `CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE` so
+that path is baked into the binary and nothing extra is needed at runtime:
 
 ```bash
-LD_LIBRARY_PATH=$HOME/rdk_install/lib ros2 run aico2_rt_control rt_hold_probe Rizon4-063352
+ros2 run aico2_rt_control rt_hold_probe Rizon4-063352
 ```
 
-If that becomes tiresome, set `BUILD_RPATH`/`INSTALL_RPATH` on the target in
-`CMakeLists.txt` rather than exporting `LD_LIBRARY_PATH` globally — a
-system-wide `LD_LIBRARY_PATH` pointing at a prefix that carries its own Fast-RTPS
-is a good way to break unrelated ROS 2 nodes.
+**Do not set `LD_LIBRARY_PATH` to the prefix.** Assigning it rather than
+appending drops ROS 2's own `lib` directory, and `ros2` then fails with
+`ImportError: librcl_action.so: cannot open shared object file`. If you ever do
+need it, append: `LD_LIBRARY_PATH=$HOME/rdk_install/lib:$LD_LIBRARY_PATH`.
 
 ---
 
+## Troubleshooting the build
+
+**Hundreds of `undefined reference to eprosima::fastcdr::Cdr::...` plus
+`fmt::v9::...` and `spdlog::details::log_msg::log_msg`.**
+
+This is the `v1.9` static-archive problem. `CdrSizeCalculator`, `CdrVersion`,
+`Cdr::set_encoding_flag` and `PortBasedTransportDescriptor` exist only in
+Fast-CDR 2.x / Fast-DDS 2.14.x, which is what the `ros2-jazzy` archive expects;
+`build_and_install_dependencies.sh` installs Fast-CDR 1.0.28 and Fast-DDS 2.6.10
+into the prefix, where they shadow ROS 2's copies.
+
+The fix is to move to `v1.x`, where the library is a self-contained `.so` and
+this cannot happen. The prefix has to be rebuilt rather than reconfigured,
+because the wrong versions are installed into it:
+
+```bash
+rm -rf ~/rdk_install ~/flexiv_rdk
+git clone -b v1.x https://github.com/flexivrobotics/flexiv_rdk.git
+cd flexiv_rdk/thirdparty
+bash build_and_install_dependencies.sh ~/rdk_install
+cd .. && mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install
+cmake --build . --target install --config Release
+```
+
+**`undefined reference to fmt::v9::...` in `rt_hold_probe.cpp.o` itself** (not
+in the RDK library).
+
+Something in this package included `<spdlog/spdlog.h>`. Flexiv's examples log
+with spdlog, but the RDK headers need only Eigen, and from v1.9.4.1 the library
+hides its internal symbols — so including spdlog pulls in Ubuntu's build of it,
+which links fmt externally, and leaves the translation unit needing `fmt`. The
+fix taken here was to drop spdlog and use `iostream`; linking `fmt` would also
+work but adds a dependency for nothing.
+
+**`ImportError: librcl_action.so: cannot open shared object file`** when running
+`ros2`.
+
+`LD_LIBRARY_PATH` was *assigned* instead of appended, so ROS 2's `lib`
+directory fell off it. Nothing is wrong with the install. The RPATH makes the
+variable unnecessary — just drop it.
+
+**`ignoring unknown package 'aico2_rt_control' in --packages-select`.**
+`colcon` was run from somewhere other than the workspace root, so it saw no
+`src/`. `cd ~/flexiv_ws` first.
+
+**`ros2: command not found`.** ROS 2 is not sourced in that shell:
+`source /opt/ros/jazzy/setup.bash && source install/setup.bash`.
+
+---
 
 ## rt_hold_probe
 
@@ -466,7 +574,7 @@ How to read it:
 |---|---|
 | `SwitchMode` throws `std::invalid_argument` | the mode is invalid **or unlicensed** (`robot.hpp:205`). Check `license_type` with `scripts/check_rt_license.py`; if RT is not licensed, that is the request to make to Flexiv |
 | misses 0, max near 1 ms | the host can hold the loop; RT is worth pursuing |
-| misses over 1% of cycles | not safe to drive the arm with on this host. Either isolate a core (`isolcpus`, `taskset`), move the arms off the Jetson, or stay on NRT |
+| misses over 1% of cycles | not safe to drive the arm with as configured. Pin the loop to a core the stack does not use (`taskset`, or `isolcpus` at boot), move the perception stack off this host, or stay on NRT |
 | fault during the loop | note what the robot reports; the probe only holds position, so a fault means the stream itself was rejected |
 
 Run it twice: once with the rest of the stack stopped, once with Nav2 and the

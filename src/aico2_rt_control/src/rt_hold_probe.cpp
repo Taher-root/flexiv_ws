@@ -13,7 +13,7 @@
  *      constructs three std::vector<double> per cycle; that is fine for a demo
  *      and wrong in a control loop, because malloc can block on an unbounded
  *      lock. All buffers here are sized once before the scheduler starts.
- *   2. Nothing logs inside the periodic task. spdlog takes a lock and formats
+ *   2. Nothing logs inside the periodic task. Logging takes a lock and formats
  *      strings. Statistics are accumulated in plain members written only by the
  *      RT thread and read only after Stop(), then printed from main.
  *   3. The achieved loop period is measured. That is the entire point: a 1 kHz
@@ -33,10 +33,15 @@
 #include <flexiv/rdk/robot.hpp>
 #include <flexiv/rdk/scheduler.hpp>
 #include <flexiv/rdk/utility.hpp>
-#include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <atomic>
+// Deliberately no spdlog, although Flexiv's examples log with it. The RDK
+// headers need nothing but Eigen, and from v1.9.4.1 the library hides its
+// internal symbols -- so including spdlog here drags in Ubuntu's build of it,
+// which links fmt externally, and leaves this translation unit with undefined
+// fmt::v9::* references unless fmt is found and linked too. Not worth a
+// dependency for a few status lines; iostream covers it.
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
@@ -131,7 +136,7 @@ int main(int argc, char* argv[])
         }
     }
     if (seconds <= 0.0 || seconds > 120.0) {
-        spdlog::error("--seconds must be in (0, 120]");
+        std::cerr << "--seconds must be in (0, 120]\n";
         return 1;
     }
 
@@ -139,20 +144,20 @@ int main(int argc, char* argv[])
         flexiv::rdk::Robot robot(robot_sn);
 
         if (robot.fault()) {
-            spdlog::warn("Fault present, clearing");
+            std::cout << "Fault present, clearing\n";
             if (!robot.ClearFault()) {
-                spdlog::error("ClearFault failed");
+                std::cerr << "ClearFault failed\n";
                 return 1;
             }
         }
 
-        spdlog::info("Enabling; E-stop must be released and motion bar in Auto (Remote)");
+        std::cout << "Enabling; E-stop must be released and motion bar in Auto (Remote)" << std::endl;
         robot.Enable();
         for (int i = 0; i < 30 && !robot.operational(); ++i) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
         if (!robot.operational()) {
-            spdlog::error("Not operational after 30s");
+            std::cerr << "Not operational after 30s\n";
             return 1;
         }
 
@@ -162,20 +167,20 @@ int main(int argc, char* argv[])
         // mode turns out to reject or ignore the external axes, that is one of
         // the things this program is here to find out.
         const auto dof = robot.info().DoF;
-        spdlog::info("DoF reported as {}", dof);
+        std::cout << "DoF reported as " << dof << "\n";
 
         Buffers buf;
         buf.target_pos = robot.states().q;
         buf.target_pos.resize(dof);
         buf.target_vel.assign(dof, 0.0);
         buf.target_acc.assign(dof, 0.0);
-        spdlog::info("Holding at {}", flexiv::rdk::utility::Vec2Str(buf.target_pos));
+        std::cout << "Holding at " << flexiv::rdk::utility::Vec2Str(buf.target_pos) << "\n";
 
         // The mode switch is where this either works or does not. If RT is not
         // available on this arm, expect it to throw here.
-        spdlog::info("Switching to RT_JOINT_POSITION");
+        std::cout << "Switching to RT_JOINT_POSITION" << std::endl;
         robot.SwitchMode(flexiv::rdk::Mode::RT_JOINT_POSITION);
-        spdlog::info("Mode switched; starting 1 kHz scheduler for {:.1f}s", seconds);
+        std::cout << "Mode switched; starting 1 kHz scheduler for " << seconds << "s" << std::endl;
 
         LoopStats stats;
         flexiv::rdk::Scheduler scheduler;
@@ -214,7 +219,7 @@ int main(int argc, char* argv[])
         return 0;
 
     } catch (const std::exception& e) {
-        spdlog::error(e.what());
+        std::cerr << "error: " << e.what() << "\n";
         return 1;
     }
 }
