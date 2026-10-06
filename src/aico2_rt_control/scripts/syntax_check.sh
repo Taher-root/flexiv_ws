@@ -33,11 +33,39 @@ fi
 
 echo "RDK headers  $RDK_HEADERS"
 echo "Eigen        $EIGEN"
+# rt_bridge needs ROS 2 rather than the RDK, so it is checked only where ROS is
+# installed. Everything it decides lives in traj_ingest.hpp, which the test
+# suite covers without ROS -- but on a machine that has ROS there is no reason
+# not to type-check the node itself too.
+ROS_INC=""
+for d in /opt/ros/*/include; do
+    [[ -d "$d" ]] && ROS_INC="$d" && break
+done
+if [[ -n "$ROS_INC" ]]; then
+    echo "ROS headers  $ROS_INC"
+else
+    echo "ROS headers  not found -- rt_bridge will be skipped"
+fi
+
 fail=0
 for src in "$PKG"/src/*.cpp; do
-    printf '%-20s ' "$(basename "$src" .cpp)"
-    if g++ -fsyntax-only -std=c++17 -Wall -Wextra -Wpedantic \
-        -I "$RDK_HEADERS" -I "$PKG/include" -I "$EIGEN" "$src"; then
+    name="$(basename "$src" .cpp)"
+    printf '%-20s ' "$name"
+    args=(-I "$PKG/include" -I "$EIGEN")
+    if [[ "$name" == "rt_bridge" ]]; then
+        if [[ -z "$ROS_INC" ]]; then
+            echo "skipped (no ROS 2 on this machine)"
+            continue
+        fi
+        # Each ROS package installs its headers in its own subdirectory.
+        for pkg_inc in "$ROS_INC"/*/; do
+            args+=(-I "${pkg_inc%/}")
+        done
+        args+=(-I "$ROS_INC")
+    else
+        args+=(-I "$RDK_HEADERS")
+    fi
+    if g++ -fsyntax-only -std=c++17 -Wall -Wextra -Wpedantic "${args[@]}" "$src"; then
         echo "clean"
     else
         echo "FAILED"
