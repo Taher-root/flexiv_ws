@@ -17,6 +17,16 @@ ROBOTS=("192.168.1.100" "192.168.1.101")
 hdr() { printf '\n=== %s ===\n' "$1"; }
 say() { printf '%-22s %s\n' "$1" "$2"; }
 
+hdr "Host"
+say "hostname" "$(hostname)"
+model="$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null)"
+[[ -z "$model" && -r /proc/device-tree/model ]] \
+    && model="$(tr -d '\0' < /proc/device-tree/model)"
+say "model" "${model:-unknown}"
+say "cpu" "$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//' \
+    || echo unknown)"
+say "arch" "$(uname -m)"
+
 hdr "Kernel"
 say "uname -r" "$(uname -r)"
 say "uname -v" "$(uname -v)"
@@ -31,8 +41,9 @@ fi
 
 preempt="$(uname -v | grep -o 'PREEMPT[_A-Z]*' | head -1)"
 say "preempt flavour" "${preempt:-none advertised}"
+RT_OK=0
 case "$preempt" in
-    PREEMPT_RT) say "verdict" "full RT preemption" ;;
+    PREEMPT_RT) say "verdict" "full RT preemption"; RT_OK=1 ;;
     PREEMPT_DYNAMIC)
         say "verdict" "DYNAMIC: runtime-selectable, check preempt= below"
         [[ -r /sys/kernel/debug/sched/preempt ]] \
@@ -91,17 +102,34 @@ done
 hdr "Load that will compete with the loop"
 say "loadavg" "$(cut -d' ' -f1-3 /proc/loadavg)"
 say "ros2 processes" "$(pgrep -c -f 'ros2|rclpy|component_container' 2>/dev/null | head -1)"
+printf '%-22s\n' "top cpu consumers"
+ps -eo pcpu,pid,comm --sort=-pcpu 2>/dev/null | head -6 | sed 's/^/  /'
+printf '%-22s %s\n' "existing RT threads" \
+    "$(ps -eo pid,cls,rtprio,comm 2>/dev/null | awk '$2=="FF"||$2=="RR"' | wc -l) (FIFO/RR)"
+ps -eo pid,cls,rtprio,comm 2>/dev/null | awk '$2=="FF"||$2=="RR"' | head -5 | sed 's/^/  /' 
 
-cat <<'TXT'
+hdr "Reading this"
+if [[ "$RT_OK" -eq 1 ]]; then
+    cat <<'TXT'
+PREEMPT_RT is present, so Flexiv's host requirement is met. That removes the
+main risk, but it does not make the loop free: measure it. Install the C++ RDK
+and run rt_hold_probe twice, once with the stack stopped and once with Nav2 and
+the cameras running. The gap between those two numbers is what matters.
 
---- Reading this ---
-PREEMPT_RT absent is not a hard stop, but it means the 1 kHz loop is
+If misses appear only under load, pin the RT process to a core the rest of the
+stack does not use (taskset, or isolcpus on the kernel command line). With
+PREEMPT_RT plus a performance governor that is often unnecessary, which is why
+it is worth measuring before changing the boot configuration.
+TXT
+else
+    cat <<'TXT'
+PREEMPT_RT is absent. That is not a hard stop, but it means the 1 kHz loop is
 best-effort and Flexiv's stated requirement is unmet. Measure it rather than
 assume: install the C++ RDK and run rt_hold_probe twice, once with the stack
-stopped and once with Nav2 and the cameras running. The gap between those two
-numbers is the decision.
+stopped and once with Nav2 and the cameras running.
 
 If the misses are load-dependent rather than kernel-dependent, isolating a core
 (isolcpus + taskset) may be enough without changing kernels. If they persist on
 an idle host, the arms want either an RT kernel or a different machine.
 TXT
+fi

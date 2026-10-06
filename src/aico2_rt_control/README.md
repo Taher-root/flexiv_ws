@@ -162,166 +162,39 @@ the route that uses what MoveIt produces as-is.
    about on either count.
 
 
-5. **The host. This is the real risk, and Flexiv make it a requirement.**
-   Their three RT prerequisites are C++, an RDK Professional licence, and "a
-   real-time capable Linux PC (see the RDK manual's real-time kernel setup)
-   with a wired connection to the robot". The first two we have; the third we
-   do not, as things stand. `scheduler.max_priority()` requests SCHED_FIFO at a
-   high priority, which on a kernel without PREEMPT_RT is best-effort, and the
-   Jetson also runs Nav2, RTAB-Map, two camera pipelines and a DDS domain. In
-   NRT a late command is covered by the robot's motion generator; in RT nothing
-   covers for you, so a missed deadline is worse than the problem being solved.
+5. **The host — measured, and it passes.** Flexiv's three RT prerequisites are
+   C++, an RDK Professional licence, and "a real-time capable Linux PC (see the
+   RDK manual's real-time kernel setup) with a wired connection to the robot".
+   All three are satisfied. Measured on `qc-ubuntu` (2026-10-06) with
+   `scripts/check_rt_host.sh`:
 
-   Check it before installing anything — it is free:
+   | | Result |
+   |---|---|
+   | Kernel | `6.6.110 #1 SMP PREEMPT_RT`, `/sys/kernel/realtime` = 1, `CONFIG_PREEMPT_RT=y` |
+   | Cores | 18, `rcu_nocbs=0-17` already on the kernel command line |
+   | Governor | `performance` |
+   | Link to both arms | `eth0`, wired, 1000 Mb/s |
+   | Ping, 20 packets | 0.194 / 0.200 / 0.238 ms, mdev **0.009 ms** |
+   | `isolcpus` | not set — the one remaining gap |
+   | RT throttle | `sched_rt_runtime_us` 950000 |
 
-   ```bash
-   bash src/aico2_rt_control/scripts/check_rt_host.sh
-   ```
+   This is a better starting point than expected. A PREEMPT_RT kernel with
+   `rcu_nocbs` across all cores and a performance governor is a deliberately
+   RT-tuned configuration, not a default, and a 0.009 ms ping deviation over
+   wired gigabit means the network is not going to be the jitter source.
 
-   It reports the preemption flavour, `/sys/kernel/realtime`, `isolcpus`, the
-   CPU governor and `nvpmodel` state, the RT scheduling limits, and whether the
-   route to each arm is wired. Then measure with `rt_hold_probe` rather than
-   arguing from the kernel name: if misses turn out to be load-dependent,
-   isolating a core may be enough, and if they persist on an idle host the arms
-   want an RT kernel or a different machine.
+   **Note this is not the Jetson.** 18 cores, x86_64, no `nvpmodel`. Earlier
+   notes in this package assumed the arms would be driven from the Jetson
+   alongside Nav2, RTAB-Map and the cameras; on this host that assumption needs
+   re-checking, and if the RT loop and the perception stack live on different
+   machines the contention risk largely goes away. Worth settling before
+   interpreting `rt_hold_probe` under load.
 
-### The three prerequisites, and where each one stands
-
-Checked against the public v1.9 headers (`flexivrobotics/flexiv_rdk`, tag
-`v1.9`) and against both arms. Nothing here needs asking Flexiv.
-
-| | State | Evidence |
-|---|---|---|
-| The RT API | **Public, exists** | `robot.hpp:501` declares `StreamJointPosition(positions, velocities, accelerations)`, applicable modes `RT_JOINT_IMPEDANCE, RT_JOINT_POSITION`. `mode.hpp` lists `RT_JOINT_TORQUE`, `RT_JOINT_IMPEDANCE`, `RT_JOINT_POSITION`, `RT_CARTESIAN_MOTION_FORCE`. Nothing hidden or gated. |
-| A licence permitting RT | **Already held, both arms** | `license_type` reads `RDK-Professional+TDK-Standard` on Rizon4-063352 and Rizon4R-062077, and the RDK logs `Validated license: RDK-Professional` on connect. Robot software v3.11, RDK v1.9. |
-| The C++ library | **Not installed — the only remaining blocker** | A free download, and the one thing left to do. See [Installing the C++ RDK](#installing-the-c-rdk). |
-
-So the gate that looked like a licence request is not one. `SwitchMode` throws
-`std::invalid_argument` when a mode is "invalid or unlicensed"
-(`robot.hpp:205`), and `Robot`'s constructor throws if the robot "lacks a valid
-RDK license" (`robot.hpp:41`) — neither applies here.
-
-To re-check at any time, per arm (the licence is per robot):
-
-```bash
-python3 src/aico2_rt_control/scripts/check_rt_license.py Rizon4-063352
-python3 src/aico2_rt_control/scripts/check_rt_license.py Rizon4R-062077
-```
-
-Read-only — it never enables the robot or switches mode. It does take the one
-RDK session, so stop the Python driver first.
-
-
-### Why the NRT path behaves as it does
-
-Worth recording, because it is the documented mechanism behind
-`docs/open_issues.md` issue 1a. `SendJointPosition`'s own warning:
-
-> Calling this function a second time while the motion from the previous call is
-> still ongoing will trigger an online re-planning of the joint trajectory, such
-> that the previous command is aborted and the new command starts to execute.
-
-Flexiv's engineering team put it more precisely (2026-10-05): the call does not
-create a trajectory segment at all. **Each call replaces the current target**,
-and a 1 kHz generator on the robot chases the most recent one as fast as
-`max_vel` / `max_acc` allow, with no knowledge of when the next command is due
-and **no jerk limit** — so acceleration switches abruptly between `+max_acc`, 0
-and `-max_acc`. See `docs/open_issues.md` issue 1a for the full account.
-Also note the NRT meaning of `velocities`: "Each joint will maintain this amount
-of velocity when it reaches the target position" — a terminal condition for the
-generator's plan, not feedforward. In RT the same argument *is* feedforward, and
-`StreamJointPosition` carries no `max_vel` / `max_acc` because there is no plan
-to bound. That difference is the whole reason for this package.
-
-
-### Why RT is the target here
-
-The decision is RT. The reason is not raw rate, it is ownership of the
-interpolant.
-
-In NRT the driver streams `SendJointPosition(q, dq, max_vel, max_acc)` and the
-robot's internal motion generator re-plans toward each setpoint under those
-caps. The motion that comes out is therefore a property of a generator that is
-not ours, driven at a rate that was found empirically. That is the whole of
-`docs/open_issues.md` issue 1a: 2 Hz is badly jerky because the generator
-decelerates toward each setpoint, 50 Hz is smoothest, 190 Hz degrades again
-because the robot is being pre-empted. Nothing in that curve is controllable
-from here, and no value of the send rate makes it ours.
-
-`StreamJointPosition(pos, vel, acc)` in `RT_JOINT_POSITION` takes no caps and
-does no planning. The controller tracks what it is given. So the interpolation
-becomes ours, it is deterministic — the same trajectory produces the same joint
-path every run — and the velocity and acceleration from MoveIt go to the
-controller as feedforward instead of as hints to a generator. The rate U-curve
-stops existing, because there is no setpoint-to-setpoint planning left to
-interfere with.
-
-The cost is that nothing covers for a missed deadline. That is what
-`rt_hold_probe` measures, and it is the one thing worth knowing before the arm
-is driven this way.
-
-### Design: trajectory buffer plus a 1 kHz sampler
-
-MoveIt delivers a whole trajectory, sparsely — 22 points for a typical move.
-The 1 kHz task needs 1000 setpoints a second. So the trajectory is buffered once
-and sampled continuously; that resampling is the controller.
-
-**Buffering.** Preallocate the buffers at startup and never allocate again:
-
-```cpp
-struct Waypoint {
-    double t;                      // time_from_start, seconds
-    double q[kMaxDof], dq[kMaxDof], ddq[kMaxDof];
-};
-struct TrajBuffer { Waypoint pts[kMaxPoints]; std::size_t n; };
-
-TrajBuffer                     slots[2];
-std::atomic<TrajBuffer*>       active{nullptr};   // nullptr = hold position
-std::atomic<std::uint64_t>     consumed{0};       // bumped by the RT task
-```
-
-`kMaxPoints` 4096 and `kMaxDof` 9 is about 1.8 MB for both slots, which is
-nothing, and makes an over-long trajectory a rejected goal rather than a
-`malloc` in the control loop.
-
-**Handoff.** One writer (the ROS executor thread), one reader (the RT task).
-The writer fills the inactive slot, then `active.store(ptr, release)`; the
-reader does `active.load(acquire)` once per cycle. Two slots are only safe if
-the writer never overwrites a slot the reader could still be holding, so the RT
-task bumps `consumed` after each swap it observes, and the writer waits for that
-acknowledgement before reusing the old slot. **The writer blocks, never the
-reader** — a few milliseconds on the ROS thread is free, and a new goal arrives
-every few seconds against a loop running every millisecond.
-
-**Sampling.** Per cycle, with `t` from `steady_clock` since the trajectory
-started:
-
-- Advance a cached segment index forward to the span with
-  `pts[i].t <= t < pts[i+1].t`. `t` is monotonic, so this is O(1) amortized and
-  needs no search.
-- Evaluate a **quintic Hermite** on that segment from `(q, dq, ddq)` at both
-  ends. It reproduces MoveIt's values exactly at the knots and is C² inside, so
-  acceleration is continuous across waypoint boundaries. That matters: the
-  discontinuous acceleration at a trapezoid's corners is precisely what made
-  execution jerky before Ruckig, and a cubic interpolant here would reintroduce
-  it at every knot.
-- Past the last waypoint, hold its `q` with `dq = ddq = 0` and set an atomic
-  done flag for the ROS thread to finish the action on.
-- With `active == nullptr`, hold the `q` captured at mode entry — what
-  `rt_hold_probe` already does.
-
-**What must not be in the task:** allocation, locks a non-RT thread can hold,
-logging, `throw`. Statistics accumulate in plain members the RT thread alone
-writes, read after `Stop()`.
-
-**What must be on the ROS thread instead:** the joint name-to-index map. MoveIt
-sends URDF joint names; the RDK vector is external axes first
-(`DoF_e` 2, then `DoF_m` 7). Resolve that when the goal arrives.
-
-**Limit clamping is now mandatory.** In NRT the generator's `max_vel` /
-`max_acc` were a backstop between a bad buffer and the joints. In RT there is
-nothing there. Validate the trajectory against the URDF limits when the goal is
-accepted, and check `robot.fault()` every cycle.
+   What is left is to measure, not to argue from the kernel name. Two things
+   stay open until `rt_hold_probe` runs: whether the loop holds while the rest
+   of the stack is running, and whether `isolcpus` or a `taskset` pin is needed.
+   With PREEMPT_RT and a performance governor it may well not be, which is
+   exactly why it is worth measuring before editing the boot configuration.
 
 ### Two constraints Flexiv state explicitly for RT
 
