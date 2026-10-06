@@ -18,6 +18,17 @@
  * them runs at a time.
  *
  *   ros2 run aico2_rt_control rt_bridge --ros-args -r __ns:=/left_arm
+ *
+ * It serves two channels, which the RT loop treats as mutually exclusive:
+ *
+ *   follow_joint_trajectory   action. MoveIt's Plan & Execute.
+ *   servo_joint_command       topic, trajectory_msgs/JointTrajectory. MoveIt
+ *                             Servo and VR teleop, gated by set_teleop_mode.
+ *
+ * Both names match aico2_left_arm_driver's, deliberately: the Servo node's
+ * command_out_topic and the teleop client's service call are then identical
+ * whether the NRT Python driver or this bridge is the one running, so moving a
+ * working teleop setup onto the RT path needs no configuration change at all.
  */
 
 #include "aico2_rt_control/traj_ingest.hpp"
@@ -26,7 +37,10 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include <std_srvs/srv/set_bool.hpp>
+#include <trajectory_msgs/msg/joint_trajectory.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <fcntl.h>
@@ -44,6 +58,9 @@ using FollowJointTrajectory = control_msgs::action::FollowJointTrajectory;
 using GoalHandle = rclcpp_action::ServerGoalHandle<FollowJointTrajectory>;
 using namespace std::chrono_literals;
 
+// The servo target is stamped with aico2_rt::MonotonicSeconds() from
+// shm_protocol.hpp -- the one clock both processes agree on. See its comment.
+
 class RtBridge : public rclcpp::Node {
 public:
     RtBridge() : rclcpp::Node("rt_bridge")
@@ -55,7 +72,17 @@ public:
         joint_names_ = declare_parameter<std::vector<std::string>>("joint_names",
             {"AGV_Joint1", "AGV_Joint2", "Left_joint1", "Left_joint2", "Left_joint3",
                 "Left_joint4", "Left_joint5", "Left_joint6", "Left_joint7"});
-        const double rate = declare_parameter<double>("joint_state_rate_hz", 100.0);
+        // 200 Hz rather than 100: /joint_states is MoveIt Servo's only view of
+        // where the arm is, so under a servo stream this rate is the slowest
+        // link in the feedback loop. It costs nine doubles per message.
+        const double rate = declare_parameter<double>("joint_state_rate_hz", 200.0);
+        // Which joints a servo stream may command. The arm only by default:
+        // MoveIt Servo runs on a planning group, and the waist is pinned
+        // unless rt_server was started with --control-waist.
+        servo_joint_names_ = declare_parameter<std::vector<std::string>>(
+            "servo_joint_names", {"Left_joint1", "Left_joint2", "Left_joint3",
+                                     "Left_joint4", "Left_joint5", "Left_joint6",
+                                     "Left_joint7"});
         start_tolerance_ = declare_parameter<double>("start_tolerance", 0.05);
         rest_tolerance_ = declare_parameter<double>("rest_tolerance", 0.01);
 
@@ -68,8 +95,16 @@ public:
         }
 
         joint_state_pub_ = create_publisher<sensor_msgs::msg::JointState>("joint_states", 10);
+        // Its own callback group, because entities created without one share
+        // the node's default group and that group is mutually exclusive. With
+        // /joint_states on the default group, set_teleop_mode(false) -- which
+        // waits up to 5 s for the arm to finish braking -- would stop
+        // publishing joint states for the whole wait. /joint_states is MoveIt
+        // Servo's only view of where the arm is, so that is the one thing that
+        // must keep running while something else is blocking.
+        js_cb_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
         timer_ = create_wall_timer(std::chrono::duration<double>(1.0 / rate),
-            [this] { PublishJointStates(); });
+            [this] { PublishJointStates(); }, js_cb_group_);
 
         action_server_ = rclcpp_action::create_server<FollowJointTrajectory>(this,
             "follow_joint_trajectory",
@@ -88,8 +123,58 @@ public:
                 std::thread{[this, h] { Execute(h); }}.detach();
             });
 
+        // The servo mask, resolved once. A name here that is not a robot joint
+        // is a configuration error worth failing on rather than discovering as
+        // an arm that will not move.
+        for (const auto& name : servo_joint_names_) {
+            const auto it = std::find(joint_names_.begin(), joint_names_.end(), name);
+            if (it == joint_names_.end()) {
+                throw std::runtime_error("servo_joint_names contains '" + name
+                    + "', which is not one of this server's joints");
+            }
+            servo_mask_ |= 1u << static_cast<std::uint32_t>(it - joint_names_.begin());
+        }
+
+        // A mutually-exclusive callback group, and it matters: this node runs
+        // on a MultiThreadedExecutor, and HandleServoCommand is the servo
+        // seqlock's only writer. Two of these callbacks running at once would
+        // make it two writers, and a seqlock with two writers is not a seqlock
+        // -- the counter would go even mid-update and the RT loop could read a
+        // pose assembled from two different targets. A lock on the callback
+        // would also work; keeping the group single-threaded costs nothing on
+        // a path that does no waiting anyway.
+        servo_cb_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+        rclcpp::SubscriptionOptions servo_opts;
+        servo_opts.callback_group = servo_cb_group_;
+        servo_sub_ = create_subscription<trajectory_msgs::msg::JointTrajectory>(
+            "servo_joint_command", rclcpp::SensorDataQoS(),
+            [this](trajectory_msgs::msg::JointTrajectory::ConstSharedPtr msg) {
+                HandleServoCommand(*msg);
+            },
+            servo_opts);
+        // Likewise its own group: this handler blocks for as long as the brake
+        // takes, and it must not hold up the servo subscription or the timer
+        // while it does.
+        srv_cb_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+        teleop_srv_ = create_service<std_srvs::srv::SetBool>("set_teleop_mode",
+            [this](const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
+                std::shared_ptr<std_srvs::srv::SetBool::Response> res) {
+                HandleSetTeleopMode(req, res);
+            },
+            rclcpp::ServicesQoS(), srv_cb_group_);
+
         RCLCPP_INFO(get_logger(), "attached to '%s', DoF %u, waist %s", shm_name_.c_str(),
             shm_->dof, shm_->control_waist ? "COMMANDED" : "pinned");
+        // The first arm axis, not index 0: without --control-waist the leading
+        // external axes are pinned to a 1e-3 envelope, so their jerk limit is
+        // 0.03 rad/s^3 and logging it reads as "no jerk limit configured".
+        const std::uint32_t arm0 =
+            shm_->n_external < shm_->dof ? shm_->n_external : 0u;
+        RCLCPP_INFO(get_logger(),
+            "servo stream: %zu joints (mask 0x%x), arm jerk %.1f rad/s^3, timeout %.3f s,"
+            " max jump %.3f rad",
+            servo_joint_names_.size(), servo_mask_, shm_->servo_cfg.max_jerk[arm0],
+            shm_->servo_cfg.timeout_sec, shm_->servo_cfg.max_jump_rad);
     }
 
     ~RtBridge() override
@@ -189,6 +274,153 @@ private:
     }
 
     /**
+     * @brief Forward one streamed setpoint to the RT loop.
+     *
+     * Deliberately not validated the way a trajectory is. A trajectory is
+     * checked once, up front, against rules that only make sense for a plan --
+     * starts at the measured position, ends at rest, time strictly increasing.
+     * A servo stream satisfies none of them by design: every sample is mid-
+     * motion, there is no end, and there is no timing at all. So the checks
+     * here are the ones that mean something per sample -- is this message
+     * well-formed, and is it about joints this stream is allowed to move --
+     * and everything else is the tracker's job, where it can be enforced
+     * continuously instead of once: the joint limits, the velocity and
+     * acceleration bounds, the jerk limit, and the glitch rejection.
+     *
+     * Dropping a message is never silent, but it is throttled: at a few hundred
+     * hertz an unthrottled warning would be its own outage.
+     */
+    void HandleServoCommand(const trajectory_msgs::msg::JointTrajectory& msg)
+    {
+        if (shm_->servo_enable.load(std::memory_order_acquire) == 0u) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                "ignoring servo command: teleop mode is off."
+                " Call set_teleop_mode with data: true first.");
+            return;
+        }
+        if (msg.points.empty()) {
+            return;
+        }
+        // The last point, matching aico2_left_arm_driver: Servo sends one point
+        // per tick, and where there are several the last is the furthest ahead.
+        const auto& pt = msg.points.back();
+        if (pt.positions.size() != msg.joint_names.size()) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                "ignoring servo command: %zu names but %zu positions",
+                msg.joint_names.size(), pt.positions.size());
+            return;
+        }
+
+        double q[aico2_rt::kMaxDof] = {};
+        double dq[aico2_rt::kMaxDof] = {};
+        const bool have_dq = pt.velocities.size() == msg.joint_names.size();
+        std::uint32_t mask = 0u;
+        for (std::size_t k = 0; k < msg.joint_names.size(); ++k) {
+            const auto it = std::find(
+                joint_names_.begin(), joint_names_.end(), msg.joint_names[k]);
+            if (it == joint_names_.end()) {
+                RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                    "ignoring servo command: unknown joint '%s'",
+                    msg.joint_names[k].c_str());
+                return;
+            }
+            const auto j = static_cast<std::uint32_t>(it - joint_names_.begin());
+            if ((servo_mask_ & (1u << j)) == 0u) {
+                // A static configuration error, so refusing the whole message
+                // is right: silently dropping the joint would move the arm
+                // somewhere other than asked, every single tick.
+                RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                    "ignoring servo command: joint '%s' is not in servo_joint_names",
+                    msg.joint_names[k].c_str());
+                return;
+            }
+            q[j] = pt.positions[k];
+            if (have_dq) {
+                dq[j] = pt.velocities[k];
+            }
+            mask |= 1u << j;
+        }
+
+        // Stamped on receipt, not from msg.header: the age is used to notice
+        // the producer has stopped, which is a question about this bridge's own
+        // clock. A producer's header stamp would need the two clocks
+        // synchronised to mean anything, and a producer on another machine --
+        // which is exactly what a VR headset's server is -- will not be.
+        aico2_rt::WriteServoTarget(*shm_, q, have_dq ? dq : nullptr, mask, shm_->dof,
+            have_dq, aico2_rt::MonotonicSeconds());
+    }
+
+    /**
+     * @brief Turn the servo stream on or off, and report what actually happened.
+     *
+     * Enabling is refused while a trajectory is in motion. The executor guards
+     * this too, but it guards it by ignoring the request, which from here would
+     * look like success -- so the state is read back and the transition
+     * confirmed rather than assumed. Disabling waits for the brake: the tracker
+     * ramps down at the jerk limit and only then hands back to a hold, and
+     * returning before that would let a caller start a trajectory into a
+     * moving arm.
+     */
+    void HandleSetTeleopMode(const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
+        std::shared_ptr<std_srvs::srv::SetBool::Response> res)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        aico2_rt::RtStatus st{};
+        if (!aico2_rt::ReadStatus(*shm_, st)) {
+            res->success = false;
+            res->message = "no coherent state from the RT server";
+            return;
+        }
+        const auto state = static_cast<aico2_rt::ExecState>(st.exec_state);
+
+        if (req->data) {
+            if (state == aico2_rt::ExecState::kRunning
+                || state == aico2_rt::ExecState::kStopping) {
+                res->success = false;
+                res->message = "cannot enter teleop: a trajectory is running";
+                return;
+            }
+            shm_->servo_enable.store(1u, std::memory_order_release);
+            res->success = AwaitState(aico2_rt::ExecState::kServoing, true, 1.0);
+            res->message = res->success ? "teleop enabled"
+                                        : "the RT server did not enter servo mode";
+            if (!res->success) {
+                shm_->servo_enable.store(0u, std::memory_order_release);
+            } else {
+                RCLCPP_INFO(get_logger(), "teleop ENABLED (servo stream)");
+            }
+            return;
+        }
+
+        shm_->servo_enable.store(0u, std::memory_order_release);
+        // Generous: the brake is bounded by ddq_max and max_jerk, so from full
+        // speed on a slow axis it is a fraction of a second, but waiting is
+        // always better than reporting a stop that has not happened.
+        res->success = AwaitState(aico2_rt::ExecState::kServoing, false, 5.0);
+        res->message = res->success ? "teleop disabled; decelerated to a hold"
+                                    : "teleop disabled, but the arm has not reported a stop";
+        RCLCPP_INFO(get_logger(), "teleop DISABLED (%s)", res->message.c_str());
+    }
+
+    /** @brief Poll the published state until it does (or stops) matching. */
+    bool AwaitState(aico2_rt::ExecState want, bool present, double timeout_sec)
+    {
+        const auto deadline = std::chrono::steady_clock::now()
+                              + std::chrono::duration<double>(timeout_sec);
+        while (std::chrono::steady_clock::now() < deadline) {
+            aico2_rt::RtStatus st{};
+            if (aico2_rt::ReadStatus(*shm_, st)) {
+                const bool is = static_cast<aico2_rt::ExecState>(st.exec_state) == want;
+                if (is == present) {
+                    return true;
+                }
+            }
+            std::this_thread::sleep_for(2ms);
+        }
+        return false;
+    }
+
+    /**
      * @brief Accept almost everything, and let Execute explain any refusal.
      *
      * A REJECTED goal carries no result message in ROS 2 -- the caller learns
@@ -247,7 +479,12 @@ private:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             aico2_rt::Measured meas{};
-            if (!aico2_rt::ReadMeasured(*shm_, meas)) {
+            if (shm_->servo_enable.load(std::memory_order_acquire) != 0u) {
+                // Both channels drive the same setpoint. The executor refuses
+                // the goal too, but it refuses by carrying on servoing, which
+                // from here is indistinguishable from a goal that vanished.
+                why = aico2_rt::RejectReasonName(aico2_rt::RejectReason::kServoActive);
+            } else if (!aico2_rt::ReadMeasured(*shm_, meas)) {
                 why = "no coherent state from the RT server";
             } else if (meas.operational == 0u || meas.fault != 0u) {
                 why = aico2_rt::RejectReasonName(aico2_rt::RejectReason::kNotOperational);
@@ -321,6 +558,15 @@ private:
                     handle->abort(result);
                     return;
                 }
+                if (state == aico2_rt::ExecState::kServoing) {
+                    // Servo mode was enabled behind this goal's back. The
+                    // stream has the arm now, and waiting out the full timeout
+                    // would tell the caller nothing.
+                    result->error_code = FollowJointTrajectory::Result::INVALID_GOAL;
+                    result->error_string = "pre-empted: servo mode was enabled";
+                    handle->abort(result);
+                    return;
+                }
                 if (state == aico2_rt::ExecState::kRejected) {
                     result->error_code = FollowJointTrajectory::Result::INVALID_GOAL;
                     result->error_string = std::string("the RT server rejected it: ")
@@ -375,6 +621,8 @@ private:
 
     std::string shm_name_;
     std::vector<std::string> joint_names_;
+    std::vector<std::string> servo_joint_names_;
+    std::uint32_t servo_mask_ = 0u;
     double start_tolerance_ = 0.05;
     double rest_tolerance_ = 0.01;
     int shm_fd_ = -1;
@@ -382,6 +630,11 @@ private:
     std::uint64_t goal_counter_ = 0;
     std::mutex mutex_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
+    rclcpp::CallbackGroup::SharedPtr servo_cb_group_;
+    rclcpp::CallbackGroup::SharedPtr srv_cb_group_;
+    rclcpp::CallbackGroup::SharedPtr js_cb_group_;
+    rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr servo_sub_;
+    rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr teleop_srv_;
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp_action::Server<FollowJointTrajectory>::SharedPtr action_server_;
 };

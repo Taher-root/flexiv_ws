@@ -104,9 +104,9 @@ cmake -S . -B build && cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Four suites: the shared-memory protocol, the sampler's maths, the 1 kHz state
-machine, and goal validation. All four must pass before pointing anything at an
-arm.
+Five suites: the shared-memory protocol, the sampler's maths, the 1 kHz state
+machine, goal validation, and the servo tracker. All five must pass before
+pointing anything at an arm.
 
 ### 7. Check the robot and the loop
 
@@ -136,6 +136,15 @@ cd ~/flexiv_ws/src/aico2_rt_control/standalone
 ```
 
 Nothing moves without `--yes-move`, and travel is capped at 15°.
+
+The same for the servo stream, which is the other way to drive the arm — a
+latest-target stream rather than a plan (see **MoveIt Servo and VR teleop**):
+
+```bash
+./build/servo_publish --list                                   # look
+./build/servo_publish --joint 6 --step 3 --yes-move            # hold 3 deg away
+./build/servo_publish --joint 6 --sine 5 --period 4 --yes-move # sweep, report lag
+```
 
 ### 9. Move it through ROS
 
@@ -218,38 +227,161 @@ changing tolerances.
 
 ## MoveIt Servo and VR teleop
 
-Short answer: **Servo is a better fit for RT than trajectory execution is, but
-it cannot drive `rt_bridge` as it stands.** Two separate reasons, and the second
-is the real one.
+**Built and tested off-hardware; not yet run on the arm.** The servo channel is
+a second, separate path through the same two processes: instead of a whole
+time-parameterised plan, a producer overwrites a single "where I want the arm"
+target as often as it likes, and a jerk-limited tracker chases it at 1 kHz.
 
-**1. Interface.** Servo publishes to a *topic*; `rt_bridge` is a
-`FollowJointTrajectory` *action* server. The `vr-teleop` repo's
-`VR_TELEOP_INTEGRATION_PLAN.md` already identified this and proposed adding a
-streaming subscriber to the Python NRT driver.
+| | trajectory | servo stream |
+| --- | --- | --- |
+| Interface | `follow_joint_trajectory` action | `servo_joint_command` topic |
+| Gate | none | `set_teleop_mode` service |
+| Input | a whole plan with timing | one latest target, no timing |
+| Needs | q, dq **and** ddq; starts and ends at rest | q only; mid-motion always |
+| Joints | every joint, or refused | any subset, via a mask |
+| Ends | yes | never |
+| Resampler | quintic Hermite (`traj_sampler.hpp`) | tracker (`servo_tracker.hpp`) |
+| Producer stops | irrelevant | brakes after `--servo-timeout` |
 
-**2. Semantics, which no subscriber fixes.** Validation here requires a
-trajectory that covers every joint, carries positions *and* velocities *and*
-accelerations, starts at the measured position **at rest**, and **ends at rest**.
-Servo emits one setpoint per tick, with no accelerations, explicitly not at rest.
-Every Servo command would be refused — correctly. The trajectory model assumes a
-complete, bounded, time-parameterised plan; servoing is an endless stream of
-"go here now". They are different problems.
+The two are **mutually exclusive**: a trajectory goal is refused while servo
+mode is on, servo mode will not engage while a trajectory is moving, and both
+refusals say so rather than failing quietly.
 
-### What it would take
+The topic and service names are deliberately the same as
+`aico2_left_arm_driver`'s, so a MoveIt Servo `command_out_topic` and a teleop
+client that work against the NRT Python driver need **no configuration change**
+to drive the RT path instead. Run one or the other, never both — they contend
+for the single RDK session the robot allows.
 
-A second shared-memory channel, not a tweak to the first:
+### The lag is physics, and the acceleration limit is only half the knob
 
-- a `ServoTarget` region — one target, overwritten at 50–250 Hz, with its own
-  seqlock and a staleness timestamp
-- a streaming state in `RtExecutor` that tracks the latest target at 1 kHz under
-  jerk limits, and falls back to holding position when the target goes stale
-- a topic subscriber in `rt_bridge`
-- validation that suits a stream: per-sample limit and rate checks, not
-  start-and-end-at-rest
+This is the part worth reading before tuning anything. A tracker following a
+target at speed `v` must carry enough position error to be able to stop, or it
+overshoots when the operator's hand stops. That bounds the speed by
+`sqrt(2 * ddq_max * error)`, and tracking a ramp settles at
 
-The tracker is the only interesting part. It is exactly the job the robot's own
-NRT generator does, and does badly — no jerk limit, no knowledge of when the
-next command is due. Ruckig has an online mode built for precisely this.
+```
+lag  =  v / (2 * ddq_max)  +  ddq_max / max_jerk     seconds
+```
+
+Both terms matter and they **pull in opposite directions**. Raising `--max-acc`
+shrinks the first and *grows* the second, so past a point it makes following
+worse. They only improve together if the jerk limit rises too, which is why
+`--servo-max-jerk` defaults to `30 * --max-acc` rather than a constant.
+
+At 1 rad/s, with that default:
+
+| `--max-acc` | from ddq_max | from max_jerk | total |
+| --- | --- | --- | --- |
+| 3 (default) | 167 ms | 33 ms | **200 ms** |
+| 12 | 42 ms | 33 ms | **75 ms** |
+| 24 | 21 ms | 33 ms | **54 ms** |
+
+`rt_server` prints its own predicted lag at startup, so the figure in force is
+never a guess. `test_servo_tracker.cpp` asserts the formula numerically — if
+the tracker and this table ever disagree, the test fails.
+
+Two things this means in practice. First, the RT loop itself contributes ~1 ms;
+essentially all of the lag above is the tracker choosing not to overshoot, and
+the rest of the hand-to-arm delay is upstream (headset WiFi, the WebXR frame,
+Servo's own cycle and smoothing filter). Second, **a first-order lookahead law
+is not an alternative.** It is infeasible at its own crossover for every value
+of the lookahead — the arithmetic is in `servo_tracker.hpp` — and it was tried
+first: on a 0.3 rad step it overshot 0.02 rad and rang for a second.
+
+### What the tracker guarantees
+
+- **Velocity, acceleration and jerk bounded every cycle.** The RDK applies no
+  jerk limit of its own (`docs/open_issues.md` issue 1a), so this is the only
+  place one exists.
+- **A joint limit cannot be commanded through**, by the error term or by a
+  velocity feedforward. The target is clamped into travel and the speed is
+  bounded by what can be braked before the stop.
+- **A glitch is refused, not followed.** A target more than `--servo-max-jump`
+  (0.5 rad) from the current command is ignored and counted — an IK branch flip
+  or a clutch that re-engages without re-seeding its offset both look exactly
+  like this, and would otherwise be chased at full speed.
+- **A dead producer stops the arm.** Past `--servo-timeout` (100 ms) the target
+  is stale and the tracker brakes, jerk-limited, then holds. It resumes the
+  moment targets arrive again, without cycling servo mode.
+- **Joints not named are held exactly**, so a 7-joint arm target cannot drag the
+  2 waist axes with it. Without `--control-waist` the waist bits are masked out
+  regardless.
+- **Leaving servo mode brakes first.** `set_teleop_mode false` does not return
+  until the arm has reported a stop, so a trajectory cannot be started into a
+  moving arm.
+
+### Testing it without ROS: `servo_publish`
+
+The servo twin of `traj_publish`. It enables servo mode and writes targets
+straight into shared memory, so the whole RT half can be proven on the arm with
+neither ROS nor MoveIt Servo running — if the arm follows here, everything left
+is upstream.
+
+```bash
+cd src/aico2_rt_control/standalone/build
+./servo_publish --list                                   # state only, no motion
+./servo_publish --joint 6 --step 3 --yes-move             # hold 3 deg away
+./servo_publish --joint 6 --sine 5 --period 4 --yes-move  # sweep, report lag
+./servo_publish --joint 6 --sine 5 --period 4 --drop 3 --yes-move
+                                                          # stop feeding at 3 s
+                                                          # and watch it brake
+```
+
+`--sine` measures the phase lag from the robot's own encoders at 1 kHz and
+prints it next to the prediction. The measurement includes the measured-state
+publication delay, so it is an upper bound on the tracker's own lag.
+
+Verified so far, two processes over real shared memory against `fake_server`:
+tracking, the staleness brake, the step, the waist refusal, and servo mode
+entering and leaving cleanly. The *lag figure* from that run is not meaningful
+— this was a non-RT container whose 1 kHz loop missed 47 deadlines with a worst
+period of 43 ms. The formula is verified by `test_servo_tracker`, directly
+against the tracker, to within 1%.
+
+### Through ROS
+
+```bash
+# A: the RT half (ROS-free shell -- see noros.sh)
+./rt_server Rizon4-063352 --max-acc 12 --servo-max-jerk 360
+
+# B: the ROS half
+ros2 run aico2_rt_control rt_bridge --ros-args -r __ns:=/left_arm
+
+# C: arm the stream, then publish to it
+ros2 service call /left_arm/set_teleop_mode std_srvs/srv/SetBool "{data: true}"
+#    ... MoveIt Servo, or any producer, publishes JointTrajectory to
+#    /left_arm/servo_joint_command ...
+ros2 service call /left_arm/set_teleop_mode std_srvs/srv/SetBool "{data: false}"
+```
+
+`rt_bridge` parameters: `servo_joint_names` (the 7 arm joints by default — a
+name that is not one of the server's joints is a startup error, not a silent
+no-op) and `joint_state_rate_hz`, now 200 Hz because `/joint_states` is MoveIt
+Servo's only view of where the arm is and so the slowest link in its feedback
+loop.
+
+### What is still missing for VR teleop end to end
+
+The RT half is done. What is not built:
+
+| Gap | Where |
+| --- | --- |
+| `moveit_servo` installed, and a real Servo params file | check with `ros2 pkg prefix moveit_servo` |
+| a node publishing `TwistStamped` from the teleop's callback seam | new; hangs off `Teleop.subscribe()` in `vr-teleop` |
+| a launch file wiring Servo + bridge + teleop together | `flexiv_amr_bringup/` |
+
+Note that the four `*_moveit_servo.yaml` files in the arm driver packages are
+**not** Servo configs — they are driver parameter files with
+`teleop_backend: servo`, and their headers reference `aico2_bringup/` and
+`aico2_vr_teleop/` launch files that do not exist in this repo. Do not treat
+them as a starting point.
+
+The NRT Python driver already has the whole consumer side — a
+`servo_joint_command` subscriber, `set_teleop_mode`, and mode entry in the right
+order — so it is worth bringing up VR teleop against it first to prove the
+headset, IK and clutch half, then moving the consumer to RT. It will be jerkier
+there, for the reason below.
 
 ### Why this matters more for teleop than for trajectories
 
@@ -257,9 +389,13 @@ next command is due. Ruckig has an online mode built for precisely this.
 uses `NRT_CARTESIAN_MOTION_FORCE` with `SendCartesianMotionForce`, and
 `AbsoluteJointServoController` uses `NRT_JOINT_IMPEDANCE` with
 `SendJointPosition`. That is the worst case for the behaviour recorded in
-`docs/open_issues.md` issue 1a: each call replaces the target and triggers a
-re-plan, so smoothness depends on the rate the VR headset happens to run at.
-Under RT the loop is fixed at 1 kHz and the smoothing is ours.
+`docs/open_issues.md` issue 1a: each call replaces the target, and the robot's
+generator chases it with no timing knowledge and no jerk limit. The Python
+driver's own `_compute_servo_dq` says as much — it has to finite-difference
+successive setpoints to synthesise a terminal velocity, because `dq = 0` means
+"stop at every waypoint" and the arm barely moves. Under RT the loop is fixed at
+1 kHz, `q`, `dq` and `ddq` are all supplied every millisecond, and the
+smoothing is ours.
 
 ### Two ways to wire it, and which to prefer
 
@@ -268,21 +404,23 @@ Under RT the loop is fixed at 1 kHz and the smoothing is ours.
 | Path | VR → Servo → topic → bridge → shm | VR → `pybullet_ik` → shm |
 | Keeps | IK, collision checking, singularity and joint-limit scaling | nothing but the IK |
 | Latency | Servo adds a stage | lowest |
-| Effort | more machinery | a small Python writer |
+| Effort | more machinery | a small shm writer |
 
 **Prefer Servo** for anything moving near obstacles or people: collision and
 singularity handling is most of what makes teleop safe, and it is not worth
 reimplementing. The direct path is a reasonable way to first exercise the servo
-channel, since `vr-teleop` already has working IK.
+channel, since `vr-teleop` already has working IK — and `servo_publish` shows
+how little a writer needs to do.
 
 ### One correction to the integration plan
 
-It says to discard `flexiv_utils.py`, `control_flexiv.py` and `flexiv_env.py`
-because they "would fight the AICO2 drivers for the RDK connection". That was
-right for a single-process NRT design. With the two-process split it no longer
-holds: only `rt_server` touches the RDK, so that teleop code can be reused as a
-shared-memory *writer* without contending for anything. Reusing only the VR and
-web half is now a choice rather than a requirement.
+`vr-teleop`'s `VR_TELEOP_INTEGRATION_PLAN.md` says to discard `flexiv_utils.py`,
+`control_flexiv.py` and `flexiv_env.py` because they "would fight the AICO2
+drivers for the RDK connection". That was right for a single-process NRT design.
+With the two-process split it no longer holds: only `rt_server` touches the RDK,
+so that teleop code can be reused as a shared-memory *writer* without contending
+for anything. Reusing only the VR and web half is now a choice rather than a
+requirement.
 
 Also worth noting: `AbsoluteJointServoController` already selects
 `NRT_JOINT_IMPEDANCE`, so the teleop path already wanted compliance — which is

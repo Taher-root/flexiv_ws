@@ -29,6 +29,16 @@
  * the published one nor the one the reader says it is using, and with three
  * slots and at most two in use such a slot always exists. State uses a seqlock,
  * because the RT thread must publish without ever waiting for a reader.
+ *
+ * There are two ways to move the arm, and they are mutually exclusive:
+ *
+ *   trajectory  A whole time-parameterised plan is written into a slot and
+ *               resampled at 1 kHz. This is MoveIt's Plan & Execute.
+ *   servo       A single "latest target" is overwritten as fast as the producer
+ *               likes, and a jerk-limited tracker chases it at 1 kHz. This is
+ *               MoveIt Servo and VR teleop. Unlike a trajectory it carries no
+ *               timing and never ends, so it is a different channel rather than
+ *               a one-point trajectory: see servo_tracker.hpp.
  */
 
 #ifndef AICO2_RT_CONTROL_SHM_PROTOCOL_HPP
@@ -37,11 +47,12 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <time.h>
 
 namespace aico2_rt {
 
 /** Bump when the layout changes; both sides refuse a mismatch. */
-constexpr std::uint32_t kShmVersion = 1;
+constexpr std::uint32_t kShmVersion = 2;
 constexpr std::uint32_t kShmMagic = 0x41494332;  // "AIC2"
 
 /** 9 on this robot (2 external waist axes + 7 arm). Headroom costs nothing. */
@@ -62,6 +73,31 @@ struct Limits {
     double ddq_max[kMaxDof];
 };
 
+/**
+ * @brief How the tracker behaves. Written once by rt_server, read by everyone.
+ *
+ * Here rather than in rt_server's own memory so the bridge can report the
+ * settings actually in force, and so a target writer can size its own rate
+ * against them. A stale rt_server binary with different defaults is then
+ * visible instead of guessed at.
+ */
+struct ServoConfig {
+    /** Age at which a target stops being chased; see kDefaultServoTimeoutSec. */
+    double timeout_sec;
+    /** Step size treated as a glitch; see kDefaultServoMaxJumpRad. */
+    double max_jump_rad;
+    /** The terminal law's time constant: how the last fraction of a degree
+     *  settles once the brake ceiling is no longer binding. NOT the lag -- the
+     *  lag is set by ddq_max and max_jerk, and no value here changes it. See
+     *  servo_tracker.hpp, which explains why the first-order "lookahead" this
+     *  field used to be is unusable as a tracking law. */
+    double settle_sec;
+    /** Jerk limit, rad/s^3, applied per joint. The RDK takes no jerk limit of
+     *  its own (docs/open_issues.md issue 1a), so this loop is the only place
+     *  one exists. */
+    double max_jerk[kMaxDof];
+};
+
 /** One MoveIt trajectory point. Matches trajectory_msgs/JointTrajectoryPoint
  *  minus `effort`, which MoveIt leaves empty. */
 struct Point {
@@ -79,12 +115,26 @@ enum class ExecState : std::uint32_t {
     kRejected = 3,   ///< validation failed; see reject_reason
     kAborted = 4,    ///< stopped early (fault, or cancel), holding
     kStopping = 5,   ///< decelerating to a stop after a cancel
+    kServoing = 6,   ///< tracking a streamed target, no trajectory
 };
 
 /** The RT loop's nominal period, and the interval beyond which a cycle counts
  *  as having missed its deadline. */
 constexpr double kLoopPeriodSec = 0.001;
 constexpr double kDeadlineSec = 0.0015;
+
+/** Default age at which a servo target stops being chased. A producer running
+ *  at 50-200 Hz refreshes every 5-20 ms, so 100 ms means five missed updates --
+ *  late enough not to trip on scheduling noise, early enough that a dead
+ *  producer brings the arm to a stop in about a tenth of a second. Overridable
+ *  per run via Shm::servo_timeout_sec. */
+constexpr double kDefaultServoTimeoutSec = 0.1;
+
+/** Default distance a single servo target may sit from the current command
+ *  before it is treated as a glitch and ignored. An IK solution that jumps
+ *  branch, or a clutch that re-engages without re-seeding its offset, both
+ *  arrive as a large step; chasing one means a fast unexpected move. */
+constexpr double kDefaultServoMaxJumpRad = 0.5;
 
 enum class RejectReason : std::uint32_t {
     kNone = 0,
@@ -100,6 +150,8 @@ enum class RejectReason : std::uint32_t {
     kUnknownJoint = 10,          ///< a goal joint name is not in the configured map
     kMissingJoint = 11,          ///< the goal omits a joint the server commands
     kServerNotRunning = 12,      ///< rt_server's heartbeat is stale
+    kServoActive = 13,           ///< a trajectory arrived while servo mode was on
+    kTrajectoryActive = 14,      ///< servo mode asked for while a trajectory runs
 };
 
 enum class ClampKind : std::uint32_t {
@@ -139,6 +191,8 @@ inline const char* RejectReasonName(RejectReason r)
         case RejectReason::kUnknownJoint: return "goal names a joint the server does not know";
         case RejectReason::kMissingJoint: return "goal omits a joint the server commands";
         case RejectReason::kServerNotRunning: return "rt_server is not running";
+        case RejectReason::kServoActive: return "servo mode is active; disable it first";
+        case RejectReason::kTrajectoryActive: return "a trajectory is running";
     }
     return "unknown";
 }
@@ -149,6 +203,41 @@ struct Slot {
     std::uint32_t n_points;
     std::uint32_t n_joints;
     Point points[kMaxPoints];
+};
+
+/**
+ * @brief The latest streamed target. Written by the bridge, read every cycle.
+ *
+ * Deliberately NOT a one-point trajectory. A trajectory says "be at q at time
+ * t"; this says "q is where I want you, as of when I wrote it". There is no
+ * schedule, no end, and no guarantee another one is coming -- which is why the
+ * RT side needs `stamp_mono` (to notice the producer stopped) and a tracker
+ * rather than a sampler.
+ *
+ * Overwritten in place with no slot rotation: a target two updates old has no
+ * value, so there is nothing to protect from being lost. The seqlock exists
+ * only so the 1 kHz reader never sees half of one write mixed with half of the
+ * next -- which on nine joints is a physically meaningless pose.
+ */
+struct ServoTarget {
+    /** CLOCK_MONOTONIC seconds, taken by the writer. Compared against the RT
+     *  loop's own clock, which is why both sides must use CLOCK_MONOTONIC. */
+    double stamp_mono;
+    double q[kMaxDof];         ///< target position, rad
+    double dq[kMaxDof];        ///< target velocity, rad/s; feedforward only
+    /** Bit j set means joint j is commanded. Unmasked joints hold where they
+     *  are. MoveIt Servo on a 7-joint arm group sends seven joints, not the
+     *  nine the robot vector has, so a mask is the honest representation --
+     *  the alternative is the bridge guessing a hold position for the waist
+     *  that only the RT loop actually knows. */
+    std::uint32_t mask;
+    std::uint32_t dof;
+    /** Non-zero when `dq` came from the producer rather than being left empty.
+     *  MoveIt Servo often omits velocities; a zero feedforward is correct in
+     *  that case, but it is not the same as a producer that meant zero. */
+    std::uint32_t have_dq;
+    std::uint32_t _pad;
+    std::uint64_t seq;         ///< increments on every write; 0 means never written
 };
 
 /**
@@ -181,6 +270,20 @@ struct RtStatus {
     std::uint64_t missed_deadlines;
     double max_period_sec;
     double min_period_sec;
+
+    // ---- servo channel ---------------------------------------------------
+    /** Non-zero while the newest servo target is older than servo_timeout_sec,
+     *  i.e. the tracker is braking to a stop rather than following anything. */
+    std::uint32_t servo_stale;
+    std::uint32_t _pad_servo;
+    /** Targets ignored for sitting further than servo_max_jump_rad from the
+     *  current command. A non-zero count here is the signal that IK is jumping
+     *  branch or the producer is not re-seeding its offset -- it would
+     *  otherwise present only as the arm mysteriously not following. */
+    std::uint64_t servo_rejected;
+    /** Age of the target being tracked, seconds. The honest measure of how
+     *  much of the end-to-end lag is upstream of this loop. */
+    double servo_age_sec;
 };
 
 /**
@@ -218,6 +321,8 @@ struct Shm {
     std::uint32_t _pad0;
     /** Written once by rt_server before the scheduler starts. */
     Limits limits;
+    /** Likewise written once, before the scheduler starts. */
+    ServoConfig servo_cfg;
 
     // ---- bridge -> RT ----------------------------------------------------
     /** Slot holding the newest trajectory, or kNoSlot. */
@@ -228,8 +333,22 @@ struct Shm {
     std::atomic<std::uint32_t> cancel_request;
     /** Bridge heartbeat, so the RT task can hold position if the bridge dies. */
     std::atomic<std::uint64_t> bridge_heartbeat;
+    /** Non-zero to put the loop in servo mode. The two channels are mutually
+     *  exclusive: the executor refuses a trajectory while this is set, and the
+     *  bridge refuses to set it while a trajectory runs. */
+    std::atomic<std::uint32_t> servo_enable;
 
     alignas(64) char _pad1[64];
+
+    // ---- bridge -> RT, servo target --------------------------------------
+    // On its own cache line: written at up to a few hundred hertz by the
+    // bridge while the RT loop reads it a thousand times a second, which is
+    // exactly the pattern false sharing punishes.
+    /** Seqlock over `servo_target`. One writer, the bridge. */
+    std::atomic<std::uint64_t> servo_seq;
+    ServoTarget servo_target;
+
+    alignas(64) char _pad4[64];
 
     // ---- RT -> bridge ----------------------------------------------------
     /** Slot the RT task is reading, so the bridge never overwrites it. */
@@ -259,6 +378,33 @@ static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
     "64-bit atomics must be lock-free to be usable across processes");
 
 constexpr const char* kDefaultShmName = "/aico2_rt_control";
+
+/**
+ * @brief The clock every `stamp_mono` in this mapping is taken from.
+ *
+ * Defined here, once, because it is part of the cross-process contract rather
+ * than an implementation detail of either side. The servo target's age is the
+ * difference between a stamp the bridge takes and a reading the RT loop takes,
+ * so the two processes must be measuring the same thing -- and two reasonable
+ * implementations are not interchangeable:
+ *
+ *   - rclcpp's now() is ROS time: wall clock by default, and possibly
+ *     simulated. Minutes to decades away from CLOCK_MONOTONIC.
+ *   - steady_clock::now() minus a t0 captured at process start, which is what
+ *     rt_server used while it was the only process stamping anything. Correct
+ *     within one process and meaningless across two, since each has its own
+ *     t0. Against a bridge using absolute time it made every target look
+ *     hours stale, so the tracker would have braked and held for ever.
+ *
+ * CLOCK_MONOTONIC, absolute, is the one definition both sides can arrive at
+ * independently. Anything stamping into this mapping calls this function.
+ */
+inline double MonotonicSeconds()
+{
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<double>(ts.tv_sec) + 1e-9 * static_cast<double>(ts.tv_nsec);
+}
 
 // ---------------------------------------------------------------------------
 // Writer side (bridge)
@@ -322,22 +468,45 @@ inline void AcknowledgeSeq(Shm& shm, std::uint64_t seq)
  *
  * Odd while writing, even when settled. A reader that sees an odd value, or two
  * different values either side of its read, retries.
+ *
+ * The fences are the whole correctness argument and they are not symmetric, so
+ * they are worth spelling out. Opening needs the counter to turn odd BEFORE any
+ * data is written, which is a relaxed increment followed by a release fence --
+ * the fence is what stops the data stores being hoisted above the increment.
+ * Closing needs the reverse: all the data visible BEFORE the counter turns
+ * even, which is a release fence followed by a relaxed increment.
+ *
+ * `fetch_add(release)` for both, which is the obvious thing to write and what
+ * this did first, gets the opening backwards: a release increment orders
+ * everything *before* it and says nothing about the data that follows, so the
+ * compiler is free to sink the data stores past the increment and let a reader
+ * observe an even counter either side of a copy that was in fact torn.
+ *
+ * No test has caught that happening -- the tests here measure zero torn reads
+ * both before and after this change, on this compiler at -O2. It is a latent
+ * bug fixed on the argument above, not an observed one, and it is written down
+ * because the next person to simplify these four functions back into
+ * `fetch_add(release)` will find nothing failing when they do.
  */
 inline void BeginStatusWrite(Shm& shm)
 {
-    shm.status_seq.fetch_add(1, std::memory_order_release);
+    shm.status_seq.fetch_add(1, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
 }
 inline void EndStatusWrite(Shm& shm)
 {
-    shm.status_seq.fetch_add(1, std::memory_order_release);
+    std::atomic_thread_fence(std::memory_order_release);
+    shm.status_seq.fetch_add(1, std::memory_order_relaxed);
 }
 inline void BeginMeasuredWrite(Shm& shm)
 {
-    shm.measured_seq.fetch_add(1, std::memory_order_release);
+    shm.measured_seq.fetch_add(1, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
 }
 inline void EndMeasuredWrite(Shm& shm)
 {
-    shm.measured_seq.fetch_add(1, std::memory_order_release);
+    std::atomic_thread_fence(std::memory_order_release);
+    shm.measured_seq.fetch_add(1, std::memory_order_relaxed);
 }
 
 /**
@@ -372,6 +541,54 @@ inline bool ReadStatus(const Shm& shm, RtStatus& out, int max_tries = 8)
 inline bool ReadMeasured(const Shm& shm, Measured& out, int max_tries = 8)
 {
     return ReadSeqlocked(shm.measured_seq, shm.measured, out, max_tries);
+}
+
+inline void BeginServoWrite(Shm& shm)
+{
+    shm.servo_seq.fetch_add(1, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
+}
+inline void EndServoWrite(Shm& shm)
+{
+    std::atomic_thread_fence(std::memory_order_release);
+    shm.servo_seq.fetch_add(1, std::memory_order_relaxed);
+}
+
+/**
+ * @brief Read the newest servo target.
+ * @return false if no coherent copy was seen, in which case `out` is unusable.
+ *
+ * Called from the 1 kHz task, so the retry budget is small on purpose: with a
+ * reader at 1 kHz and a writer at a few hundred hertz a collision is rare and
+ * one retry settles it, and a loop that cannot finish in four tries should
+ * carry on with the target it already has rather than spend its cycle here.
+ * Failing is cheap -- the tracker simply keeps chasing the previous target,
+ * which is one update stale and still perfectly serviceable.
+ */
+inline bool ReadServoTarget(const Shm& shm, ServoTarget& out, int max_tries = 4)
+{
+    return ReadSeqlocked(shm.servo_seq, shm.servo_target, out, max_tries);
+}
+
+/**
+ * @brief Overwrite the servo target. Writer side; not for the RT loop.
+ * @param stamp_mono CLOCK_MONOTONIC seconds, the same clock the RT loop reads.
+ */
+inline void WriteServoTarget(Shm& shm, const double* q, const double* dq,
+    std::uint32_t mask, std::uint32_t dof, bool have_dq, double stamp_mono)
+{
+    BeginServoWrite(shm);
+    ServoTarget& t = shm.servo_target;
+    t.stamp_mono = stamp_mono;
+    for (std::uint32_t j = 0; j < kMaxDof; ++j) {
+        t.q[j] = (j < dof) ? q[j] : 0.0;
+        t.dq[j] = (j < dof && dq != nullptr) ? dq[j] : 0.0;
+    }
+    t.mask = mask;
+    t.dof = dof;
+    t.have_dq = have_dq ? 1u : 0u;
+    t.seq = t.seq + 1;
+    EndServoWrite(shm);
 }
 
 }  // namespace aico2_rt

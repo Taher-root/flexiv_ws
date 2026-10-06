@@ -1068,6 +1068,22 @@ cycles**, and 0.001° of tracking error on a 3° move. `FollowJointTrajectory`
 goals — the same interface MoveIt uses, with no configuration change — execute
 through it.
 
+**Two channels, also mutually exclusive.** Besides whole trajectories, the RT
+loop accepts a *servo stream*: a single "go here now" target overwritten as
+often as the producer likes, chased at 1 kHz by a jerk-limited tracker. That is
+the shape MoveIt Servo and VR teleop produce, and it is gated by a
+`set_teleop_mode` service so the two channels cannot both drive the arm. The
+topic and service names match the Python driver's, so a Servo or teleop setup
+that works against NRT needs no configuration change to drive RT instead.
+
+The servo path is **built and tested off-hardware but not yet run on an arm.**
+One number to plan around: the tracker's following lag is
+`v/(2·ddq_max) + ddq_max/max_jerk` seconds — about 200 ms at 1 rad/s with the
+default limits, and 75 ms if you raise `--max-acc` to 12 *and* the jerk limit
+with it. That is not tuning slack; it is what being unable to overshoot costs.
+The RT loop itself contributes ~1 ms. The package README derives it and the
+tests assert it.
+
 **What it needs:** the RDK **C++** library (the Python wheel has no RT modes at
 all), an `RDK-Professional` licence, and a real-time capable host. Both arms
 here are licensed and `qc-ubuntu` runs a `PREEMPT_RT` kernel.

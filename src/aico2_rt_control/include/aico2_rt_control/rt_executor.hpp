@@ -22,6 +22,21 @@
  * thread, which is also why rt_hold_probe's timing figures are trustworthy --
  * its periodic task called only fault().
  *
+ * There are two ways the arm can be driven, and they are mutually exclusive
+ * because both end at the same single stream of setpoints:
+ *
+ *   trajectory  A plan with timing, resampled by TrajSampler. MoveIt's Plan &
+ *               Execute. Starts, ends, and is validated once up front.
+ *   servo       A latest-target stream with no timing, chased by ServoTracker.
+ *               MoveIt Servo and VR teleop. Never ends, and has to cope with
+ *               the producer simply stopping -- which is why it needs a
+ *               staleness timeout and the trajectory path does not.
+ *
+ * Switching between them only happens from a standstill. A trajectory arriving
+ * mid-servo is refused, and servo mode is not entered while a trajectory runs;
+ * leaving servo mode brakes to rest first rather than handing a live velocity
+ * over to the hold path, which would be a step in the stream.
+ *
  * RT rules, enforced by construction: nothing here allocates, takes a lock,
  * logs, or throws. Every buffer is a fixed-size member.
  */
@@ -29,6 +44,7 @@
 #ifndef AICO2_RT_CONTROL_RT_EXECUTOR_HPP
 #define AICO2_RT_CONTROL_RT_EXECUTOR_HPP
 
+#include "aico2_rt_control/servo_tracker.hpp"
 #include "aico2_rt_control/shm_protocol.hpp"
 #include "aico2_rt_control/traj_sampler.hpp"
 
@@ -53,11 +69,43 @@ public:
         robot_ = robot;
         dof_ = dof;
         limits_ = limits;
+        n_external_ = shm->n_external;
         for (std::uint32_t j = 0; j < kMaxDof; ++j) {
             cmd_.q[j] = (j < dof) ? hold_q[j] : 0.0;
             cmd_.dq[j] = 0.0;
             cmd_.ddq[j] = 0.0;
         }
+        // Normalise the servo settings here rather than trusting the mapping.
+        // A zeroed ServoConfig -- an older writer, or a test that never filled
+        // it in -- would otherwise mean a zero timeout, which reads as "every
+        // target is already stale" and presents as servo mode silently doing
+        // nothing. Substituting the documented defaults fails visibly instead.
+        servo_cfg_ = shm->servo_cfg;
+        if (!(servo_cfg_.timeout_sec > 0.0)) {
+            servo_cfg_.timeout_sec = kDefaultServoTimeoutSec;
+        }
+        if (!(servo_cfg_.max_jump_rad > 0.0)) {
+            servo_cfg_.max_jump_rad = kDefaultServoMaxJumpRad;
+        }
+        if (!(servo_cfg_.settle_sec > 0.0)) {
+            servo_cfg_.settle_sec = 0.03;
+        }
+        for (std::uint32_t j = 0; j < kMaxDof; ++j) {
+            if (!(servo_cfg_.max_jerk[j] > 0.0)) {
+                // A multiple of the acceleration limit, not a constant: the
+                // tracker's lag carries a ddq_max / max_jerk term, so a fixed
+                // jerk limit would make raising the acceleration limit stop
+                // helping. See servo_tracker.hpp.
+                servo_cfg_.max_jerk[j] = 30.0 * limits_.ddq_max[j];
+            }
+        }
+        // Write the normalised settings back, so what the mapping advertises is
+        // what the loop will actually enforce. Leaving the zeros in place would
+        // make every reader -- the bridge, a target writer, a person looking at
+        // the log -- re-derive these defaults and get them wrong when they
+        // change. Safe to write directly: the scheduler has not started, so
+        // there is no concurrent reader yet.
+        shm->servo_cfg = servo_cfg_;
         state_ = ExecState::kIdle;
     }
 
@@ -80,8 +128,17 @@ public:
             return;
         }
 
+        ArbitrateServoMode();
+
         if (shm_->cancel_request.load(std::memory_order_acquire) != 0u) {
-            if (state_ == ExecState::kRunning) {
+            if (state_ == ExecState::kServoing) {
+                // A cancel refers to a goal, and a stream has none. Clearing it
+                // without acting is deliberate: braking here would stop the arm
+                // while servo mode was still enabled, so the next target would
+                // start it again and the cancel would look like a glitch. The
+                // way to stop a stream is to turn servo mode off, which brakes
+                // properly -- see ArbitrateServoMode.
+            } else if (state_ == ExecState::kRunning) {
                 // Do not jump to the measured position and do not drop the
                 // velocity to zero in one cycle: both are discontinuities, and
                 // Flexiv are explicit that the robot does not smooth RT
@@ -111,6 +168,9 @@ public:
                 traj_time_ = t;
                 break;
             }
+            case ExecState::kServoing:
+                ServoCycle(now);
+                break;
             case ExecState::kStopping:
                 Decelerate();
                 break;
@@ -140,12 +200,19 @@ public:
     double mean_period() const { return cycles_ > 1 ? sum_period_ / (cycles_ - 1) : 0.0; }
     ExecState state() const { return state_; }
     const Setpoint& command() const { return cmd_; }
+    RejectReason reject_reason() const { return reject_; }
+    bool servo_stale() const { return servo_stale_; }
+    std::uint64_t servo_rejected() const { return servo_.rejected(); }
 
 private:
     void UpdateTiming(double now)
     {
         if (have_prev_) {
             const double dt = now - prev_;
+            // Kept for the tracker, which integrates and so wants the interval
+            // that actually elapsed rather than the nominal one. It bounds the
+            // value itself; see ServoTracker::Step.
+            last_dt_ = dt;
             min_period_ = dt < min_period_ ? dt : min_period_;
             max_period_ = dt > max_period_ ? dt : max_period_;
             sum_period_ += dt;
@@ -180,6 +247,19 @@ private:
             AcknowledgeSeq(*shm_, seq);
             return;
         }
+        // A plan cannot be run while a stream is in charge: both drive the
+        // same setpoint, and adopting one here would abandon the other
+        // mid-motion. The bridge refuses such a goal up front, so reaching
+        // this is a race; recording the reason keeps it diagnosable rather
+        // than presenting as a goal that vanished. Servo mode continues --
+        // dropping the stream because someone else sent a goal would be the
+        // worse failure.
+        if (state_ == ExecState::kServoing) {
+            reject_ = RejectReason::kServoActive;
+            AcknowledgeSeq(*shm_, seq);
+            return;
+        }
+
         // Tell the bridge which slot is in use before reading it, so it cannot
         // choose this one for the next trajectory.
         MarkReading(*shm_, slot);
@@ -201,6 +281,86 @@ private:
         reject_ = RejectReason::kNone;
         state_ = ExecState::kRunning;
         AcknowledgeSeq(*shm_, seq);
+    }
+
+    /**
+     * @brief Enter or leave servo mode, from a standstill in both directions.
+     *
+     * Entering is refused while a trajectory is in motion: the bridge checks
+     * this too, so the guard is for the race, and the arm keeps doing what it
+     * was already asked to do. Leaving does not take effect immediately --
+     * `servo_release_` makes the tracker brake first, and only when it reports
+     * at rest does the state fall back to a hold. Handing a live velocity
+     * straight to the hold path would put a step in the stream, which is the
+     * one thing Flexiv are explicit the robot will not smooth over.
+     */
+    void ArbitrateServoMode()
+    {
+        const bool want = shm_->servo_enable.load(std::memory_order_acquire) != 0u;
+        if (state_ == ExecState::kServoing) {
+            servo_release_ = !want;
+            return;
+        }
+        if (!want) {
+            return;
+        }
+        if (state_ == ExecState::kRunning || state_ == ExecState::kStopping) {
+            reject_ = RejectReason::kTrajectoryActive;
+            return;
+        }
+        // Seed from the current command, not from a measured position: the
+        // command is what the robot is already tracking, and it cannot be read
+        // back here anyway (states() allocates).
+        servo_.Init(dof_, limits_, servo_cfg_, cmd_.q, cmd_.dq);
+        servo_seen_seq_ = 0;
+        servo_release_ = false;
+        servo_stale_ = false;
+        servo_age_ = 0.0;
+        reject_ = RejectReason::kNone;
+        sampler_.Reset(nullptr);
+        active_id_ = 0;
+        state_ = ExecState::kServoing;
+    }
+
+    /**
+     * @brief One cycle of chasing the streamed target.
+     *
+     * The target is read fresh every cycle because the producer may have
+     * replaced it; a failed seqlock read is not an error, it just means the
+     * previous target stands for another millisecond.
+     */
+    void ServoCycle(double now)
+    {
+        ServoTarget t{};
+        if (ReadServoTarget(*shm_, t) && t.seq != 0u && t.dof == dof_) {
+            servo_age_ = now - t.stamp_mono;
+            if (t.seq != servo_seen_seq_) {
+                servo_seen_seq_ = t.seq;
+                // The waist is pinned unless rt_server was told otherwise, and
+                // a producer streaming an arm group has no business moving it.
+                // Masking here rather than rejecting the sample means an arm
+                // target that happens to carry waist bits still drives the arm.
+                if (shm_->control_waist == 0u) {
+                    for (std::uint32_t j = 0; j < n_external_ && j < kMaxDof; ++j) {
+                        t.mask &= ~(1u << j);
+                    }
+                }
+                servo_.SetTarget(t);
+            }
+        } else if (!servo_.have_target()) {
+            servo_age_ = 0.0;
+        }
+
+        servo_stale_ = servo_.have_target() && (servo_age_ > servo_cfg_.timeout_sec);
+        const bool follow = !servo_release_ && !servo_stale_;
+        servo_.Step(last_dt_, follow, cmd_);
+
+        if (servo_release_ && servo_.at_rest()) {
+            // Braked to a standstill with servo mode off: hold here. kIdle
+            // rather than kFinished because nothing was completed.
+            servo_release_ = false;
+            state_ = ExecState::kIdle;
+        }
     }
 
     /** Ramp the commanded velocity to zero at ddq_max, integrating position. */
@@ -303,6 +463,9 @@ private:
         st.missed_deadlines = missed_;
         st.max_period_sec = max_period_;
         st.min_period_sec = min_period_;
+        st.servo_stale = servo_stale_ ? 1u : 0u;
+        st.servo_rejected = servo_.rejected();
+        st.servo_age_sec = servo_age_;
         EndStatusWrite(*shm_);
         shm_->rt_heartbeat.store(cycles_, std::memory_order_release);
     }
@@ -311,7 +474,10 @@ private:
     Robot* robot_ = nullptr;
     std::uint32_t dof_ = 0;
     Limits limits_{};
+    std::uint32_t n_external_ = 0;
     TrajSampler sampler_;
+    ServoTracker servo_;
+    ServoConfig servo_cfg_{};
     Setpoint cmd_{};
 
     ExecState state_ = ExecState::kIdle;
@@ -321,12 +487,18 @@ private:
     double traj_start_ = 0.0;
     double traj_time_ = 0.0;
     bool stop_requested_ = false;
+    /** Servo mode was switched off; brake before dropping to a hold. */
+    bool servo_release_ = false;
+    bool servo_stale_ = false;
+    double servo_age_ = 0.0;
+    std::uint64_t servo_seen_seq_ = 0;
     bool clamped_ = false;
     std::uint32_t clamp_joint_ = 0;
     ClampKind clamp_kind_ = ClampKind::kNone;
 
     bool have_prev_ = false;
     double prev_ = 0.0;
+    double last_dt_ = kLoopPeriodSec;
     double min_period_ = 1e9;
     double max_period_ = 0.0;
     double sum_period_ = 0.0;
