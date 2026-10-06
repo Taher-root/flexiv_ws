@@ -646,8 +646,18 @@ cmake --build build -j
 ./build/rt_hold_probe Rizon4-063352
 ```
 
-That archive statically links Fast-RTPS and Fast-CDR, which only matters for a
-binary that also links `rclcpp` — and `rt_hold_probe` does not; it is RDK plus
+`--standalone` re-execs itself with the ROS 2 variables removed
+(`CMAKE_PREFIX_PATH`, `AMENT_PREFIX_PATH`, `LD_LIBRARY_PATH` and the rest) and
+configures with `-DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=OFF`. That is not
+belt-and-braces: `find_package` consults the *environment* `CMAKE_PREFIX_PATH`
+as well as the cache variable, so a shell with ROS 2 sourced silently links
+Jazzy's Fast-DDS again — the exact thing this variant exists to avoid — and
+scrubbing by hand is unreliable when a dotfile sources ROS. The script checks
+afterwards that Fast-DDS and Fast-CDR resolved *inside* the prefix and stops if
+they did not.
+
+The plain archive links Flexiv's own Fast-RTPS and Fast-CDR, which only matters
+for a binary that also links `rclcpp` — and `rt_hold_probe` does not; it is RDK plus
 `iostream`. So the measurement this package exists to take can be made now,
 while the ROS 2 integration waits on either the archive being fixed or the robot
 software supporting v1.9.4+, where one self-contained `.so` makes the collision
