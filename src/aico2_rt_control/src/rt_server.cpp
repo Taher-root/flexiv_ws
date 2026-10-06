@@ -218,6 +218,11 @@ int main(int argc, char** argv)
 
         // Limits from the robot's own software limits, except acceleration,
         // which RobotInfo does not carry.
+        // How wide the waist pin window is. Printed at startup, because a
+        // stale binary with a narrower window refuses every goal and the
+        // symptom ("outside joint limits") does not say which build is running.
+        constexpr double kPinEpsilon = 1e-3;
+
         aico2_rt::Limits limits{};
         for (std::uint32_t j = 0; j < dof; ++j) {
             limits.q_min[j] = info.q_min[j];
@@ -234,23 +239,32 @@ int main(int argc, char** argv)
         // control loop. The external axes are indices 0..DoF_e-1, confirmed by
         // joint_map_probe.
         if (!opt.control_waist) {
-            // A window, not exact equality. The sampler evaluates
-            // H0*q0 + H3*q1 where H0 + H3 is 1 analytically but not in
-            // floating point, so pinning to a single value leaves the result
-            // a ULP outside it and the clamp fires on every cycle. That turns
-            // the clamp indicator -- which should mean "a trajectory asked for
-            // something the limits forbid" -- into noise. 1e-6 rad is 6e-5
-            // degrees: physically nothing, and many orders of magnitude above
-            // the round-off.
-            constexpr double kPinEpsilon = 1e-6;
+            // A window, not exact equality, and it has to be wide enough for
+            // two different things.
+            //
+            // Round-off: the sampler evaluates H0*q0 + H3*q1, where H0 + H3 is
+            // 1 analytically but not in floating point, so pinning to a single
+            // value leaves the result a ULP outside it and the clamp fires
+            // every cycle.
+            //
+            // A live measurement: a writer builds its trajectory from the
+            // CURRENT measured position, while this window is centred on the
+            // position captured at startup. Those differ by however much the
+            // arm has settled or the encoders have jittered since -- measured
+            // tracking error alone is around 1.7e-5 rad -- so a window sized
+            // for round-off rejects every goal with "outside joint limits".
+            //
+            // 1e-3 rad is 0.057 degrees: far too small to be motion anyone
+            // would notice, and roughly 60 times the observed tracking error.
             for (std::uint32_t j = 0; j < ext && j < dof; ++j) {
                 limits.q_min[j] = q_now[j] - kPinEpsilon;
                 limits.q_max[j] = q_now[j] + kPinEpsilon;
                 limits.dq_max[j] = kPinEpsilon;
                 limits.ddq_max[j] = kPinEpsilon;
             }
-            std::printf("waist NOT commanded: axes 0..%u pinned at their current position\n",
-                ext ? ext - 1 : 0);
+            std::printf("waist NOT commanded: axes 0..%u pinned within +/-%.1e rad"
+                        " (%.4f deg) of their current position\n",
+                ext ? ext - 1 : 0, kPinEpsilon, kPinEpsilon * 57.29577951308232);
         } else {
             std::printf("waist WILL be commanded (--control-waist)\n");
         }

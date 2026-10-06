@@ -120,7 +120,7 @@ int main(int argc, char** argv)
     // Waist pinned, exactly as rt_server does without --control-waist.
     // Mirrors rt_server, including the epsilon: see the comment there on why
     // pinning to an exact value makes the clamp indicator fire on round-off.
-    constexpr double kPinEpsilon = 1e-6;
+    constexpr double kPinEpsilon = 1e-3;
     for (std::uint32_t j = 0; j < kExternal; ++j) {
         limits.q_min[j] = robot.q[j] - kPinEpsilon;
         limits.q_max[j] = robot.q[j] + kPinEpsilon;
