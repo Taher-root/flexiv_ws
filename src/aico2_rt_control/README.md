@@ -420,20 +420,30 @@ in `RobotInfo`. So moving between versions is a build concern, not a code one.
 
 ### Building v1.9
 
-There are two dependency scripts in `thirdparty/`, and the wrong one gives
-several hundred undefined `eprosima::fastcdr::*` symbols rather than any clear
-message:
-
-| script | installs | for |
-|---|---|---|
-| `build_and_install_dependencies.sh` | Eigen, spdlog, tinyxml2, yaml-cpp, foonathan_memory, **Fast-CDR v1.0.28**, **Fast-DDS v2.6.10**, Boost, SpaceVecAlg, RBDyn | the plain archive |
-| `build_and_install_dependencies_not_in_ros2.sh` | **Boost, SpaceVecAlg, RBDyn only** | the `ros2-jazzy` archive — ROS 2 supplies the rest |
-
-The `ros2-jazzy` archive is compiled against ROS 2 Jazzy's Fast-CDR 2.x and
-Fast-DDS 2.14.x, so ROS 2 must be sourced first:
-
 ```bash
 sudo apt install build-essential cmake libspdlog-dev libfmt-dev
+bash src/aico2_rt_control/scripts/install_rdk.sh
+```
+
+The script does the whole sequence and refuses to continue when something is
+wrong, which is worth more than it sounds: the two things that must be right are
+silent when they are not. It sources ROS 2 before the dependency script, uses
+`build_and_install_dependencies_not_in_ros2.sh`, configures with
+`-DRDK_SUPPORT_ROS2_JAZZY=ON`, then **checks which Fast-DDS and Fast-CDR CMake
+actually selected** and stops if they resolved under the prefix rather than
+under ROS 2. It also refuses to reuse a prefix that already contains its own
+Fast-DDS, which is the state the wrong dependency script leaves behind and which
+reconfiguring does not undo. `--force` removes the prefix and the clone and
+starts over.
+
+It is also one command, which matters: pasting the sequence line by line lets
+`apt` consume the lines that follow it, so the clone and the build silently
+never run.
+
+The equivalent by hand, if preferred:
+
+```bash
+git clone -b v1.9 https://github.com/flexivrobotics/flexiv_rdk.git
 source /opt/ros/jazzy/setup.bash
 
 cd flexiv_rdk/thirdparty
@@ -444,6 +454,14 @@ cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install -DRDK_SUPPORT_ROS2_JAZZY=ON
 cmake --build . --target install --config Release
 ```
 
+Two dependency scripts exist in `thirdparty/`, and the wrong one gives several
+hundred undefined `eprosima::fastcdr::*` symbols rather than any clear message:
+
+| script | installs | for |
+|---|---|---|
+| `build_and_install_dependencies.sh` | Eigen, spdlog, tinyxml2, yaml-cpp, foonathan_memory, **Fast-CDR v1.0.28**, **Fast-DDS v2.6.10**, Boost, SpaceVecAlg, RBDyn | the plain archive |
+| `build_and_install_dependencies_not_in_ros2.sh` | **Boost, SpaceVecAlg, RBDyn only** | the `ros2-jazzy` archive — ROS 2 supplies the rest |
+
 `-DRDK_SUPPORT_ROS2_JAZZY=ON` is not optional. It selects
 `libflexiv_rdk.aarch64-linux-gnu.ros2-jazzy.a` instead of
 `libflexiv_rdk.aarch64-linux-gnu.a`; the plain archive statically links
@@ -452,9 +470,11 @@ links `rclcpp`. `CMakeLists.txt:50` defaults it `OFF` and falls through to the
 plain archive silently.
 
 `libspdlog-dev` and `libfmt-dev` are needed because the static archive
-references spdlog and fmt without carrying them. This package's
-`CMakeLists.txt` finds both with `find_package(... QUIET)` and links them when
-present, so the same workspace builds against either RDK layout.
+references spdlog and fmt without carrying them. Ubuntu 24.04 ships spdlog
+1.12.0 and fmt 9.1.0, and `fmt::v9` is exactly the namespace the archive's
+undefined symbols name. This package's `CMakeLists.txt` finds both with
+`find_package(... QUIET)` and links them when present, so the same workspace
+builds against either RDK layout.
 
 **Check the configure output before building:**
 
