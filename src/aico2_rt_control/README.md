@@ -385,85 +385,93 @@ upstream's design, not a stale install — every file in the RDK's `example_py/`
 is named `non_realtime_*` and every RT example is C++.
 
 ```bash
-git clone -b v1.x https://github.com/flexivrobotics/flexiv_rdk.git
+git clone -b v1.9 https://github.com/flexivrobotics/flexiv_rdk.git
 ```
 
-**Use the `v1.x` branch, not the `v1.9` tag.** `v1.x` is the head of the 1.x
-line and currently equals the tag `v1.9.4.1`. `v1.9` is a tag, not a branch, so
-`-b v1.9` does work — it just gives an older release, and that release is much
-harder to build here. Do not use the default branch: `main` is `v2.1`/`v2.2`,
-which is Enlight, and its `StreamJointPosition` takes
-`const std::map<JointGroup, RtJointPositionCmd>&` rather than three vectors.
+**Use the `v1.9` tag on this robot.** Not the newest 1.x, and not `main`.
+Measured on hardware (2026-10-06):
 
-What changed between `v1.9` and `v1.9.4.1`, in its own words:
+| client | result against robot software v3.11 |
+|---|---|
+| `flexivrdk` Python wheel **v1.9** | connects, reads state, drives the arms — in production use here |
+| C++ **v1.9.4.1** (the `v1.x` branch head) | connects, then `Version of this client is incompatible with robot [Rizon4-063352]` |
 
-> RDK is shipped as a self-contained shared library: all of its thirdparty
-> dependencies except Eigen are statically embedded into it and their symbols
-> are hidden, so Eigen is the only dependency a user application has to install,
-> and it can freely use its own version of any other library.
+So the RDK client version is checked against the robot's software version, and
+1.9.4.1 is too new for v3.11. `v1.9` matches the wheel that already works, which
+makes it the safe choice. Nothing in either repo documents this matrix — it has
+to be found by trying.
 
-That removes the entire failure mode this package originally hit. On `v1.9` the
-library was a static archive published in two variants, and the plain one
-statically linked Fast-RTPS and Fast-CDR so it collided with ROS 2's copies;
-avoiding that needed `-DRDK_SUPPORT_ROS2_JAZZY=ON` plus the right one of two
-dependency scripts, and the wrong combination fails with several hundred
-undefined `eprosima::fastcdr::*` symbols. On `v1.9.4.1` there is one `.so`, one
-dependency script, no ROS 2 flag, and no version to mismatch.
+The cost of staying on v1.9 is a harder build, because the shared-library
+rework landed in **v1.9.4**:
 
-The API we depend on is unchanged: `StreamJointPosition(positions, velocities,
-accelerations)` has the same signature, `mode.hpp` still has
-`RT_JOINT_POSITION` and `RT_JOINT_IMPEDANCE`, and `RobotInfo` still carries
-`license_type`, `DoF_m` and `DoF_e`.
+| versions | library | consequences |
+|---|---|---|
+| `v1.9` – `v1.9.3` | static archive, in plain and `ros2-jazzy` variants | needs `-DRDK_SUPPORT_ROS2_JAZZY=ON`, the ROS 2 dependency script, and spdlog + fmt linked by the consumer |
+| `v1.9.4` onwards | one self-contained `.so`, internal symbols hidden | Eigen is the only dependency; no flag, one dependency script |
 
-```bash
-sudo apt install build-essential cmake
-cd flexiv_rdk/thirdparty
-bash build_and_install_dependencies.sh ~/rdk_install   # Eigen only on v1.x
+`main` is `v2.1`/`v2.2`, which is Enlight, and its `StreamJointPosition` takes
+`const std::map<JointGroup, RtJointPositionCmd>&` rather than three vectors — so
+it is wrong regardless of the version check.
 
-cd ..
-mkdir build && cd build
-cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install
-cmake --build . --target install --config Release
-```
+The API this package uses is identical across all of them:
+`StreamJointPosition(positions, velocities, accelerations)`, `RT_JOINT_POSITION`
+and `RT_JOINT_IMPEDANCE` in `mode.hpp`, and `license_type` / `DoF_m` / `DoF_e`
+in `RobotInfo`. So moving between versions is a build concern, not a code one.
 
-No `RDK_SUPPORT_ROS2_JAZZY`, and ROS 2 does not need to be sourced for this
-part. The archive is still downloaded at configure time from the GitHub release
-with a SHA256 check against `lib/*.sha256`, so this step needs network.
+### Building v1.9
 
-One caveat worth knowing: neither release documents which robot software
-versions it supports. These arms run **v3.11** and the installed Python wheel is
-**v1.9**, so the C++ side moving to 1.9.4.1 is a version skew that is untested
-here. The two talk to the robot independently rather than to each other, and the
-Python driver is untouched either way, so the fallback is simply to rebuild from
-the `v1.9` tag using the procedure below.
-
-<details>
-<summary>Building from the older <code>v1.9</code> tag, if ever needed</summary>
-
-Two scripts exist in `thirdparty/` and the wrong one produces the
-undefined-symbol wall described above:
+There are two dependency scripts in `thirdparty/`, and the wrong one gives
+several hundred undefined `eprosima::fastcdr::*` symbols rather than any clear
+message:
 
 | script | installs | for |
 |---|---|---|
-| `build_and_install_dependencies.sh` | Eigen, spdlog, tinyxml2, yaml-cpp, foonathan_memory, **Fast-CDR v1.0.28**, **Fast-DDS v2.6.10**, Boost, SpaceVecAlg, RBDyn | the standalone archive |
-| `build_and_install_dependencies_not_in_ros2.sh` | **Boost, SpaceVecAlg, RBDyn only** | the `ros2-jazzy` archive |
+| `build_and_install_dependencies.sh` | Eigen, spdlog, tinyxml2, yaml-cpp, foonathan_memory, **Fast-CDR v1.0.28**, **Fast-DDS v2.6.10**, Boost, SpaceVecAlg, RBDyn | the plain archive |
+| `build_and_install_dependencies_not_in_ros2.sh` | **Boost, SpaceVecAlg, RBDyn only** | the `ros2-jazzy` archive — ROS 2 supplies the rest |
 
-The `ros2-jazzy` archive needs ROS 2 Jazzy's Fast-CDR 2.x and Fast-DDS 2.14.x,
-so ROS 2 must be sourced first and the second script used:
+The `ros2-jazzy` archive is compiled against ROS 2 Jazzy's Fast-CDR 2.x and
+Fast-DDS 2.14.x, so ROS 2 must be sourced first:
 
 ```bash
+sudo apt install build-essential cmake libspdlog-dev libfmt-dev
 source /opt/ros/jazzy/setup.bash
+
 cd flexiv_rdk/thirdparty
 bash build_and_install_dependencies_not_in_ros2.sh ~/rdk_install
+
 cd .. && mkdir build && cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install -DRDK_SUPPORT_ROS2_JAZZY=ON
 cmake --build . --target install --config Release
 ```
 
-Verify from the configure output that `fastrtps` and `fastcdr` resolve under
-`/opt/ros/jazzy` and not under the prefix.
+`-DRDK_SUPPORT_ROS2_JAZZY=ON` is not optional. It selects
+`libflexiv_rdk.aarch64-linux-gnu.ros2-jazzy.a` instead of
+`libflexiv_rdk.aarch64-linux-gnu.a`; the plain archive statically links
+Fast-RTPS and Fast-CDR, as does ROS 2, so the two collide the moment anything
+links `rclcpp`. `CMakeLists.txt:50` defaults it `OFF` and falls through to the
+plain archive silently.
 
-</details>
+`libspdlog-dev` and `libfmt-dev` are needed because the static archive
+references spdlog and fmt without carrying them. This package's
+`CMakeLists.txt` finds both with `find_package(... QUIET)` and links them when
+present, so the same workspace builds against either RDK layout.
+
+**Check the configure output before building:**
+
+```
+-- Found fastrtps v2.14.x: /opt/ros/jazzy/share/fastrtps/cmake     correct
+-- Found fastcdr  v2.x:    /opt/ros/jazzy/lib/cmake/fastcdr        correct
+
+-- Found fastrtps v2.6.10: /root/rdk_install/share/fastrtps/cmake  wrong script
+-- Found fastcdr  v1.0.28: /root/rdk_install/lib/cmake/fastcdr     wrong script
+```
+
+### If the robot software is ever updated
+
+`v1.9.4`+ is a much easier build — one `.so`, Eigen only, no ROS 2 flag, no
+version to mismatch. It is the right target once the robot software supports it.
+Worth asking Flexiv which RDK versions match robot software v3.11 and whether an
+update is advisable, since neither is documented.
 
 Then build this package, pointing CMake at the prefix:
 
@@ -494,28 +502,41 @@ need it, append: `LD_LIBRARY_PATH=$HOME/rdk_install/lib:$LD_LIBRARY_PATH`.
 
 ## Troubleshooting the build
 
-**Hundreds of `undefined reference to eprosima::fastcdr::Cdr::...` plus
-`fmt::v9::...` and `spdlog::details::log_msg::log_msg`.**
+**`Version of this client is incompatible with robot [Rizon4-...]`**, after
+connecting successfully.
 
-This is the `v1.9` static-archive problem. `CdrSizeCalculator`, `CdrVersion`,
-`Cdr::set_encoding_flag` and `PortBasedTransportDescriptor` exist only in
-Fast-CDR 2.x / Fast-DDS 2.14.x, which is what the `ros2-jazzy` archive expects;
-`build_and_install_dependencies.sh` installs Fast-CDR 1.0.28 and Fast-DDS 2.6.10
-into the prefix, where they shadow ROS 2's copies.
+The RDK client is newer than the robot's software. These arms run v3.11, which
+accepts `v1.9` and rejects `v1.9.4.1`. Rebuild from the `v1.9` tag — see
+[Installing the C++ RDK](#installing-the-c-rdk). The prefix must be rebuilt, not
+just reconfigured.
 
-The fix is to move to `v1.x`, where the library is a self-contained `.so` and
-this cannot happen. The prefix has to be rebuilt rather than reconfigured,
-because the wrong versions are installed into it:
+**Hundreds of `undefined reference to eprosima::fastcdr::Cdr::...`** such as
+`CdrSizeCalculator`, `CdrVersion`, `Cdr::set_encoding_flag`,
+`PortBasedTransportDescriptor`, coming from `libflexiv_rdk.a`.
+
+Those exist only in Fast-CDR 2.x / Fast-DDS 2.14.x, which is what the
+`ros2-jazzy` archive expects. `build_and_install_dependencies.sh` installs
+Fast-CDR 1.0.28 and Fast-DDS 2.6.10 into the prefix, where they shadow ROS 2's
+copies. Use `build_and_install_dependencies_not_in_ros2.sh` with ROS 2 sourced,
+and rebuild the prefix from scratch:
 
 ```bash
 rm -rf ~/rdk_install ~/flexiv_rdk
-git clone -b v1.x https://github.com/flexivrobotics/flexiv_rdk.git
+git clone -b v1.9 https://github.com/flexivrobotics/flexiv_rdk.git
+source /opt/ros/jazzy/setup.bash
 cd flexiv_rdk/thirdparty
-bash build_and_install_dependencies.sh ~/rdk_install
+bash build_and_install_dependencies_not_in_ros2.sh ~/rdk_install
 cd .. && mkdir build && cd build
-cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install
+cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install -DRDK_SUPPORT_ROS2_JAZZY=ON
 cmake --build . --target install --config Release
 ```
+
+**`undefined reference to spdlog::details::log_msg::log_msg` or `fmt::v9::*`
+coming from `libflexiv_rdk.a`.**
+
+The v1.9 static archive references spdlog and fmt without carrying them.
+`sudo apt install libspdlog-dev libfmt-dev` and reconfigure; this package links
+both when `find_package` finds them.
 
 **`undefined reference to fmt::v9::...` in `rt_hold_probe.cpp.o` itself** (not
 in the RDK library).
