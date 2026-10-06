@@ -8,6 +8,15 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# Flexiv's own example project forces Release when no build type is given, and
+# the prebuilt library is a Release artifact. colcon leaves CMAKE_BUILD_TYPE
+# empty by default, so match the examples rather than linking a Release archive
+# into an unoptimised, assertion-enabled binary.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "CMake build type" FORCE)
+endif()
+message(STATUS "aico2_rt_control: build type ${CMAKE_BUILD_TYPE}")
+
 find_package(ament_cmake REQUIRED)
 
 # ---------------------------------------------------------------------------

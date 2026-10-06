@@ -129,6 +129,14 @@ int main(int argc, char* argv[])
     }
     const std::string robot_sn = argv[1];
 
+    // Unbuffered, because this program can abort. `ros2 run` pipes stdout, so
+    // buffered lines are lost on abort() and the crash then looks like it
+    // happened at the last line that did get flushed -- which is the RDK's
+    // startup banner, several calls earlier. Costs nothing here; the RT task
+    // never prints.
+    std::cout.setf(std::ios::unitbuf);
+    std::cerr.setf(std::ios::unitbuf);
+
     double seconds = 5.0;
     for (int i = 2; i < argc - 1; ++i) {
         if (std::string(argv[i]) == "--seconds") {

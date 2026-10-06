@@ -53,6 +53,22 @@ elif [[ -d "$PREFIX" ]]; then
   That is the signature of build_and_install_dependencies.sh having been run.
   Re-run this script with --force."
     fi
+    # A previous install of a different RDK version leaves its library behind:
+    # `cmake --install` overwrites files it owns but never removes the ones it
+    # does not. v1.9 installs libflexiv_rdk.a, v1.9.4+ installs
+    # libflexiv_rdk.so, and ending up with both in one lib/ is a trap -- the
+    # CMake config points at the right one, but a stale .so of an incompatible
+    # version sitting on the loader path is a confusing failure waiting to
+    # happen. Remove the other layout's artifacts rather than warning about
+    # them, since nothing in this prefix is hand-made.
+    shopt -s nullglob
+    stale=("$PREFIX"/lib/libflexiv_rdk.so*)
+    shopt -u nullglob
+    if (( ${#stale[@]} )); then
+        echo "removing ${#stale[@]} shared-library file(s) from a newer RDK:"
+        printf '  %s\n' "${stale[@]}"
+        rm -f "${stale[@]}"
+    fi
     echo "prefix exists and looks clean; continuing"
 fi
 
