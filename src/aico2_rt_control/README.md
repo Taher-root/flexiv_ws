@@ -126,6 +126,15 @@ the route that uses what MoveIt produces as-is.
    `/joint_states`, and lifecycle management — all of which exist in Python
    today and would have to be written again in C++.
 
+   Flexiv suggest a lighter alternative worth keeping in mind: keep planning in
+   Python and hand the trajectory to a small C++ program that only streams it,
+   over a file, shared memory or a socket. That avoids rewriting the action
+   server and the state publishing, at the cost of a process boundary on the
+   path a goal travels. It is a reasonable first integration if the probe looks
+   good but the full C++ node is not worth it yet — and the sampler design
+   below is the same either way, since the handoff it describes is already
+   between a non-RT producer and the RT task.
+
 2. **Real-time safety, which the examples do not demonstrate.** The periodic
    task in `intermediate1` constructs three `std::vector<double>` per cycle.
    That is fine in a demo and wrong in a control loop: `malloc` can block.
@@ -153,12 +162,28 @@ the route that uses what MoveIt produces as-is.
    about on either count.
 
 
-5. **The host.** This is the real risk. `scheduler.max_priority()` requests
-   SCHED_FIFO at a high priority; on a kernel **without PREEMPT_RT** that is
-   best-effort. The Jetson also runs Nav2, RTAB-Map, two camera pipelines and a
-   DDS domain. In NRT a late command is covered by the robot's motion
-   generator; in RT there is nothing covering for you, so a missed deadline is
-   worse than the problem being solved. Measure before building.
+5. **The host. This is the real risk, and Flexiv make it a requirement.**
+   Their three RT prerequisites are C++, an RDK Professional licence, and "a
+   real-time capable Linux PC (see the RDK manual's real-time kernel setup)
+   with a wired connection to the robot". The first two we have; the third we
+   do not, as things stand. `scheduler.max_priority()` requests SCHED_FIFO at a
+   high priority, which on a kernel without PREEMPT_RT is best-effort, and the
+   Jetson also runs Nav2, RTAB-Map, two camera pipelines and a DDS domain. In
+   NRT a late command is covered by the robot's motion generator; in RT nothing
+   covers for you, so a missed deadline is worse than the problem being solved.
+
+   Check it before installing anything — it is free:
+
+   ```bash
+   bash src/aico2_rt_control/scripts/check_rt_host.sh
+   ```
+
+   It reports the preemption flavour, `/sys/kernel/realtime`, `isolcpus`, the
+   CPU governor and `nvpmodel` state, the RT scheduling limits, and whether the
+   route to each arm is wired. Then measure with `rt_hold_probe` rather than
+   arguing from the kernel name: if misses turn out to be load-dependent,
+   isolating a core may be enough, and if they persist on an idle host the arms
+   want an RT kernel or a different machine.
 
 ### The three prerequisites, and where each one stands
 
@@ -187,7 +212,7 @@ Read-only — it never enables the robot or switches mode. It does take the one
 RDK session, so stop the Python driver first.
 
 
-### A detail from the header that explains the NRT behaviour
+### Why the NRT path behaves as it does
 
 Worth recording, because it is the documented mechanism behind
 `docs/open_issues.md` issue 1a. `SendJointPosition`'s own warning:
@@ -196,7 +221,12 @@ Worth recording, because it is the documented mechanism behind
 > still ongoing will trigger an online re-planning of the joint trajectory, such
 > that the previous command is aborted and the new command starts to execute.
 
-So streaming at 50 Hz means aborting and re-planning every 20 ms, by design.
+Flexiv's engineering team put it more precisely (2026-10-05): the call does not
+create a trajectory segment at all. **Each call replaces the current target**,
+and a 1 kHz generator on the robot chases the most recent one as fast as
+`max_vel` / `max_acc` allow, with no knowledge of when the next command is due
+and **no jerk limit** — so acceleration switches abruptly between `+max_acc`, 0
+and `-max_acc`. See `docs/open_issues.md` issue 1a for the full account.
 Also note the NRT meaning of `velocities`: "Each joint will maintain this amount
 of velocity when it reaches the target position" — a terminal condition for the
 generator's plan, not feedforward. In RT the same argument *is* feedforward, and
@@ -293,14 +323,38 @@ sends URDF joint names; the RDK vector is external axes first
 nothing there. Validate the trajectory against the URDF limits when the goal is
 accepted, and check `robot.fault()` every cycle.
 
+### Two constraints Flexiv state explicitly for RT
+
+From their guidance of 2026-10-05, and both are goal-acceptance checks rather
+than things the RT task can fix:
+
+1. **The trajectory must start at the robot's current position with zero
+   velocity.** MoveIt plans from its own idea of the start state, which comes
+   from `/joint_states` and so is a sample up to one publish period old. The
+   first point will therefore not match `states().q` exactly. Decide this at
+   goal acceptance: reject if the gap exceeds a tolerance, and otherwise close
+   it with a short generated lead-in — not by streaming the mismatch, because
+   nothing smooths it. Likewise a non-zero initial velocity in the plan is a
+   reject, not something to feed forward.
+2. **The command stream must be continuous, because the robot does not smooth
+   RT commands.** Three practical consequences. A new goal arriving mid-motion
+   cannot simply swap the buffer — the swap has to happen at a point where
+   position *and* velocity are continuous, or be preceded by a braking ramp.
+   Finishing a trajectory means holding its last point, not dropping to
+   whatever the next source says. And a cycle that fails to produce a setpoint
+   is not a no-op: it is a discontinuity, which is the whole reason the host
+   timing has to be measured first.
+
 ### Recommended order
 
-1. Install the C++ RDK (below) and run `rt_hold_probe`. It answers point 4,
-   point 5, and whether RT works on this arm at all, for the cost of one small
-   program. If the loop cannot hold on this host, that is worth knowing before
-   any of the above gets written.
-2. Then the sampler and the action server, per the design above.
-3. Keep the Python NRT driver working alongside it. It is the fallback if the
+1. Run `scripts/check_rt_host.sh`. Costs nothing, needs no RDK, and answers
+   whether the host meets Flexiv's stated requirement before any time goes into
+   the install.
+2. Install the C++ RDK (below) and run `rt_hold_probe`, twice: stack stopped,
+   then with Nav2 and the cameras running. That is the measurement that decides
+   this, and it is one small program.
+3. Then the sampler and the action server, per the design above.
+4. Keep the Python NRT driver working alongside it. It is the fallback if the
    host timing turns out not to hold, and the comparison that says whether RT
    actually improved the motion.
 
