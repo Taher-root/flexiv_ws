@@ -35,6 +35,7 @@ endif()
 message(STATUS "build type ${CMAKE_BUILD_TYPE}")
 
 find_package(flexiv_rdk REQUIRED)
+find_package(Threads REQUIRED)
 
 add_executable(rt_hold_probe ../src/rt_hold_probe.cpp)
 target_link_libraries(rt_hold_probe flexiv::flexiv_rdk)
@@ -74,8 +75,16 @@ set_target_properties(rt_server PROPERTIES
   CXX_STANDARD 17
   CXX_STANDARD_REQUIRED ON)
 target_link_options(rt_server PRIVATE "-Wl,--disable-new-dtags")
-find_package(Threads REQUIRED)
 target_link_libraries(rt_server Threads::Threads rt)
+
+# Writes a trajectory into rt_server's shared memory. Needs no RDK at all --
+# it only touches the mapping -- so it is built unconditionally.
+add_executable(traj_publish ../src/traj_publish.cpp)
+target_include_directories(traj_publish PRIVATE ../include)
+target_compile_features(traj_publish PRIVATE cxx_std_17)
+target_compile_options(traj_publish PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(traj_publish Threads::Threads rt)
+install(TARGETS traj_publish DESTINATION bin)
 
 # The static archive references spdlog and fmt without carrying them.
 find_package(spdlog QUIET)

@@ -52,6 +52,16 @@ constexpr std::uint32_t kNumSlots = 3;
 /** Published slot index meaning "nothing to execute". */
 constexpr std::uint32_t kNoSlot = 0xFFFFFFFFu;
 
+/** Per-joint bounds. The RT task clamps to these every cycle, and publishes
+ *  them here so a writer can validate against exactly what will be enforced
+ *  rather than against its own idea of the limits. */
+struct Limits {
+    double q_min[kMaxDof];
+    double q_max[kMaxDof];
+    double dq_max[kMaxDof];
+    double ddq_max[kMaxDof];
+};
+
 /** One MoveIt trajectory point. Matches trajectory_msgs/JointTrajectoryPoint
  *  minus `effort`, which MoveIt leaves empty. */
 struct Point {
@@ -91,6 +101,26 @@ enum class RejectReason : std::uint32_t {
     kMissingJoint = 11,          ///< the goal omits a joint the server commands
     kServerNotRunning = 12,      ///< rt_server's heartbeat is stale
 };
+
+enum class ClampKind : std::uint32_t {
+    kNone = 0,
+    kPositionLow = 1,
+    kPositionHigh = 2,
+    kVelocity = 3,
+    kAcceleration = 4,
+};
+
+inline const char* ClampKindName(ClampKind k)
+{
+    switch (k) {
+        case ClampKind::kNone: return "none";
+        case ClampKind::kPositionLow: return "position below q_min";
+        case ClampKind::kPositionHigh: return "position above q_max";
+        case ClampKind::kVelocity: return "velocity above dq_max";
+        case ClampKind::kAcceleration: return "acceleration above ddq_max";
+    }
+    return "unknown";
+}
 
 /** Human-readable, for action results and logs. Not used on the RT path. */
 inline const char* RejectReasonName(RejectReason r)
@@ -140,6 +170,11 @@ struct RtStatus {
     std::uint32_t exec_state;      ///< ExecState
     std::uint32_t reject_reason;   ///< RejectReason
     std::uint32_t clamped;         ///< a limit was hit at least once
+    /** Which joint and which bound clamped first. "YES, investigate" is not
+     *  actionable on its own, and a validated trajectory should never clamp, so
+     *  when it does the specific bound is the thing worth knowing. */
+    std::uint32_t clamp_joint;
+    std::uint32_t clamp_kind;      ///< ClampKind
     std::uint64_t active_id;       ///< goal currently adopted, 0 if none
     double traj_time;              ///< seconds into the active trajectory
     std::uint64_t cycles;
@@ -176,7 +211,13 @@ struct Shm {
     std::uint32_t magic;
     std::uint32_t version;
     std::uint32_t dof;
+    /** Number of leading external axes; index < this is a waist axis. */
+    std::uint32_t n_external;
+    /** Non-zero when rt_server was started with --control-waist. */
+    std::uint32_t control_waist;
     std::uint32_t _pad0;
+    /** Written once by rt_server before the scheduler starts. */
+    Limits limits;
 
     // ---- bridge -> RT ----------------------------------------------------
     /** Slot holding the newest trajectory, or kNoSlot. */
