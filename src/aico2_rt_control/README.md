@@ -216,6 +216,80 @@ changing tolerances.
 
 ---
 
+## MoveIt Servo and VR teleop
+
+Short answer: **Servo is a better fit for RT than trajectory execution is, but
+it cannot drive `rt_bridge` as it stands.** Two separate reasons, and the second
+is the real one.
+
+**1. Interface.** Servo publishes to a *topic*; `rt_bridge` is a
+`FollowJointTrajectory` *action* server. The `vr-teleop` repo's
+`VR_TELEOP_INTEGRATION_PLAN.md` already identified this and proposed adding a
+streaming subscriber to the Python NRT driver.
+
+**2. Semantics, which no subscriber fixes.** Validation here requires a
+trajectory that covers every joint, carries positions *and* velocities *and*
+accelerations, starts at the measured position **at rest**, and **ends at rest**.
+Servo emits one setpoint per tick, with no accelerations, explicitly not at rest.
+Every Servo command would be refused — correctly. The trajectory model assumes a
+complete, bounded, time-parameterised plan; servoing is an endless stream of
+"go here now". They are different problems.
+
+### What it would take
+
+A second shared-memory channel, not a tweak to the first:
+
+- a `ServoTarget` region — one target, overwritten at 50–250 Hz, with its own
+  seqlock and a staleness timestamp
+- a streaming state in `RtExecutor` that tracks the latest target at 1 kHz under
+  jerk limits, and falls back to holding position when the target goes stale
+- a topic subscriber in `rt_bridge`
+- validation that suits a stream: per-sample limit and rate checks, not
+  start-and-end-at-rest
+
+The tracker is the only interesting part. It is exactly the job the robot's own
+NRT generator does, and does badly — no jerk limit, no knowledge of when the
+next command is due. Ruckig has an online mode built for precisely this.
+
+### Why this matters more for teleop than for trajectories
+
+`vr-teleop` today streams into the NRT generator: `AbsoluteCartesianController`
+uses `NRT_CARTESIAN_MOTION_FORCE` with `SendCartesianMotionForce`, and
+`AbsoluteJointServoController` uses `NRT_JOINT_IMPEDANCE` with
+`SendJointPosition`. That is the worst case for the behaviour recorded in
+`docs/open_issues.md` issue 1a: each call replaces the target and triggers a
+re-plan, so smoothness depends on the rate the VR headset happens to run at.
+Under RT the loop is fixed at 1 kHz and the smoothing is ours.
+
+### Two ways to wire it, and which to prefer
+
+| | via MoveIt Servo | direct from the teleop's own IK |
+| --- | --- | --- |
+| Path | VR → Servo → topic → bridge → shm | VR → `pybullet_ik` → shm |
+| Keeps | IK, collision checking, singularity and joint-limit scaling | nothing but the IK |
+| Latency | Servo adds a stage | lowest |
+| Effort | more machinery | a small Python writer |
+
+**Prefer Servo** for anything moving near obstacles or people: collision and
+singularity handling is most of what makes teleop safe, and it is not worth
+reimplementing. The direct path is a reasonable way to first exercise the servo
+channel, since `vr-teleop` already has working IK.
+
+### One correction to the integration plan
+
+It says to discard `flexiv_utils.py`, `control_flexiv.py` and `flexiv_env.py`
+because they "would fight the AICO2 drivers for the RDK connection". That was
+right for a single-process NRT design. With the two-process split it no longer
+holds: only `rt_server` touches the RDK, so that teleop code can be reused as a
+shared-memory *writer* without contending for anything. Reusing only the VR and
+web half is now a choice rather than a requirement.
+
+Also worth noting: `AbsoluteJointServoController` already selects
+`NRT_JOINT_IMPEDANCE`, so the teleop path already wanted compliance — which is
+what `--impedance` provides here.
+
+---
+
 # Background
 
 Everything below records how this was arrived at and why the design is as it
