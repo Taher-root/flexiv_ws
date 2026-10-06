@@ -85,7 +85,33 @@ enum class RejectReason : std::uint32_t {
     kDofMismatch = 5,
     kLimitExceeded = 6,          ///< outside the configured joint limits
     kNotOperational = 7,         ///< robot not enabled / in fault
+    kNonZeroEndVelocity = 8,     ///< must end at rest, or holding it is a step
+    kWaistMotionNotAllowed = 9,  ///< external axes commanded without --control-waist
+    kUnknownJoint = 10,          ///< a goal joint name is not in the configured map
+    kMissingJoint = 11,          ///< the goal omits a joint the server commands
+    kServerNotRunning = 12,      ///< rt_server's heartbeat is stale
 };
+
+/** Human-readable, for action results and logs. Not used on the RT path. */
+inline const char* RejectReasonName(RejectReason r)
+{
+    switch (r) {
+        case RejectReason::kNone: return "none";
+        case RejectReason::kStartPositionMismatch: return "start position does not match the robot";
+        case RejectReason::kNonZeroStartVelocity: return "trajectory must start at rest";
+        case RejectReason::kNonMonotonicTime: return "time_from_start must strictly increase";
+        case RejectReason::kTooManyPoints: return "too many points";
+        case RejectReason::kDofMismatch: return "joint count does not match the robot";
+        case RejectReason::kLimitExceeded: return "outside joint limits";
+        case RejectReason::kNotOperational: return "robot not operational";
+        case RejectReason::kNonZeroEndVelocity: return "trajectory must end at rest";
+        case RejectReason::kWaistMotionNotAllowed: return "waist motion requires --control-waist";
+        case RejectReason::kUnknownJoint: return "goal names a joint the server does not know";
+        case RejectReason::kMissingJoint: return "goal omits a joint the server commands";
+        case RejectReason::kServerNotRunning: return "rt_server is not running";
+    }
+    return "unknown";
+}
 
 /** A trajectory, written by the bridge and read by the RT task. */
 struct Slot {
