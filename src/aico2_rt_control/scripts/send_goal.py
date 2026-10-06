@@ -13,9 +13,14 @@ both at each end, which is the shape MoveIt itself produces after Ruckig.
 
 Nothing moves without --yes-move, and travel is capped.
 
-    ros2 run aico2_rt_control send_goal.py --list
-    ros2 run aico2_rt_control send_goal.py --joint Left_joint6 --degrees 3 --yes-move
-    ros2 run aico2_rt_control send_goal.py --joint-index 6 --degrees -5 --seconds 6 --yes-move
+    ros2 run aico2_rt_control send_goal.py --ros-args -r __ns:=/left_arm -- --list
+    ros2 run aico2_rt_control send_goal.py --ros-args -r __ns:=/left_arm -- \
+        --joint Left_joint6 --degrees 3 --yes-move
+
+Or, without ros2 run, which needs no `--` at all:
+
+    python3 send_goal.py --joint Left_joint6 --degrees 3 --yes-move \
+        --ros-args -r __ns:=/left_arm
 """
 
 import argparse
@@ -27,6 +32,7 @@ from builtin_interfaces.msg import Duration
 from control_msgs.action import FollowJointTrajectory
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from rclpy.utilities import remove_ros_args
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
@@ -94,7 +100,12 @@ def main():
     ap.add_argument("--points", type=int, default=24)
     ap.add_argument("--max-degrees", type=float, default=MAX_DEGREES_DEFAULT)
     ap.add_argument("--yes-move", action="store_true", help="required; the arm WILL move")
-    args, ros_args = ap.parse_known_args()
+    # Strip the ROS arguments before argparse sees them. `ros2 run` passes
+    # `--ros-args ... --` through to the process, and argparse treats that `--`
+    # as its own end-of-options marker: it consumes the separator and everything
+    # after it becomes a positional, so `--list` and `--joint` were silently
+    # ignored. remove_ros_args removes the whole ROS block, separator included.
+    args = ap.parse_args(remove_ros_args(args=sys.argv)[1:])
 
     rclpy.init(args=sys.argv)
     node = Sender(args)
