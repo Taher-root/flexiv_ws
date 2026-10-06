@@ -193,6 +193,138 @@ limit. Positive pitch moves the torso **down**.
 
 ## 3. Setup
 
+### A new machine, from scratch
+
+The rest of this section and §4 are reference. This is the order to do them in
+on a fresh laptop, and the two forks that decide how much of it you need.
+
+**Decide first: will this machine drive the arms, or only watch?**
+
+| | watch / develop | drive the arms |
+| --- | --- | --- |
+| ROS 2 Jazzy | yes | yes |
+| `flexivrdk` wheel | no | yes |
+| Static IP on the robot subnet | no (just `ROS_DOMAIN_ID`) | yes, wired |
+| C++ RDK + `standalone/` build | no | only for the RT path |
+| `PREEMPT_RT` kernel | no | only for the RT path |
+
+A watching machine is steps 1, 3, 4, 6 and 10 below, and is maybe twenty
+minutes. A machine that will run the 1 kHz RT loop is all of it, and most of
+the wall time is Boost compiling in step 8.
+
+```
+ 1. Ubuntu 24.04 LTS                      Jazzy's base. Do not use 22.04.
+ 2. Wired static IP on 192.168.1.0/24     §1 for the address table
+ 3. ROS 2 Jazzy desktop                   apt, below
+ 4. Clone + rosdep                        below
+ 5. flexivrdk==1.9.0 wheel                below -- NOT 2.x
+ 6. colcon build --symlink-install         §4
+ 7. Verify: RViz, then one arm driver      §5
+ ---- stop here unless you want the RT path ----
+ 8. C++ RDK via install_rdk.sh             src/aico2_rt_control/README.md step 4
+ 9. RT kernel + rtprio, if the host check asks for it   below
+10. ROS_DOMAIN_ID on both machines         §7
+```
+
+**1. Ubuntu 24.04 LTS.** Jazzy targets 24.04 (noble). 22.04 gets you Humble and
+a different set of package names; nothing here is tested on it.
+
+**2. Network.** The robot subnet is factory-configured and flat
+(`192.168.1.0/24` — see [§1](#network)). Give the laptop a static address in
+it, on a **wired** port: Flexiv require a wired connection for RT, and
+`check_rt_host.sh` in step 9 will tell you if your route to an arm is wireless.
+Pick an address nothing in §1's table uses.
+
+```bash
+ip -4 -o addr show                      # which interface is which
+ping -c3 192.168.1.100                  # left arm
+ping -c3 192.168.1.101                  # right arm
+```
+
+**3. ROS 2 Jazzy.** Follow the official install for `ros-jazzy-desktop`, then:
+
+```bash
+echo 'source /opt/ros/jazzy/setup.bash' >> ~/.bashrc
+sudo apt install python3-colcon-common-extensions python3-rosdep python3-vcstool
+sudo rosdep init          # fails harmlessly if already done
+rosdep update
+```
+
+**4. Clone and resolve dependencies.**
+
+```bash
+git clone <repo> ~/flexiv_ws
+cd ~/flexiv_ws
+rosdep install --from-paths src --ignore-src -r -y
+```
+
+This pulls MoveIt, Nav2, RTAB-Map and the rest from the `package.xml` files. It
+does **not** install `moveit_servo` — nothing declares it, deliberately, so the
+base build stays light. Add it only if you want the servo path:
+
+```bash
+sudo apt install ros-jazzy-moveit-servo
+```
+
+**5. The RDK Python wheel.** Pinned, and into the interpreter ROS uses — see
+the version table below for why 2.x is wrong rather than newer:
+
+```bash
+python3 -m pip install "flexivrdk==1.9.0"
+python3 -c "import flexivrdk; print('ok')"
+```
+
+**6 and 7.** Build (§4), then bring up one layer at a time (§5). Do not skip 7:
+a `colcon build` that succeeds tells you nothing about whether the arm driver
+can reach an arm.
+
+**8 and 9 — only for the RT path.** Everything RT lives in
+[`src/aico2_rt_control/README.md`](src/aico2_rt_control/README.md), which opens
+with its own ten-step setup and the four traps that cost the most time. Start
+there, not here. Two things that are about the *machine* rather than the
+package, and so belong here:
+
+*Real-time scheduling permission.* The RDK's scheduler wants `SCHED_FIFO`,
+which a non-root user cannot take without an `rtprio` limit. `check_rt_host.sh`
+reports `ulimit -r` as 0 when this is missing. Fix it once:
+
+```bash
+sudo tee /etc/security/limits.d/99-realtime.conf <<'EOF'
+@realtime   -   rtprio      99
+@realtime   -   memlock     unlimited
+EOF
+sudo groupadd -f realtime
+sudo usermod -aG realtime "$USER"
+#   log out and back in, then confirm:
+ulimit -r          # should print 99
+```
+
+*A real-time kernel, if you want Flexiv's stated requirement met.* On 24.04 the
+supported route is Ubuntu Pro, which is free for personal use on a handful of
+machines:
+
+```bash
+sudo pro attach <token>          # from ubuntu.com/pro
+sudo pro enable realtime-kernel
+```
+
+Then `bash src/aico2_rt_control/scripts/check_rt_host.sh` should report
+`/sys/kernel/realtime` present. `linux-lowlatency` is a lighter middle ground
+(`PREEMPT`, not `PREEMPT_RT`), and no RT kernel at all is not a hard stop —
+measure it with `rt_hold_probe` instead of assuming, which is what that script
+tells you to do either way.
+
+**Check this on a laptop before committing to it:** a real-time kernel and the
+proprietary Nvidia driver do not always coexist, so if this machine needs that
+driver for anything, verify the combination boots before you rely on it. The
+numbers recorded in this repo were measured on `qc-ubuntu`, not on a laptop.
+
+**10. `ROS_DOMAIN_ID`.** Needed on *both* machines whenever two of them talk,
+which includes a laptop running RViz against the robot. See
+[§7](#7-multi-machine-rviz-on-a-laptop) — and read the note there about
+multicast not crossing subnets, which is the usual reason two machines with
+matching domain IDs never see each other.
+
 ### Prerequisites
 
 ROS 2 **Jazzy** (`ros-jazzy-desktop`), plus two vendor Python SDKs that are
