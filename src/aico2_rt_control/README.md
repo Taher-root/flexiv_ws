@@ -62,6 +62,72 @@ through the Python driver and seeing which index moves, rather than inferring it
 
 ---
 
+## What stands between here and MoveIt driving the RT loop
+
+RT itself is no longer a question. What remains is one genuine blocker, one
+small unknown, and a body of work with no unknowns in it.
+
+### The blocker: RT and `rclcpp` cannot currently share a process
+
+A MoveIt controller is a ROS node — `FollowJointTrajectory` action server,
+`/joint_states`, lifecycle — so it links `rclcpp`, and `rclcpp` brings ROS 2's
+Fast-DDS. Both RDK archives also need an eprosima, dynamically:
+
+| archive | expects | status here |
+|---|---|---|
+| `ros2-jazzy` | ROS 2 Jazzy's Fast-DDS / Fast-CDR | **stack-smashes** against the 2.14.6 / 2.2.7 Jazzy ships |
+| plain | Flexiv's vendored 2.6.10 / 1.0.28 | **works** — this is what the probe uses |
+
+The `ros2-jazzy` variant exists precisely so the RDK can share ROS 2's copies,
+which is what a single process needs. With it broken, the only working archive
+expects a different eprosima version than `rclcpp` loads. Two incompatible
+eprosima versions in one address space, both defining the same symbols, is not
+made safe by their sonames differing — it is the same class of fault as the
+stack smash, and worth no time until one of the following resolves it.
+
+**Three ways out, in order of preference:**
+
+1. **A fixed `ros2-jazzy` archive from Flexiv**, built against the Fast-DDS that
+   Jazzy currently ships. We have a clean reproducer to ask with.
+2. **Robot software supporting RDK v1.9.4+**, where the library is one
+   self-contained `.so` with its internal symbols hidden and the question cannot
+   arise. The robot runs v3.11 and rejects a v1.9.4.1 client, so this needs
+   Flexiv too — but it is the better end state and makes every build problem in
+   this file disappear.
+3. **Two processes.** The RT loop links the plain RDK and no ROS; a separate ROS
+   node owns the action server and hands trajectories over shared memory or a
+   socket. Flexiv suggested this shape themselves. It needs no cooperation from
+   anyone and has no unknowns — the handoff described below is already
+   non-RT-producer to RT-consumer, so it becomes cross-process rather than
+   cross-thread. The cost is a process boundary on the path a goal travels, and
+   that it must be built even though options 1 and 2 would make it unnecessary.
+
+Options 1 and 2 are both requests to Flexiv, so asking costs one email and
+nothing is lost by starting option 3 meanwhile.
+
+### The small unknown: which indices are the waist
+
+Settle it by moving one waist axis through the Python driver and watching which
+index changes. The sampler's joint mapping depends on it, and the evidence from
+`basics1` is genuinely ambiguous — see the measurement section above.
+
+### The work, which has no unknowns left
+
+Unchanged from the design below: the lock-free trajectory handoff, the quintic
+resampler, the action server, and goal-acceptance validation for Flexiv's two
+stated RT constraints (start at the current position with zero velocity;
+continuous stream). What *has* changed is that none of it is speculative any
+more — the loop holds, the mode works, the vector length is confirmed.
+
+### And one measurement that could still change the answer
+
+The 1 kHz result was on an idle host. Repeat it with Nav2, RTAB-Map and both
+cameras running. If misses appear there, the fix is to pin the RT process to a
+core the stack does not use, and that is worth knowing before any of the above
+is built.
+
+---
+
 ## Is Flexiv's example enough to write an RT controller through MoveIt?
 
 ### What the examples give you
@@ -509,10 +575,15 @@ hundred undefined `eprosima::fastcdr::*` symbols rather than any clear message:
 
 `-DRDK_SUPPORT_ROS2_JAZZY=ON` is not optional. It selects
 `libflexiv_rdk.aarch64-linux-gnu.ros2-jazzy.a` instead of
-`libflexiv_rdk.aarch64-linux-gnu.a`; the plain archive statically links
-Fast-RTPS and Fast-CDR, as does ROS 2, so the two collide the moment anything
-links `rclcpp`. `CMakeLists.txt:50` defaults it `OFF` and falls through to the
-plain archive silently.
+`libflexiv_rdk.aarch64-linux-gnu.a`. The two differ in **which eprosima
+version they were compiled against**, not in static versus dynamic linking:
+neither archive contains Fast-CDR (the first link failure showed undefined
+`eprosima::fastcdr::*` symbols coming out of `libflexiv_rdk.a` itself), and both
+resolve it dynamically. The plain archive expects Flexiv's vendored Fast-DDS
+2.6.10 / Fast-CDR 1.0.28; the `ros2-jazzy` one expects ROS 2 Jazzy's. So mixing
+them up is an ABI mismatch, which is what the stack smash was.
+`CMakeLists.txt:50` defaults the flag `OFF` and falls through to the plain
+archive silently.
 
 `libspdlog-dev` and `libfmt-dev` are needed because the static archive
 references spdlog and fmt without carrying them. Ubuntu 24.04 ships spdlog

@@ -10,11 +10,14 @@ project(aico2_rt_control_standalone CXX)
 # anything in this workspace.
 #
 # The plain archive with Flexiv's own vendored dependency versions avoids that.
-# It statically links Fast-RTPS and Fast-CDR, which is only a problem for a
-# binary that also links rclcpp -- and the probe does not: it is RDK plus
-# iostream. So the measurement this package exists to take can be made now,
-# while the ROS 2 integration waits on the archive being fixed or on the robot
-# software supporting v1.9.4+ (one self-contained .so, no collision possible).
+# It expects Flexiv's vendored Fast-DDS 2.6.10 / Fast-CDR 1.0.28, which it
+# resolves dynamically. That is only a problem for a binary that also links
+# rclcpp, since that would pull ROS 2's incompatible eprosima into the same
+# address space -- and the probe does not link rclcpp: it is RDK plus iostream.
+# So the measurement this package exists to take can be made now, while the ROS
+# 2 integration waits on the ros2-jazzy archive being fixed or on the robot
+# software supporting v1.9.4+ (one self-contained .so with hidden symbols, where
+# the question cannot arise).
 #
 # Deliberately mirrors flexiv_rdk/example/CMakeLists.txt, so if this builds and
 # the examples build, nothing here is the difference.

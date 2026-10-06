@@ -27,12 +27,18 @@ find_package(ament_cmake REQUIRED)
 # platform -- libflexiv_rdk.aarch64-linux-gnu.a for this machine -- and which
 # the RDK's own CMake downloads from its GitHub release at configure time.
 #
-# Build it with RDK_SUPPORT_ROS2_JAZZY=ON. That selects
-# libflexiv_rdk.aarch64-linux-gnu.ros2-jazzy.a instead, which exists because
-# the RDK statically links Fast-RTPS and Fast-CDR and so does ROS 2: without
-# the ROS 2 build you get duplicate-symbol or ODR problems the moment this
-# links against rclcpp. Flexiv ships that variant precisely so the two can
-# coexist, which is good evidence the ROS 2 case is anticipated.
+# The two archive variants differ in which eprosima version they were compiled
+# against. Neither contains Fast-CDR -- both resolve it dynamically -- so the
+# plain one needs Flexiv's vendored Fast-DDS 2.6.10 / Fast-CDR 1.0.28 and the
+# ros2-jazzy one needs ROS 2 Jazzy's. Flexiv ships the second variant precisely
+# so the RDK can share ROS 2's copies, which is what a process linking rclcpp
+# requires: two incompatible eprosima versions in one address space, both
+# defining the same symbols, is not something differing sonames make safe.
+#
+# As measured here, though, the ros2-jazzy archive stack-smashes against the
+# Fast-DDS 2.14.6 / Fast-CDR 2.2.7 that Jazzy currently ships. See README.md --
+# that is the open blocker for a ROS node, and the reason the working RT path is
+# the standalone, non-ROS build for now.
 #
 # See README.md for the install steps. Until that is done this package
 # configures to nothing and the build is a no-op rather than an error, so it
