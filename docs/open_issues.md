@@ -52,15 +52,27 @@ Measured after the fixes above, so achieved rates are exact:
 | 100 | 98 Hz | slightly jerky |
 | 200 | 190 Hz | clearly jerky |
 
-Two tentative readings: 2 Hz being worst suggests the internal generator
-decelerates toward each commanded position rather than blending through the
-velocity passed in `dq_send`; degradation above 100 Hz suggests it is being
-pre-empted before it can produce a smooth segment.
+**Explained by Flexiv (2026-10-05).** The two readings recorded here earlier
+were each partly wrong. The mechanism, from their engineering team:
 
-RDK documents NRT joint modes as expecting commands "in a one-shot or
-slow-periodic manner", gives a number for RT (1 kHz) and none for NRT — and
-2 Hz, which is what "slow-periodic" sounds like, is the worst setting
-measured.
+`SendJointPosition` does not create a trajectory segment. **Each call replaces
+the current target** (position and velocity), and a motion generator on the
+robot, running at 1 kHz, chases the most recent target as fast as `max_vel` and
+`max_acc` allow. It has no timing information — it does not know when the next
+command is due, so it is never synchronised to the send rate — and **no jerk
+limit**, so acceleration switches abruptly between `+max_acc`, 0 and `-max_acc`.
+
+- **2 Hz.** The generator does try to pass through each sample at the velocity
+  sent, so that reading was close. What it cannot do is hold a velocity at a
+  fixed point: when the limits exceed what the trajectory needs it **arrives
+  early**, overshoots, brakes at `max_acc`, and settles back, because the target
+  does not move until the next command. That is the stop-and-go.
+- **Above 100 Hz.** Not pre-emption — that reading was wrong. The generator
+  re-plans every millisecond regardless, so nothing is pre-empted mid-segment.
+  It is **timing jitter**: at 5–10 ms periods, jitter from Python and the
+  non-real-time network is a large fraction of the period, targets arrive
+  unevenly, and each uneven step provokes a correction at up to full `max_acc`.
+
 
 **Not swept:** 20 and 30 Hz. The minimum may sit below 50.
 
@@ -82,9 +94,41 @@ interpolates for you. Evaluation scaffolding is in `aico2_rt_control`, which
 builds nothing until the C++ RDK is installed and changes nothing in the
 existing driver. Start with its `rt_hold_probe`.
 
-Still unanswered: the recommended NRT call rate, and whether a complete
-externally time-parameterised joint trajectory can be handed over as one
-motion.
+### Both remaining questions are now answered
+
+**Recommended NRT rate: there isn't one, by design.** Flexiv do not publish a
+figure because the mode "is designed for one-shot or slow-periodic targets, not
+for streaming a trajectory". Our 50 Hz fits how the generator works, but the
+optimum depends on `max_vel`, `max_acc` and the host's jitter. Their tuning
+advice, if staying on NRT: steady rate around 20–50 Hz with minimal jitter,
+velocities consistent with the surrounding position samples, and `max_vel` /
+`max_acc` set *just above* the trajectory's real peaks rather than large.
+Their own conclusion: "even when tuned, NRT mode will not reproduce your
+time-parameterization exactly."
+
+**Note the conflict with what we measured**, because it matters if anyone
+revisits this. Deriving the caps from each trajectory's peaks is exactly the
+advice above, and it made the motion jerkier — reverted in `f850e16`, with
+`trajectory_cap_margin 100.0` (effectively the old large constants) confirming
+the cause. The likely reconciliation is the word *just*: a generator chasing a
+target that is already up to 20 ms stale has to catch up, and catching up needs
+acceleration above the trajectory's own peak. Capped at the peak it falls
+behind, then corrects hard. A margin between the two — say 1.5–3× rather than
+1× or 100× — was never swept. Nobody should spend time on that sweep now: the
+decision is RT, where there are no caps at all.
+
+**Uploading a time-parameterised trajectory: not possible.** There is no API to
+hand the robot a time-stamped joint trajectory for it to replay with our
+timing. The alternatives, per Flexiv, both give up the timing:
+
+- `MoveJ` with multiple waypoints and `zoneRadius` blending, via
+  `ExecutePrimitive()`.
+- `MoveJTraj`, which replays a `.traj` file uploaded with
+  `FileIO::UploadTrajFile()`. A `.traj` holds per-segment waypoints with
+  velocity, acceleration and blending — **no timestamps**.
+
+Use those only where the path matters more than the timing. For our timing, the
+answer is RT, which is what Flexiv also recommend.
 
 ---
 

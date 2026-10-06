@@ -5,8 +5,11 @@ API.
 
 **Nothing here is built or tested yet**, and nothing here changes
 `aico2_left_arm_driver`. That driver is Python, NRT, and works — it stays as it
-is. This package exists so the RT route can be evaluated without putting the
-working path at risk.
+is, as the fallback and as the comparison.
+
+Both arms already carry `RDK-Professional`, so RT is licensed and the API is
+public. The one remaining blocker is installing the C++ library, which is a free
+download. See [the three prerequisites](#the-three-prerequisites-and-where-each-one-stands).
 
 ---
 
@@ -123,6 +126,15 @@ the route that uses what MoveIt produces as-is.
    `/joint_states`, and lifecycle management — all of which exist in Python
    today and would have to be written again in C++.
 
+   Flexiv suggest a lighter alternative worth keeping in mind: keep planning in
+   Python and hand the trajectory to a small C++ program that only streams it,
+   over a file, shared memory or a socket. That avoids rewriting the action
+   server and the state publishing, at the cost of a process boundary on the
+   path a goal travels. It is a reasonable first integration if the probe looks
+   good but the full C++ node is not worth it yet — and the sampler design
+   below is the same either way, since the handoff it describes is already
+   between a non-RT producer and the RT task.
+
 2. **Real-time safety, which the examples do not demonstrate.** The periodic
    task in `intermediate1` constructs three `std::vector<double>` per cycle.
    That is fine in a demo and wrong in a control loop: `malloc` can block.
@@ -150,27 +162,46 @@ the route that uses what MoveIt produces as-is.
    about on either count.
 
 
-5. **The host.** This is the real risk. `scheduler.max_priority()` requests
-   SCHED_FIFO at a high priority; on a kernel **without PREEMPT_RT** that is
-   best-effort. The Jetson also runs Nav2, RTAB-Map, two camera pipelines and a
-   DDS domain. In NRT a late command is covered by the robot's motion
-   generator; in RT there is nothing covering for you, so a missed deadline is
-   worse than the problem being solved. Measure before building.
+5. **The host. This is the real risk, and Flexiv make it a requirement.**
+   Their three RT prerequisites are C++, an RDK Professional licence, and "a
+   real-time capable Linux PC (see the RDK manual's real-time kernel setup)
+   with a wired connection to the robot". The first two we have; the third we
+   do not, as things stand. `scheduler.max_priority()` requests SCHED_FIFO at a
+   high priority, which on a kernel without PREEMPT_RT is best-effort, and the
+   Jetson also runs Nav2, RTAB-Map, two camera pipelines and a DDS domain. In
+   NRT a late command is covered by the robot's motion generator; in RT nothing
+   covers for you, so a missed deadline is worse than the problem being solved.
 
-### What we have, and what has to be asked for
+   Check it before installing anything — it is free:
 
-Three separate things are needed, and they fail for different reasons. Checked
-against the public v1.9 headers (`flexivrobotics/flexiv_rdk`, tag `v1.9`):
+   ```bash
+   bash src/aico2_rt_control/scripts/check_rt_host.sh
+   ```
 
-| | State | How it is obtained |
+   It reports the preemption flavour, `/sys/kernel/realtime`, `isolcpus`, the
+   CPU governor and `nvpmodel` state, the RT scheduling limits, and whether the
+   route to each arm is wired. Then measure with `rt_hold_probe` rather than
+   arguing from the kernel name: if misses turn out to be load-dependent,
+   isolating a core may be enough, and if they persist on an idle host the arms
+   want an RT kernel or a different machine.
+
+### The three prerequisites, and where each one stands
+
+Checked against the public v1.9 headers (`flexivrobotics/flexiv_rdk`, tag
+`v1.9`) and against both arms. Nothing here needs asking Flexiv.
+
+| | State | Evidence |
 |---|---|---|
-| The RT API | **Exists, public** | `include/flexiv/rdk/robot.hpp:501` declares `StreamJointPosition(positions, velocities, accelerations)`, applicable modes `RT_JOINT_IMPEDANCE, RT_JOINT_POSITION`. `mode.hpp` lists `RT_JOINT_TORQUE`, `RT_JOINT_IMPEDANCE`, `RT_JOINT_POSITION`, `RT_CARTESIAN_MOTION_FORCE`. Nothing is hidden. |
-| The C++ library | **Not installed** | A download, free. See below. The Python wheel will never do: upstream names every file in `example_py/` `non_realtime_*` and every RT example is C++. The Jetson reporting `RT modes: []` and `Stream methods: []` is the correct current state of the bindings, not a stale wheel. |
-| A licence permitting the RT modes | **Unknown — the actual gate** | `SwitchMode` "throw[s] `std::invalid_argument` if the requested mode is invalid **or unlicensed**" (`robot.hpp:205`), and `Robot`'s constructor throws "if the connected robot lacks a valid RDK license" (`robot.hpp:41`). This is the thing to ask Flexiv for, if we turn out not to have it. |
+| The RT API | **Public, exists** | `robot.hpp:501` declares `StreamJointPosition(positions, velocities, accelerations)`, applicable modes `RT_JOINT_IMPEDANCE, RT_JOINT_POSITION`. `mode.hpp` lists `RT_JOINT_TORQUE`, `RT_JOINT_IMPEDANCE`, `RT_JOINT_POSITION`, `RT_CARTESIAN_MOTION_FORCE`. Nothing hidden or gated. |
+| A licence permitting RT | **Already held, both arms** | `license_type` reads `RDK-Professional+TDK-Standard` on Rizon4-063352 and Rizon4R-062077, and the RDK logs `Validated license: RDK-Professional` on connect. Robot software v3.11, RDK v1.9. |
+| The C++ library | **Not installed — the only remaining blocker** | A free download, and the one thing left to do. See [Installing the C++ RDK](#installing-the-c-rdk). |
 
-The licence is checkable without asking anyone. `RobotInfo` carries a
-`license_type` field (`data.hpp:124`), in the same struct the driver already
-reads `DoF` / `DoF_m` / `DoF_e` from:
+So the gate that looked like a licence request is not one. `SwitchMode` throws
+`std::invalid_argument` when a mode is "invalid or unlicensed"
+(`robot.hpp:205`), and `Robot`'s constructor throws if the robot "lacks a valid
+RDK license" (`robot.hpp:41`) — neither applies here.
+
+To re-check at any time, per arm (the licence is per robot):
 
 ```bash
 python3 src/aico2_rt_control/scripts/check_rt_license.py Rizon4-063352
@@ -178,10 +209,10 @@ python3 src/aico2_rt_control/scripts/check_rt_license.py Rizon4R-062077
 ```
 
 Read-only — it never enables the robot or switches mode. It does take the one
-RDK session, so stop the Python driver first. Run it on both arms; the licence
-is per robot, and they may differ.
+RDK session, so stop the Python driver first.
 
-### A detail from the header that explains the NRT behaviour
+
+### Why the NRT path behaves as it does
 
 Worth recording, because it is the documented mechanism behind
 `docs/open_issues.md` issue 1a. `SendJointPosition`'s own warning:
@@ -190,7 +221,12 @@ Worth recording, because it is the documented mechanism behind
 > still ongoing will trigger an online re-planning of the joint trajectory, such
 > that the previous command is aborted and the new command starts to execute.
 
-So streaming at 50 Hz means aborting and re-planning every 20 ms, by design.
+Flexiv's engineering team put it more precisely (2026-10-05): the call does not
+create a trajectory segment at all. **Each call replaces the current target**,
+and a 1 kHz generator on the robot chases the most recent one as fast as
+`max_vel` / `max_acc` allow, with no knowledge of when the next command is due
+and **no jerk limit** — so acceleration switches abruptly between `+max_acc`, 0
+and `-max_acc`. See `docs/open_issues.md` issue 1a for the full account.
 Also note the NRT meaning of `velocities`: "Each joint will maintain this amount
 of velocity when it reaches the target position" — a terminal condition for the
 generator's plan, not feedforward. In RT the same argument *is* feedforward, and
@@ -287,14 +323,38 @@ sends URDF joint names; the RDK vector is external axes first
 nothing there. Validate the trajectory against the URDF limits when the goal is
 accepted, and check `robot.fault()` every cycle.
 
+### Two constraints Flexiv state explicitly for RT
+
+From their guidance of 2026-10-05, and both are goal-acceptance checks rather
+than things the RT task can fix:
+
+1. **The trajectory must start at the robot's current position with zero
+   velocity.** MoveIt plans from its own idea of the start state, which comes
+   from `/joint_states` and so is a sample up to one publish period old. The
+   first point will therefore not match `states().q` exactly. Decide this at
+   goal acceptance: reject if the gap exceeds a tolerance, and otherwise close
+   it with a short generated lead-in — not by streaming the mismatch, because
+   nothing smooths it. Likewise a non-zero initial velocity in the plan is a
+   reject, not something to feed forward.
+2. **The command stream must be continuous, because the robot does not smooth
+   RT commands.** Three practical consequences. A new goal arriving mid-motion
+   cannot simply swap the buffer — the swap has to happen at a point where
+   position *and* velocity are continuous, or be preceded by a braking ramp.
+   Finishing a trajectory means holding its last point, not dropping to
+   whatever the next source says. And a cycle that fails to produce a setpoint
+   is not a no-op: it is a discontinuity, which is the whole reason the host
+   timing has to be measured first.
+
 ### Recommended order
 
-1. Install the C++ RDK (below) and run `rt_hold_probe`. It answers point 4,
-   point 5, and whether RT works on this arm at all, for the cost of one small
-   program. If the loop cannot hold on this host, that is worth knowing before
-   any of the above gets written.
-2. Then the sampler and the action server, per the design above.
-3. Keep the Python NRT driver working alongside it. It is the fallback if the
+1. Run `scripts/check_rt_host.sh`. Costs nothing, needs no RDK, and answers
+   whether the host meets Flexiv's stated requirement before any time goes into
+   the install.
+2. Install the C++ RDK (below) and run `rt_hold_probe`, twice: stack stopped,
+   then with Nav2 and the cameras running. That is the measurement that decides
+   this, and it is one small program.
+3. Then the sampler and the action server, per the design above.
+4. Keep the Python NRT driver working alongside it. It is the fallback if the
    host timing turns out not to hold, and the comparison that says whether RT
    actually improved the motion.
 
@@ -303,13 +363,16 @@ accepted, and check `robot.fault()` every cycle.
 
 ## Installing the C++ RDK
 
+This is the only thing standing between here and RT. Both arms are licensed
+(see above) and the API is public; the library is a free download.
+
 **The `flexivrdk` Python wheel does not satisfy this.** Verified on the robot:
-the wheel's bindings register no RT modes and no `Stream*` methods. RT lives in
-the C++ library, which is a separate artifact.
+the wheel's bindings register no RT modes and no `Stream*` methods. That is
+upstream's design, not a stale install — every file in the RDK's `example_py/`
+is named `non_realtime_*` and every RT example is C++.
 
 ```bash
 git clone -b v1.9 https://github.com/flexivrobotics/flexiv_rdk.git
-cd flexiv_rdk
 ```
 
 **The branch matters.** `v1.x` through `v1.9.3` is Rizon; `v2.x` is Enlight, and
@@ -318,32 +381,59 @@ its API is not source-compatible — on `main` (v2.1) `StreamJointPosition` take
 Cloning the default branch gives code that will not compile against anything
 written for these arms.
 
-Its dependencies are vendored by a helper script, then the library itself is a
-prebuilt static archive downloaded at configure time from the GitHub release
-(`libflexiv_rdk.aarch64-linux-gnu.ros2-jazzy.a` for this machine, with a SHA256
-check). Follow that repo's README for the current invocation — it changes
-between point releases, so it is deliberately not copied here. The one flag that
-matters:
+Dependencies first — Eigen3, spdlog, Fast-RTPS, Fast-CDR, RBDyn — vendored into
+a prefix of your choosing by the RDK's own script:
 
-```
--DRDK_SUPPORT_ROS2_JAZZY=ON
+```bash
+sudo apt install build-essential cmake
+cd flexiv_rdk/thirdparty
+bash build_and_install_dependencies.sh ~/rdk_install
 ```
 
-Without it you get `libflexiv_rdk.aarch64-linux-gnu.a`, which statically links
-Fast-RTPS and Fast-CDR and will collide with ROS 2's copies as soon as anything
-links `rclcpp`.
+Then the library itself. It is a prebuilt static archive the CMake project
+downloads at configure time from the GitHub release, with a SHA256 check against
+`lib/*.sha256`:
 
-Install it where CMake can find it, then:
+```bash
+cd flexiv_rdk
+mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install -DRDK_SUPPORT_ROS2_JAZZY=ON
+cmake --build . --target install --config Release
+```
+
+`-DRDK_SUPPORT_ROS2_JAZZY=ON` is not optional here. It selects
+`libflexiv_rdk.aarch64-linux-gnu.ros2-jazzy.a` instead of
+`libflexiv_rdk.aarch64-linux-gnu.a`; the plain archive statically links Fast-RTPS
+and Fast-CDR, and so does ROS 2, so the two collide as soon as anything links
+`rclcpp`. Flexiv ships the variant precisely so they can coexist. Without the
+flag, `CMakeLists.txt` falls through to the plain archive silently.
+
+Then build this package, pointing CMake at the prefix:
 
 ```bash
 cd ~/flexiv_ws
-colcon build --packages-select aico2_rt_control
+colcon build --packages-select aico2_rt_control \
+    --cmake-args -DCMAKE_PREFIX_PATH=$HOME/rdk_install
 ```
 
 Until `find_package(flexiv_rdk)` succeeds this package builds nothing and emits
-a warning rather than failing, so it cannot break a workspace build.
+a warning rather than failing, so it cannot break a workspace build. The warning
+in a `colcon build` log is the expected state before this is done, not an error.
+
+The dependencies install as shared libraries under the prefix, so a binary needs
+to find them at runtime:
+
+```bash
+LD_LIBRARY_PATH=$HOME/rdk_install/lib ros2 run aico2_rt_control rt_hold_probe Rizon4-063352
+```
+
+If that becomes tiresome, set `BUILD_RPATH`/`INSTALL_RPATH` on the target in
+`CMakeLists.txt` rather than exporting `LD_LIBRARY_PATH` globally — a
+system-wide `LD_LIBRARY_PATH` pointing at a prefix that carries its own Fast-RTPS
+is a good way to break unrelated ROS 2 nodes.
 
 ---
+
 
 ## rt_hold_probe
 
