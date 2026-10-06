@@ -477,20 +477,20 @@ Until `find_package(flexiv_rdk)` succeeds this package builds nothing and emits
 a warning rather than failing, so it cannot break a workspace build. The warning
 in a `colcon build` log is the expected state before this is done, not an error.
 
-The dependencies install as shared libraries under the prefix, so a binary needs
-to find them at runtime:
+The RDK is a shared library in its own prefix, which is not on the default
+loader path. `CMakeLists.txt` sets `CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE` so
+that path is baked into the binary and nothing extra is needed at runtime:
 
 ```bash
-LD_LIBRARY_PATH=$HOME/rdk_install/lib ros2 run aico2_rt_control rt_hold_probe Rizon4-063352
+ros2 run aico2_rt_control rt_hold_probe Rizon4-063352
 ```
 
-If that becomes tiresome, set `BUILD_RPATH`/`INSTALL_RPATH` on the target in
-`CMakeLists.txt` rather than exporting `LD_LIBRARY_PATH` globally — a
-system-wide `LD_LIBRARY_PATH` pointing at a prefix that carries its own Fast-RTPS
-is a good way to break unrelated ROS 2 nodes.
+**Do not set `LD_LIBRARY_PATH` to the prefix.** Assigning it rather than
+appending drops ROS 2's own `lib` directory, and `ros2` then fails with
+`ImportError: librcl_action.so: cannot open shared object file`. If you ever do
+need it, append: `LD_LIBRARY_PATH=$HOME/rdk_install/lib:$LD_LIBRARY_PATH`.
 
 ---
-
 
 ## Troubleshooting the build
 
@@ -516,6 +516,23 @@ cd .. && mkdir build && cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install
 cmake --build . --target install --config Release
 ```
+
+**`undefined reference to fmt::v9::...` in `rt_hold_probe.cpp.o` itself** (not
+in the RDK library).
+
+Something in this package included `<spdlog/spdlog.h>`. Flexiv's examples log
+with spdlog, but the RDK headers need only Eigen, and from v1.9.4.1 the library
+hides its internal symbols — so including spdlog pulls in Ubuntu's build of it,
+which links fmt externally, and leaves the translation unit needing `fmt`. The
+fix taken here was to drop spdlog and use `iostream`; linking `fmt` would also
+work but adds a dependency for nothing.
+
+**`ImportError: librcl_action.so: cannot open shared object file`** when running
+`ros2`.
+
+`LD_LIBRARY_PATH` was *assigned* instead of appended, so ROS 2's `lib`
+directory fell off it. Nothing is wrong with the install. The RPATH makes the
+variable unnecessary — just drop it.
 
 **`ignoring unknown package 'aico2_rt_control' in --packages-select`.**
 `colcon` was run from somewhere other than the workspace root, so it saw no

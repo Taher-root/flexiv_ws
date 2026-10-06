@@ -34,6 +34,15 @@ find_package(flexiv_rdk QUIET)
 if(flexiv_rdk_FOUND)
   message(STATUS "aico2_rt_control: flexiv_rdk found, building RT targets")
 
+  # From v1.9.4.1 the RDK is a shared library living in its own install prefix
+  # (e.g. ~/rdk_install/lib), which is not on the default loader path. Baking
+  # that directory into the binary's RPATH is what makes `ros2 run` work without
+  # LD_LIBRARY_PATH -- and setting LD_LIBRARY_PATH instead is actively harmful
+  # here, because assigning it rather than appending drops ROS 2's own lib
+  # directory and breaks rclpy with "librcl_action.so: cannot open shared object
+  # file".
+  set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+
   add_executable(rt_hold_probe src/rt_hold_probe.cpp)
   target_link_libraries(rt_hold_probe flexiv::flexiv_rdk)
 
