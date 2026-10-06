@@ -53,11 +53,24 @@ validated trajectory asked for nothing the limits forbid.
 | Does the two-process handoff work? | **Yes.** Cross-process, lock-free, no allocation after startup. |
 | Does the arm track the plan? | **Yes.** 0.001 degrees. |
 
-**What remains is ROS, and only ROS.** `aico2_rt_bridge` has to turn a
-`FollowJointTrajectory` goal into what `traj_publish` already writes, and the
-`Measured` region into `/joint_states`. The validation, remapping and execution
-it needs are in `traj_ingest.hpp` and `rt_executor.hpp`, both tested; the node
-itself is boilerplate around them.
+### And through ROS, via MoveIt's own action interface
+
+`rt_bridge` running as `/left_arm`, goals sent with `send_goal.py`:
+
+```
+Left_joint6: 86.59 -> 89.59 deg over 3.0 s   accepted   error_code 0 (SUCCESS)
+Left_joint4: 100.43 -> 115.43 deg over 3.0 s accepted   error_code 0 (SUCCESS)
+Left_joint4: 115.43 -> 100.43 deg over 1.0 s accepted   error_code 0 (SUCCESS)
+```
+
+Each subsequent `--list` showed the arm at the previous target, so the moves
+landed where they were asked to, including 15 degrees in one second. That is a
+`FollowJointTrajectory` goal — the same interface MoveIt uses, with no
+configuration change — driving a 1 kHz RT loop through shared memory.
+
+The RT server logged **388 439 cycles with zero missed deadlines** across one of
+these sessions: six and a half minutes of continuous control, worst period
+1.033 ms.
 
 **Earlier NRT comparison.** The same arm on the NRT path needed its send rate
 tuned empirically and still showed jerk, because the robot's own generator
