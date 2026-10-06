@@ -22,6 +22,7 @@ before moving anything.
 7. [Multi-machine: RViz on a laptop](#7-multi-machine-rviz-on-a-laptop)
 8. [Debugging playbook](#8-debugging-playbook)
 9. [Known issues](#9-known-issues)
+10. [Real-time arm control](#10-real-time-arm-control)
 
 ---
 
@@ -1033,3 +1034,51 @@ measured, what the code says, and what is still hypothesis. Summary:
 Vendor manuals: *AICO2 Series User Manual* (hardware, safety, indicators),
 *Flexiv Elements User Manual* (teach pendant software), *Flexiv Rizon User
 Manual* (arm), *FMR 300 Series User Manual* (chassis).
+
+---
+
+## 10. Real-time arm control
+
+There are **two** ways to drive the arms, and they are mutually exclusive
+because the robot allows one RDK session at a time.
+
+| | `aico2_left_arm_driver` | `aico2_rt_control` |
+| --- | --- | --- |
+| Language | Python | C++ |
+| Mode | `NRT_JOINT_POSITION` | `RT_JOINT_POSITION` |
+| Rate | ~50 Hz, tuned by experiment | **1 kHz** |
+| Interpolation | the robot's internal generator | ours, quintic Hermite |
+| Processes | one | two, over shared memory |
+| Status | **the default.** Used by everything in sections 5 and 6 | works, verified on hardware |
+
+The NRT driver is the default and nothing about it changed. Use it unless you
+specifically want RT.
+
+**Why RT exists.** `SendJointPosition` does not create a trajectory segment: it
+replaces the robot's current target, and a generator on the robot chases that
+target with no jerk limit and no knowledge of when the next command is due. So
+the smoothness of a given plan depends on the rate you happen to send it at —
+measured here as a U-curve with a minimum near 50 Hz
+([`docs/open_issues.md`](docs/open_issues.md) issue 1a). `StreamJointPosition`
+in RT has no generator behind it, so the interpolation becomes ours and that
+dependency disappears.
+
+**Measured on hardware:** 1 kHz with **zero missed deadlines over 388 439
+cycles**, and 0.001° of tracking error on a 3° move. `FollowJointTrajectory`
+goals — the same interface MoveIt uses, with no configuration change — execute
+through it.
+
+**What it needs:** the RDK **C++** library (the Python wheel has no RT modes at
+all), an `RDK-Professional` licence, and a real-time capable host. Both arms
+here are licensed and `qc-ubuntu` runs a `PREEMPT_RT` kernel.
+
+**Two caveats worth knowing before you plan around it.** It runs as two
+processes because the RDK archive built to coexist with ROS 2 stack-smashes
+against the Fast-DDS that Jazzy currently ships — a fixed archive from Flexiv
+would collapse it to one. And it is intended for use while Nav2 and the cameras
+are **stopped**; the 1 kHz figures were measured on an otherwise idle host.
+
+Setup, running and troubleshooting are all in
+[`src/aico2_rt_control/README.md`](src/aico2_rt_control/README.md) — start at
+its "first-time setup, in order", which is ten numbered steps and opens with the
+four traps that cost the most time.

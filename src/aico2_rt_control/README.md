@@ -13,6 +13,179 @@ except one. The last blocker is installing the C++ library, a free download. See
 
 ---
 
+## Start here: first-time setup, in order
+
+Verified end to end on `Rizon4-063352`. Expect 30–60 minutes, most of it waiting
+for Boost to build. Everything below the "Background" line is explanation, not
+instructions.
+
+**Read these four traps first.** Each one cost real time to find:
+
+1. **`colcon` does not build the RT server.** This package has two build
+   systems on purpose: `colcon` builds `rt_bridge` (links `rclcpp`), and
+   `standalone/` is a plain CMake project for the RDK programs (link the RDK).
+   A binary linking both pulls two incompatible Fast-DDS versions into one
+   address space. **After a `git pull` you must rebuild both.**
+2. **The RDK build must not see ROS 2.** `find_package` consults the
+   *environment* `CMAKE_PREFIX_PATH`, so a shell with ROS sourced links Jazzy's
+   Fast-DDS and the result stack-smashes. `noros.sh` and `install_rdk.sh
+   --standalone` handle this; don't work around them.
+3. **Stop the Python arm driver.** The robot allows one RDK session, so
+   `aico2_left_arm_driver` and `rt_server` are mutually exclusive.
+4. **`rt_server` must be restarted after rebuilding**, because it reads the
+   joint limits and computes the waist pin window once at startup.
+
+### 1. Packages
+
+```bash
+sudo apt install build-essential cmake libspdlog-dev libfmt-dev libeigen3-dev
+```
+
+### 2. Is this host capable? (free, no robot)
+
+```bash
+bash src/aico2_rt_control/scripts/check_rt_host.sh
+```
+
+Flexiv require "a real-time capable Linux PC with a wired connection". Want
+`PREEMPT_RT` and a wired route to the arm. Without `PREEMPT_RT` the loop is
+best-effort; measure it in step 7 before trusting it.
+
+### 3. Is the arm licensed? (read-only, needs the Python wheel)
+
+```bash
+python3 src/aico2_rt_control/scripts/check_rt_license.py Rizon4-063352
+```
+
+`license_type` must include `RDK-Professional`. This takes the one RDK session,
+so stop the Python driver first.
+
+### 4. Install the C++ RDK
+
+```bash
+bash src/aico2_rt_control/scripts/install_rdk.sh --standalone
+```
+
+Pinned to the **v1.9** tag: robot software v3.11 rejects a v1.9.4.1 client. The
+script re-execs itself with ROS removed, uses the right one of two dependency
+scripts, and stops if Fast-DDS resolves to the wrong place. `--force` starts
+over. Boost is the slow part.
+
+Sanity-check the library with Flexiv's own example before trusting it:
+
+```bash
+bash src/aico2_rt_control/scripts/noros.sh
+export LD_LIBRARY_PATH=$HOME/rdk_standalone/lib    # their examples need this
+cd ~/flexiv_rdk_standalone/example
+cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/rdk_standalone && cmake --build build -j
+./build/basics1_display_robot_states Rizon4-063352     # should print states
+```
+
+### 5. Build both halves
+
+```bash
+# RT half -- inside a noros.sh shell
+cd ~/flexiv_ws/src/aico2_rt_control/standalone
+cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/rdk_standalone
+cmake --build build -j
+exit                                   # leave the ROS-free shell
+
+# ROS half
+cd ~/flexiv_ws
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select aico2_rt_control
+```
+
+### 6. Run the tests (no robot, no ROS, ~1 s)
+
+```bash
+cd ~/flexiv_ws/src/aico2_rt_control/test
+cmake -S . -B build && cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+Four suites: the shared-memory protocol, the sampler's maths, the 1 kHz state
+machine, and goal validation. All four must pass before pointing anything at an
+arm.
+
+### 7. Check the robot and the loop
+
+```bash
+bash ~/flexiv_ws/src/aico2_rt_control/scripts/noros.sh
+cd ~/flexiv_ws/src/aico2_rt_control/standalone
+
+./build/joint_map_probe Rizon4-063352    # which indices are the waist
+./build/rt_hold_probe  Rizon4-063352     # 1 kHz timing; the arm must NOT move
+```
+
+`rt_hold_probe` should report `missed >1.5ms   0`. More than ~1% missed means
+the loop is not safe to drive the arm with on this host as configured.
+
+### 8. Move it, without ROS
+
+```bash
+./build/rt_server Rizon4-063352          # leave running; add --control-waist for the torso
+```
+
+In another ROS-free shell:
+
+```bash
+cd ~/flexiv_ws/src/aico2_rt_control/standalone
+./build/traj_publish --list                                  # look
+./build/traj_publish --joint 7 --degrees 3 --yes-move        # move
+```
+
+Nothing moves without `--yes-move`, and travel is capped at 15°.
+
+### 9. Move it through ROS
+
+With `rt_server` still running, in a normal shell:
+
+```bash
+cd ~/flexiv_ws
+source /opt/ros/jazzy/setup.bash && source install/setup.bash
+ros2 run aico2_rt_control rt_bridge --ros-args -r __ns:=/left_arm
+```
+
+In a third:
+
+```bash
+ros2 topic hz /left_arm/joint_states        # ~100 Hz
+ros2 run aico2_rt_control send_goal.py --ros-args -r __ns:=/left_arm -- --list
+ros2 run aico2_rt_control send_goal.py --ros-args -r __ns:=/left_arm -- \
+    --joint Left_joint6 --degrees 3 --yes-move
+```
+
+The `--` is required: `ros2 run` passes `--ros-args ... --` through, and
+argparse would otherwise swallow the script's own flags.
+
+### 10. MoveIt
+
+No configuration change. `moveit_controllers.yaml` builds the action name from
+the controller name `left_arm`, which is what the bridge serves in that
+namespace:
+
+```bash
+ros2 launch flexiv_amr_bringup full_system.launch.py \
+    use_moveit:=true use_nav:=false use_slam:=false
+```
+
+### If something fails
+
+[Troubleshooting the build](#troubleshooting-the-build) lists every failure seen
+during this work, keyed to its exact symptom — the version mismatch, the two
+dependency scripts, the Fast-DDS stack smash, `DT_RUNPATH` not resolving
+transitive dependencies, and the rest. A rejected goal reports the joint by
+name, the point, the value and the bound in `error_string`, so read that before
+changing tolerances.
+
+---
+
+# Background
+
+Everything below records how this was arrived at and why the design is as it
+is. None of it is needed to run the system.
+
 ## The RT path works on hardware, end to end
 
 Run on `qc-ubuntu` against `Rizon4-063352`, 2026-10-06. `rt_server` holding at
@@ -1024,6 +1197,34 @@ rm -rf ~/flexiv_rdk_standalone/thirdparty/cloned
 If it recurs with a scrubbed environment and no stale clones, check the CMake
 user package registry (`~/.cmake/packages/`), which `find_package` also
 consults and which can point at ROS packages.
+
+**Goals are refused, or a rebuild seems to have no effect.**
+
+Two build systems, and `colcon` covers only one of them:
+
+```bash
+cd ~/flexiv_ws && git pull
+
+# ROS half
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select aico2_rt_control
+
+# RT half -- colcon does NOT build this
+bash src/aico2_rt_control/scripts/noros.sh
+cd src/aico2_rt_control/standalone && cmake --build build -j
+```
+
+Then **restart `rt_server`**, which reads the joint limits and computes the
+waist pin window once at startup. It prints that window on the first line after
+the mode switch, so a stale binary is visible rather than inferred:
+
+```
+waist NOT commanded: axes 0..1 pinned within +/-1.0e-03 rad (0.0573 deg) ...
+```
+
+A server built before the window was widened pins within 1e-6 rad, which is
+narrower than the arm's own tracking error, so it refuses every goal with
+"outside joint limits" on a waist axis.
 
 **`ignoring unknown package 'aico2_rt_control' in --packages-select`.**
 `colcon` was run from somewhere other than the workspace root, so it saw no
