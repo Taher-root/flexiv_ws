@@ -36,6 +36,22 @@ for arg in "$@"; do
     esac
 done
 
+# The standalone variant must not see ROS 2 at all. Sourcing ROS 2 exports
+# CMAKE_PREFIX_PATH, and find_package searches the cache variable first but the
+# environment one too -- so /opt/ros/jazzy wins for anything the prefix has not
+# been searched for yet, and the build silently links Jazzy's Fast-DDS again,
+# which is the exact thing this variant exists to avoid. Scrubbing a shell by
+# hand is unreliable when a dotfile sources ROS, so re-exec with those variables
+# removed instead. ROS_SCRUBBED guards against looping.
+if [[ " $* " == *" --standalone "* && -z "${ROS_SCRUBBED:-}" ]]; then
+    exec env \
+        -u AMENT_PREFIX_PATH -u CMAKE_PREFIX_PATH -u COLCON_PREFIX_PATH \
+        -u CMAKE_MODULE_PATH -u LD_LIBRARY_PATH -u PKG_CONFIG_PATH \
+        -u PYTHONPATH -u ROS_DISTRO -u ROS_VERSION -u ROS_PYTHON_VERSION \
+        -u RMW_IMPLEMENTATION -u AMENT_PYTHON_EXECUTABLE \
+        ROS_SCRUBBED=1 bash "$0" "$@"
+fi
+
 # Resolve defaults only after parsing, so --standalone can pick different ones.
 # The two variants must not share a prefix: one needs Fast-DDS inside it and the
 # other needs Fast-DDS absent from it.
@@ -103,7 +119,8 @@ fi
 
 if [[ $STANDALONE -eq 1 ]]; then
     step "Not sourcing ROS 2 (standalone)"
-    echo "the plain archive vendors its own Fast-DDS/Fast-CDR; ROS's must stay off"
+    echo "ROS variables scrubbed; the prefix supplies Fast-DDS/Fast-CDR"
+    echo "ROS_DISTRO=${ROS_DISTRO:-unset}  CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH:-unset}"
 else
 step "Sourcing ROS 2"
 # set -u would trip over ROS's own scripts.
@@ -136,6 +153,26 @@ step "Dependencies (Boost, SpaceVecAlg, RBDyn only)"
 deps="$SRC/thirdparty/build_and_install_dependencies_not_in_ros2.sh"
 fi
 [[ -f "$deps" ]] || die "missing $deps -- wrong tag?"
+# Flexiv's dependency script clones into thirdparty/cloned/ and builds in place,
+# leaving a CMakeCache.txt per dependency. Those caches remember the environment
+# they were configured in -- so a tree first built with ROS 2 sourced keeps
+# resolving /opt/ros/jazzy even after the environment is scrubbed, and
+# foonathan_memory_vendor (an ament package) then fails on a ROS CMake module it
+# can no longer satisfy. Wipe the clones when the variant changes; keep them
+# when it has not, since rebuilding Boost is not free.
+stamp="$SRC/.rdk_build_variant"
+want=$([[ $STANDALONE -eq 1 ]] && echo standalone || echo ros2-jazzy)
+if [[ -d "$SRC/thirdparty/cloned" ]]; then
+    had="$(cat "$stamp" 2>/dev/null || echo unknown)"
+    if [[ "$had" != "$want" ]]; then
+        echo "previous dependency build was '$had', now '$want' -- clearing clones"
+        rm -rf "$SRC/thirdparty/cloned"
+    else
+        echo "reusing dependency clones from a previous '$want' build"
+    fi
+fi
+printf '%s\n' "$want" > "$stamp"
+
 ( cd "$SRC/thirdparty" && bash "$deps" "$PREFIX" "$JOBS" )
 
 step "Configuring"
@@ -143,10 +180,18 @@ rm -rf "$SRC/build"
 mkdir -p "$SRC/build"
 log="$SRC/build/configure.log"
 jazzy_flag=ON
-[[ $STANDALONE -eq 1 ]] && jazzy_flag=OFF
+extra=()
+if [[ $STANDALONE -eq 1 ]]; then
+    jazzy_flag=OFF
+    # Search only the prefix, and ignore $ENV{CMAKE_PREFIX_PATH} even if
+    # something put ROS back on it.
+    extra+=("-DCMAKE_PREFIX_PATH=$PREFIX"
+            "-DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=OFF")
+fi
 ( cd "$SRC/build" && cmake .. \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
-    -DRDK_SUPPORT_ROS2_JAZZY=$jazzy_flag ) | tee "$log"
+    -DRDK_SUPPORT_ROS2_JAZZY=$jazzy_flag \
+    "${extra[@]}" ) | tee "$log"
 
 if [[ $STANDALONE -eq 1 ]]; then
     step "Checking Fast-DDS/Fast-CDR came from the prefix"
