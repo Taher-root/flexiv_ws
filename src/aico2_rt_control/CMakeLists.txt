@@ -48,10 +48,24 @@ if(flexiv_rdk_FOUND)
 
   install(TARGETS rt_hold_probe DESTINATION lib/${PROJECT_NAME})
 else()
+  # Print what was actually searched. The common cause is not a broken install
+  # but the wrong machine: the RDK prefix is per host and per user, so a build
+  # on a second machine, or as a different user, finds nothing even though the
+  # first one works. Naming the host and the search path makes that obvious
+  # instead of looking like a packaging fault.
+  cmake_host_system_information(RESULT _rt_host QUERY HOSTNAME)
   message(WARNING
-    "aico2_rt_control: flexiv_rdk (C++) not found -- skipping RT targets.\n"
-    "  This is expected until the C++ RDK is installed; see "
-    "src/aico2_rt_control/README.md.\n"
+    "aico2_rt_control: flexiv_rdk (C++) not found -- skipping RT targets, so "
+    "no rt_hold_probe will be installed and `ros2 run` will say \"No "
+    "executable found\".\n"
+    "  host:              ${_rt_host}\n"
+    "  CMAKE_PREFIX_PATH: ${CMAKE_PREFIX_PATH}\n"
+    "  HOME:              $ENV{HOME}\n"
+    "  Install the C++ RDK on THIS machine and pass its prefix, e.g.\n"
+    "    colcon build --packages-select aico2_rt_control \\\n"
+    "      --cmake-args -DCMAKE_PREFIX_PATH=$ENV{HOME}/rdk_install\n"
+    "  The prefix is per host and per user -- installing it elsewhere does not "
+    "count. See src/aico2_rt_control/README.md.\n"
     "  The Python flexivrdk wheel does NOT satisfy this: it has no RT modes.")
 endif()
 

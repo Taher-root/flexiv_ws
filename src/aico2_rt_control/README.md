@@ -534,6 +534,32 @@ work but adds a dependency for nothing.
 directory fell off it. Nothing is wrong with the install. The RPATH makes the
 variable unnecessary — just drop it.
 
+**`No executable found` from `ros2 run`, and the build logged
+`flexiv_rdk (C++) not found -- skipping RT targets`.**
+
+The RDK is not installed on *this* machine, for *this* user. The warning is the
+package working as designed: `find_package(flexiv_rdk QUIET)` missed, so the
+target was never created and nothing was installed for `ros2 run` to find.
+
+**The prefix is per host and per user.** Installing it as `root` on one machine
+does nothing for another user or another box — `$HOME/rdk_install` resolves
+differently, and `/root/rdk_install` is not readable as a normal user anyway.
+Each machine that needs to run RT needs its own install.
+
+The warning prints the hostname, `CMAKE_PREFIX_PATH` and `HOME` it searched, so
+compare those against where the install actually went.
+
+**Also note CMake caches the result.** Once the prefix exists, a plain rebuild
+may not re-run configure — it will finish in a fraction of a second and still
+build nothing. Force it:
+
+```bash
+colcon build --packages-select aico2_rt_control \
+    --cmake-force-configure --cmake-args -DCMAKE_PREFIX_PATH=$HOME/rdk_install
+```
+
+or `rm -rf build/aico2_rt_control install/aico2_rt_control` first.
+
 **`ignoring unknown package 'aico2_rt_control' in --packages-select`.**
 `colcon` was run from somewhere other than the workspace root, so it saw no
 `src/`. `cd ~/flexiv_ws` first.
