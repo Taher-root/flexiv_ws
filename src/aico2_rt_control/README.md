@@ -394,6 +394,20 @@ its API is not source-compatible — on `main` (v2.1) `StreamJointPosition` take
 Cloning the default branch gives code that will not compile against anything
 written for these arms.
 
+**The install needs outbound internet, and the robot network does not provide
+it.** The dependency script clones ten repositories (Eigen, spdlog, Fast-DDS,
+Fast-CDR, foonathan_memory, RBDyn, SpaceVecAlg, tinyxml2, yaml-cpp) and fetches
+a Boost tarball, and `CMakeLists.txt` downloads the prebuilt archive from the
+GitHub release at configure time. None of that is optional, and an anonymous
+public clone needs no GitHub account.
+
+If this host reaches the arms on one interface and the internet on another, two
+rules matter. The route to `192.168.1.0/24` must keep pointing at the robot
+interface, and any new default route must not displace it — the RT loop depends
+on that link, and the measured 0.009 ms ping deviation is the baseline to
+protect. Re-run `scripts/check_rt_host.sh` after any network change and confirm
+both arms still resolve to the wired interface at the same latency.
+
 Dependencies first — Eigen3, spdlog, Fast-RTPS, Fast-CDR, RBDyn — vendored into
 a prefix of your choosing by the RDK's own script:
 
