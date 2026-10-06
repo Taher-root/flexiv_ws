@@ -3,8 +3,8 @@
 Real-time (1 kHz) joint control for the Rizon4 arms via the Flexiv RDK **C++**
 API.
 
-**Nothing here is built or tested yet**, and nothing here changes
-`aico2_left_arm_driver`. That driver is Python, NRT, and works — it stays as it
+**RT is confirmed working on these arms** — see the measurements below. Nothing
+here changes `aico2_left_arm_driver`. That driver is Python, NRT, and works — it stays as it
 is, as the fallback and as the comparison.
 
 Both arms carry `RDK-Professional`, the API is public, and the host runs a
@@ -13,11 +13,56 @@ except one. The last blocker is installing the C++ library, a free download. See
 
 ---
 
-## Is Flexiv's example enough to write an RT controller through MoveIt?
+## RT works on these arms — measured
 
-Short answer: **it is enough to prove RT works, and not enough to be a MoveIt
-controller.** The gap is ROS integration, real-time safety, and the host
-kernel — not the RDK.
+Run on `qc-ubuntu` against `Rizon4-063352`, 2026-10-06, with the stack stopped:
+
+```
+Validated license: RDK-Professional
+DoF reported as 9
+Holding at 0.002 0.157 0.023 -0.701 0.052 1.754 -0.054 1.519 0.552
+Control mode switched to [RT_JOINT_POSITION]
+
+--- 1 kHz loop, achieved ---
+cycles          5005
+expected        5000
+mean period     0.999999 ms  (nominal 1.000)
+min period      0.983855 ms
+max period      1.01729 ms
+missed >1.5ms   0
+```
+
+Every question this package was created to answer is answered:
+
+| question | answer |
+|---|---|
+| Is RT available on these arms at all? | **Yes.** `SwitchMode(RT_JOINT_POSITION)` succeeds and the robot confirms the mode. |
+| Does `StreamJointPosition` take the full 9-element vector? | **Yes.** It held all nine, waist axes included, with no `invalid_argument`. |
+| Can this host hold a 1 kHz loop? | **Yes.** Zero missed deadlines, mean period within 1 ns of nominal, worst-case excursion ±17 µs. |
+
+±17 µs of jitter on a 1 ms period is roughly 1.7%, which is what a PREEMPT_RT
+kernel with a performance governor should give and is far better than the
+NRT path could offer. For comparison, the NRT send loop's rate was itself the
+dominant variable in execution smoothness (`docs/open_issues.md` issue 1a).
+
+**Still to measure.** This was an idle host. The number that decides the
+architecture is the same run with Nav2, RTAB-Map and both camera pipelines
+going; see [the host section](#what-you-still-have-to-write) for what to do if
+misses appear under load. Also worth repeating on `Rizon4R-062077` and over a
+longer window than 5 s.
+
+**One thing to confirm before the sampler relies on it:** which indices are the
+waist. `basics1_display_robot_states` reports `temperature` as
+`[0, 0, 31, 33, 37, 35, 33, 33, 33]` and `tau_ext` as `[0, 0, ...]`, which hints
+that indices 0 and 1 are the external axes — consistent with `DoF_e` preceding
+`DoF_m`. But the held pose has plausible waist values at indices 7 and 8
+(1.519 rad ≈ 87°, 0.552 rad ≈ 32°, both inside the measured waist range), so
+this is not yet unambiguous. Settle it by commanding one waist axis a few degrees
+through the Python driver and seeing which index moves, rather than inferring it.
+
+---
+
+## Is Flexiv's example enough to write an RT controller through MoveIt?
 
 ### What the examples give you
 
@@ -702,9 +747,13 @@ while the ROS 2 integration waits on either the archive being fixed or the robot
 software supporting v1.9.4+, where one self-contained `.so` makes the collision
 impossible.
 
-Check Flexiv's `basics1` against the standalone prefix first — if that also
-crashes, the problem is not the Fast-DDS versions and the reproducer to send is
-stronger still.
+**Confirmed resolved (2026-10-06).** Against the standalone prefix,
+`basics1_display_robot_states` prints robot states normally and `rt_hold_probe`
+runs a clean 1 kHz loop. Same archive version, same host, same robot — only the
+Fast-DDS and Fast-CDR versions differ. So the `ros2-jazzy` archive paired with
+Jazzy's 2.14.6 / 2.2.7 is the fault, and Flexiv's own vendored 2.6.10 / 1.0.28
+works. That is the bug report: it reproduces with their example and clears with
+their own dependency versions.
 
 **`ModuleNotFoundError: No module named 'ament_package'`** while the dependency
 script builds `foonathan_memory_vendor`.
