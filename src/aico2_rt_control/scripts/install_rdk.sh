@@ -36,20 +36,12 @@ for arg in "$@"; do
     esac
 done
 
-# The standalone variant must not see ROS 2 at all. Sourcing ROS 2 exports
-# CMAKE_PREFIX_PATH, and find_package searches the cache variable first but the
-# environment one too -- so /opt/ros/jazzy wins for anything the prefix has not
-# been searched for yet, and the build silently links Jazzy's Fast-DDS again,
-# which is the exact thing this variant exists to avoid. Scrubbing a shell by
-# hand is unreliable when a dotfile sources ROS, so re-exec with those variables
-# removed instead. ROS_SCRUBBED guards against looping.
-if [[ " $* " == *" --standalone "* && -z "${ROS_SCRUBBED:-}" ]]; then
-    exec env \
-        -u AMENT_PREFIX_PATH -u CMAKE_PREFIX_PATH -u COLCON_PREFIX_PATH \
-        -u CMAKE_MODULE_PATH -u LD_LIBRARY_PATH -u PKG_CONFIG_PATH \
-        -u PYTHONPATH -u ROS_DISTRO -u ROS_VERSION -u ROS_PYTHON_VERSION \
-        -u RMW_IMPLEMENTATION -u AMENT_PYTHON_EXECUTABLE \
-        ROS_SCRUBBED=1 bash "$0" "$@"
+# The standalone variant must not see ROS 2 at all, and scrubbing a shell by
+# hand is unreliable when a dotfile sources ROS. noros.sh owns the list of
+# variables to remove; re-exec through it rather than duplicating that list.
+# NOROS guards against looping.
+if [[ " $* " == *" --standalone "* && -z "${NOROS:-}" ]]; then
+    exec bash "$(dirname "$(readlink -f "$0")")/noros.sh" bash "$0" "$@"
 fi
 
 # Resolve defaults only after parsing, so --standalone can pick different ones.
@@ -119,7 +111,7 @@ fi
 
 if [[ $STANDALONE -eq 1 ]]; then
     step "Not sourcing ROS 2 (standalone)"
-    echo "ROS variables scrubbed; the prefix supplies Fast-DDS/Fast-CDR"
+    echo "ROS variables scrubbed via noros.sh; the prefix supplies Fast-DDS/Fast-CDR"
     echo "ROS_DISTRO=${ROS_DISTRO:-unset}  CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH:-unset}"
 else
 step "Sourcing ROS 2"
@@ -222,7 +214,12 @@ echo "installed: ${lib:-nothing found}"
 if [[ $STANDALONE -eq 1 ]]; then
 cat <<TXT
 
-Next (no ROS 2 in this shell):
+Next. These MUST run without ROS 2 in the environment, or CMake links Jazzy's
+Fast-DDS again and the binary stack-smashes. Get a ROS-free shell first:
+
+  bash ~/flexiv_ws/src/aico2_rt_control/scripts/noros.sh
+
+then, inside it:
   cd ~/flexiv_ws/src/aico2_rt_control/standalone
   cmake -S . -B build -DCMAKE_PREFIX_PATH=$PREFIX
   cmake --build build -j

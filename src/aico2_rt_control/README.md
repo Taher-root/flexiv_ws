@@ -640,11 +640,30 @@ dependency versions, in a separate prefix, built with ROS 2 *not* sourced:
 ```bash
 bash src/aico2_rt_control/scripts/install_rdk.sh --standalone
 
-cd src/aico2_rt_control/standalone
+# Everything after this must run with ROS 2 out of the environment:
+bash src/aico2_rt_control/scripts/noros.sh
+
+# ...and inside that shell, check Flexiv's own example before anything of ours
+cd ~/flexiv_rdk_standalone/example
+cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/rdk_standalone
+cmake --build build -j
+./build/basics1_display_robot_states Rizon4-063352
+
+# if that prints robot states, the archive works; then
+cd ~/flexiv_ws/src/aico2_rt_control/standalone
 cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/rdk_standalone
 cmake --build build -j
 ./build/rt_hold_probe Rizon4-063352
 ```
+
+`noros.sh` is the single definition of "ROS-free" here — it unsets
+`CMAKE_PREFIX_PATH`, `AMENT_PREFIX_PATH`, `LD_LIBRARY_PATH`, `PYTHONPATH`,
+`ROS_DISTRO` and the rest, and `install_rdk.sh --standalone` re-execs through it
+rather than keeping its own copy of the list. Run it with no arguments for an
+interactive shell, or with a command to scrub just that one. The *configure*
+step is what matters: once a binary is linked against the prefix's Fast-DDS it
+carries an RPATH and the sonames differ (2.6 vs 2.14), so running it later from
+a normal shell is fine.
 
 `--standalone` re-execs itself with the ROS 2 variables removed
 (`CMAKE_PREFIX_PATH`, `AMENT_PREFIX_PATH`, `LD_LIBRARY_PATH` and the rest) and
