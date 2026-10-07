@@ -39,6 +39,7 @@
 #include <new>
 #include <string>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -203,6 +204,7 @@ aico2_rt::Shm* CreateShm(const std::string& name, int& fd_out)
         std::fprintf(stderr, "shm_open(%s): %s\n", name.c_str(), std::strerror(errno));
         return nullptr;
     }
+    fchmod(fd, 0666);
     if (ftruncate(fd, sizeof(aico2_rt::Shm)) != 0) {
         std::fprintf(stderr, "ftruncate: %s\n", std::strerror(errno));
         close(fd);
