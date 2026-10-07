@@ -39,6 +39,9 @@ message(STATUS "build type ${CMAKE_BUILD_TYPE}")
 # ---------------------------------------------------------------------------
 # Find the Flexiv RDK: try installed package first, then source tree
 # ---------------------------------------------------------------------------
+# Also check the install_rdk.sh default prefix for an installed package
+list(APPEND CMAKE_PREFIX_PATH "$ENV{HOME}/rdk_standalone")
+
 find_package(flexiv_rdk QUIET)
 
 if(NOT flexiv_rdk_FOUND)
@@ -63,8 +66,8 @@ if(NOT flexiv_rdk_FOUND)
       # Home directory
       "$ENV{HOME}/flexiv_rdk"
       "$ENV{HOME}/flexivrobotics/flexiv_rdk"
-      # Installed prefix
-      "$ENV{HOME}/rdk_standalone"
+      # install_rdk.sh --standalone clone location
+      "$ENV{HOME}/flexiv_rdk_standalone"
     )
 
     foreach(_path ${_SEARCH_PATHS})
