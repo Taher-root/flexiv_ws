@@ -198,7 +198,7 @@ bool ParseArgs(int argc, char** argv, Options& opt)
 aico2_rt::Shm* CreateShm(const std::string& name, int& fd_out)
 {
     shm_unlink(name.c_str());
-    const int fd = shm_open(name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+    const int fd = shm_open(name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0666);
     if (fd < 0) {
         std::fprintf(stderr, "shm_open(%s): %s\n", name.c_str(), std::strerror(errno));
         return nullptr;
