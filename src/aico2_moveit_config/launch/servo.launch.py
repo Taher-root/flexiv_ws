@@ -19,6 +19,7 @@ Usage:
 """
 import os
 
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -34,6 +35,12 @@ _URDF = os.path.join(
 )
 
 
+def _load_yaml(package_name, file_path):
+    full_path = os.path.join(get_package_share_directory(package_name), file_path)
+    with open(full_path, "r") as f:
+        return yaml.safe_load(f)
+
+
 def generate_launch_description():
     log_level = LaunchConfiguration("log_level")
 
@@ -46,9 +53,8 @@ def generate_launch_description():
         .to_moveit_configs()
     )
 
-    servo_params_path = os.path.join(
-        get_package_share_directory(_PKG), "config", "servo_params.yaml"
-    )
+    servo_yaml = _load_yaml(_PKG, "config/servo_params.yaml")
+    servo_params = {"moveit_servo": servo_yaml}
 
     return LaunchDescription([
         DeclareLaunchArgument("log_level", default_value="info"),
@@ -61,7 +67,7 @@ def generate_launch_description():
             arguments=["--ros-args", "--log-level", log_level],
             parameters=[
                 moveit_config.to_dict(),
-                servo_params_path,
+                servo_params,
                 {"use_sim_time": False},
             ],
         ),

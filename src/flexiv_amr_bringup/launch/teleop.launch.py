@@ -9,7 +9,7 @@ What runs (in staged order):
 
   1. robot_state_publisher            URDF -> TF
   2. rt_bridge (ns /left_arm)         shm <-> ROS (joint_states, servo, FJT)
-  3. 3x RealSense D456 cameras        /cam_left, /cam_right, /cam_head color
+  3. RealSense D456 cameras            /cam_left, /cam_right (+ /cam_head if no VR)
   4. foxglove_bridge                   WebSocket -> Foxglove Studio in browser
   5. move_group                        planning scene for collision checking
   6. servo_node                        TwistStamped -> JointTrajectory at 100 Hz
@@ -49,7 +49,11 @@ from launch.actions import (
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -109,6 +113,10 @@ def generate_launch_description():
     servo_on = IfCondition(use_servo)
     foxglove_on = IfCondition(use_foxglove)
     vr_on = IfCondition(use_vr)
+    head_cam_on = IfCondition(PythonExpression([
+        "'", use_cameras, "'.lower() == 'true' and '",
+        use_vr, "'.lower() != 'true'",
+    ]))
 
     return LaunchDescription([
         # ---- Arguments ----
@@ -161,7 +169,7 @@ def generate_launch_description():
         # ============================================================
         _camera("cam_left", LaunchConfiguration("cam_left_serial"), cameras_on),
         _camera("cam_right", LaunchConfiguration("cam_right_serial"), cameras_on),
-        _camera("cam_head", LaunchConfiguration("cam_head_serial"), cameras_on),
+        _camera("cam_head", LaunchConfiguration("cam_head_serial"), head_cam_on),
 
         # ============================================================
         # 4. foxglove_bridge — WebSocket for Foxglove Studio in browser
