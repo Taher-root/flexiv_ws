@@ -272,10 +272,18 @@ E: Unable to fetch some archives, maybe run apt-get update or try with --fix-mis
 ```
 
 The date in the version string is the tell — compare it with today's. `apt`'s
-own suggestion at the end is the right one. A large `and NNN not upgraded` in
-the same output says the same thing.
+own suggestion at the end is the right one. (`and NNN not upgraded` in the same
+output means nothing here; it is just pending upgrades.)
 
-If `sudo apt update` does not clear it, the repository is mid-sync: the index
+Whether the index or the repository is at fault is one command:
+
+```bash
+sudo apt update
+apt policy ros-jazzy-image-proc
+```
+
+If the `Candidate:` version changes after the update, the index was stale and
+the problem is solved. If it does not, the repository is mid-sync: the index
 genuinely lists a `.deb` that has already been pruned from the pool, and no
 amount of retrying fixes it from this end. **It does not block the arms.** Only
 three keys in this workspace come from the image pipeline, and none of them is
