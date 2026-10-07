@@ -127,6 +127,14 @@ set_target_properties(joint_map_probe PROPERTIES
   CXX_STANDARD_REQUIRED ON)
 target_link_options(joint_map_probe PRIVATE "-Wl,--disable-new-dtags")
 
+# Read-only: lists all configured tools (grippers) on the robot.
+add_executable(tool_list_probe ../src/tool_list_probe.cpp)
+target_link_libraries(tool_list_probe flexiv::flexiv_rdk)
+set_target_properties(tool_list_probe PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON)
+target_link_options(tool_list_probe PRIVATE "-Wl,--disable-new-dtags")
+
 # The RT server. Links the RDK and nothing from ROS, which is the whole point
 # of the two-process split.
 add_executable(rt_server ../src/rt_server.cpp)
@@ -160,7 +168,7 @@ install(TARGETS servo_publish DESTINATION bin)
 # The static archive references spdlog and fmt without carrying them.
 find_package(spdlog QUIET)
 find_package(fmt QUIET)
-foreach(tgt rt_hold_probe joint_map_probe rt_server)
+foreach(tgt rt_hold_probe joint_map_probe tool_list_probe rt_server)
   if(spdlog_FOUND)
     target_link_libraries(${tgt} spdlog::spdlog)
   endif()
