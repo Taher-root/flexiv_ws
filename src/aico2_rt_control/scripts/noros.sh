@@ -33,10 +33,20 @@ for v in "${ROS_VARS[@]}"; do
     unset_args+=(-u "$v")
 done
 
+# cmake find_package also searches parent dirs of PATH entries, so
+# /opt/ros/jazzy/bin on PATH lets cmake find ament packages under
+# /opt/ros/jazzy/share/ even with CMAKE_PREFIX_PATH unset. Strip it.
+clean_path=""
+IFS=: read -ra _dirs <<< "${PATH:-}"
+for _d in "${_dirs[@]}"; do
+    [[ "$_d" == /opt/ros/* ]] && continue
+    clean_path="${clean_path:+$clean_path:}$_d"
+done
+
 if [[ $# -eq 0 ]]; then
     printf 'ROS-free shell. ROS_DISTRO and CMAKE_PREFIX_PATH are unset here.\n'
     printf 'Exit to return to your normal environment.\n\n'
-    exec env "${unset_args[@]}" NOROS=1 bash --norc -i
+    exec env "${unset_args[@]}" NOROS=1 PATH="$clean_path" bash --norc -i
 fi
 
-exec env "${unset_args[@]}" NOROS=1 "$@"
+exec env "${unset_args[@]}" NOROS=1 PATH="$clean_path" "$@"
