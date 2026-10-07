@@ -4,15 +4,35 @@ import * as THREE from 'three';
 var messageData = null;
 const camTextures = {};
 const camMeshes = {};
+let poseCount = 0;
+
+function logStatus(msg) {
+    const el = document.getElementById('log');
+    if (el) {
+        el.textContent = msg;
+        el.style.display = 'block';
+    }
+    console.log('[VR]', msg);
+}
 
 async function activateXR() {
+    logStatus('Checking WebXR support...');
+
+    if (!navigator.xr) {
+        logStatus('ERROR: WebXR not supported in this browser');
+        return;
+    }
+
+    const arSupported = await navigator.xr.isSessionSupported("immersive-ar");
+    const vrSupported = await navigator.xr.isSessionSupported("immersive-vr");
+    logStatus('AR: ' + arSupported + ', VR: ' + vrSupported);
+
     const canvas = document.createElement("canvas");
     document.body.appendChild(canvas);
     const gl = canvas.getContext("webgl", { xrCompatible: true });
 
     const scene = new THREE.Scene();
 
-    // Small green sphere: visible while clutch is held
     const indicator = new THREE.Mesh(
         new THREE.SphereGeometry(0.015, 12, 8),
         new THREE.MeshBasicMaterial({ color: 0x00ff00 })
@@ -20,7 +40,6 @@ async function activateXR() {
     indicator.visible = false;
     scene.add(indicator);
 
-    // Camera feed planes (positioned in front of the starting viewpoint)
     createCamPlane(scene, 'left',  -0.22, 0.15, -0.7);
     createCamPlane(scene, 'right',  0.22, 0.15, -0.7);
 
@@ -34,14 +53,24 @@ async function activateXR() {
     const camera = new THREE.PerspectiveCamera();
     camera.matrixAutoUpdate = false;
 
-    const session = await navigator.xr.requestSession("immersive-ar");
+    const mode = arSupported ? "immersive-ar" : "immersive-vr";
+    logStatus('Requesting ' + mode + ' session...');
+
+    let session;
+    try {
+        session = await navigator.xr.requestSession(mode);
+    } catch (e) {
+        logStatus('ERROR: ' + e.message);
+        return;
+    }
+    logStatus(mode + ' session started');
+
     session.updateRenderState({
         baseLayer: new XRWebGLLayer(session, gl),
     });
 
     const referenceSpace = await session.requestReferenceSpace('local');
 
-    // Refresh camera feeds at ~5 fps
     setInterval(fetchCamFrames, 200);
 
     const onXRFrame = (time, frame) => {
@@ -102,6 +131,10 @@ async function fetchCamFrames() {
 let lastBackTrigger = 0;
 
 function sendPose(data) {
+    poseCount++;
+    if (poseCount % 30 === 0) {
+        logStatus('Poses: ' + poseCount + ' | trigger: ' + data.backTriggerValue.toFixed(2));
+    }
     fetch('/pose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -114,7 +147,17 @@ function sendPose(data) {
 
 // ---- Controller data ----
 
+let controllerWarnCount = 0;
+
 function collectControllerData(session, frame, refSpace, indicator) {
+    if (session.inputSources.length === 0) {
+        controllerWarnCount++;
+        if (controllerWarnCount % 60 === 1) {
+            logStatus('No controllers detected (' + controllerWarnCount + ')');
+        }
+        return;
+    }
+
     for (const source of session.inputSources) {
         if (!source.gamepad) continue;
 
