@@ -51,6 +51,22 @@ rosdep update
 rosdep install --from-paths src --ignore-src -r -y
 ```
 
+**A build that works is not evidence that the dependencies are declared
+correctly.** `colcon` never resolves `buildtool_depend` or `exec_depend` against
+the system — it reads `<export><build_type>` to know how to build a package, and
+uses the dependency list only to order the workspace's own packages. Only
+`rosdep install` resolves those keys. So a bad declaration is invisible on a
+machine that already has everything installed, and fatal on the first fresh
+one: four packages declared `<buildtool_depend>ament_python</buildtool_depend>`,
+which is not a rosdep key, from the first commit on 2026-09-17 until it broke a
+laptop port on 2026-10-07. Nothing failed in between because nothing ever asked
+rosdep to install anything.
+
+Check #1 below exists for exactly this and did not catch it, because it passed
+`-r` to the dry run. `-r` means "continue despite errors", so an unresolvable
+key became a line on stdout and rosdep still exited 0. Fixed on 2026-10-07; the
+check no longer trusts the exit code alone.
+
 Every `package.xml` was audited on 2026-09-26 against what the code actually
 imports and what the launch files actually start. Nine packages were missing
 declarations at that point — including `rtabmap_slam` and `rtabmap_sync`, which
