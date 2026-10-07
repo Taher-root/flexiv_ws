@@ -211,7 +211,10 @@ def _build_nodes(context):
                     executable="vr_bridge",
                     name="vr_bridge",
                     output="screen",
-                    parameters=[{"planning_frame": planning_frame}],
+                    parameters=[{
+                        "planning_frame": planning_frame,
+                        "arm_ns": arm_ns,
+                    }],
                     condition=vr_on,
                 ),
             ],
