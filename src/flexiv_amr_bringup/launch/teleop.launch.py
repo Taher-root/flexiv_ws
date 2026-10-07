@@ -8,7 +8,7 @@ camera feeds, collision-checked arm motion, and the 1 kHz RT control loop:
 What runs (in staged order):
 
   1. robot_state_publisher            URDF -> TF
-  2. rt_bridge (ns /left_arm)         shm <-> ROS (joint_states, servo, FJT)
+  2. rt_bridge (ns /<arm>_arm)        shm <-> ROS (joint_states, servo, FJT)
   3. RealSense D456 cameras            /cam_left, /cam_right (+ /cam_head if no VR)
   4. foxglove_bridge                   WebSocket -> Foxglove Studio in browser
   5. move_group                        planning scene for collision checking
@@ -26,11 +26,11 @@ ws://<laptop-ip>:8765. Add Image panels for /cam_left/cam_left/color/image_raw,
 /cam_right/cam_right/color/image_raw, /cam_head/cam_head/color/image_raw.
 
 Usage:
-  # Default (serials baked in, no VR):
+  # Default (left arm, no VR):
   ros2 launch flexiv_amr_bringup teleop.launch.py
 
-  # With VR teleop (Quest 3 via ADB: adb reverse tcp:8181 tcp:8181):
-  ros2 launch flexiv_amr_bringup teleop.launch.py use_vr:=true
+  # Right arm with VR teleop:
+  ros2 launch flexiv_amr_bringup teleop.launch.py arm:=right use_vr:=true
 
   # Skip cameras (already running elsewhere):
   ros2 launch flexiv_amr_bringup teleop.launch.py use_cameras:=false
@@ -45,6 +45,7 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
+    OpaqueFunction,
     TimerAction,
 )
 from launch.conditions import IfCondition
@@ -56,6 +57,8 @@ from launch.substitutions import (
 )
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+
+_PLANNING_FRAMES = {"left": "Left_link0", "right": "Right_link0"}
 
 SERVO_DELAY = 4.0
 MOVE_GROUP_DELAY = 2.0
@@ -96,7 +99,11 @@ def _include(package, launch_file, launch_arguments=None, condition=None):
     )
 
 
-def generate_launch_description():
+def _build_nodes(context):
+    arm = context.launch_configurations.get("arm", "left")
+    arm_ns = f"{arm}_arm"
+    planning_frame = _PLANNING_FRAMES.get(arm, "Left_link0")
+
     use_cameras = LaunchConfiguration("use_cameras")
     use_servo = LaunchConfiguration("use_servo")
     use_foxglove = LaunchConfiguration("use_foxglove")
@@ -118,28 +125,7 @@ def generate_launch_description():
         use_vr, "'.lower() != 'true'",
     ]))
 
-    return LaunchDescription([
-        # ---- Arguments ----
-        DeclareLaunchArgument("use_cameras", default_value="true",
-                              description="Launch the 3 RealSense D456 cameras"),
-        DeclareLaunchArgument("use_servo", default_value="true",
-                              description="Launch MoveIt Servo + move_group "
-                                          "(false for direct joint streaming)"),
-        DeclareLaunchArgument("use_foxglove", default_value="true",
-                              description="Launch foxglove_bridge for browser "
-                                          "video streaming"),
-        DeclareLaunchArgument("use_vr", default_value="false",
-                              description="Launch VR teleop bridge (WebXR "
-                                          "controller to Servo twist)"),
-        DeclareLaunchArgument("cam_left_serial", default_value="_327622300610",
-                              description="Serial of the left-view D456"),
-        DeclareLaunchArgument("cam_right_serial", default_value="_327622300144",
-                              description="Serial of the right-view D456"),
-        DeclareLaunchArgument("cam_head_serial", default_value="_324422301136",
-                              description="Serial of the head-mounted D456"),
-        DeclareLaunchArgument("shm_name", default_value="/aico2_rt_control",
-                              description="Shared memory name for rt_server"),
-
+    return [
         # ============================================================
         # 1. robot_state_publisher — URDF -> TF
         # ============================================================
@@ -153,19 +139,19 @@ def generate_launch_description():
         ),
 
         # ============================================================
-        # 2. rt_bridge — shm <-> ROS, namespaced to /left_arm
+        # 2. rt_bridge — shm <-> ROS, namespaced to /<arm>_arm
         # ============================================================
         Node(
             package="aico2_rt_control",
             executable="rt_bridge",
             name="rt_bridge",
-            namespace="left_arm",
+            namespace=arm_ns,
             output="screen",
             parameters=[{"shm_name": LaunchConfiguration("shm_name")}],
         ),
 
         # ============================================================
-        # 3. Three RealSense D456 cameras — color only for operator view
+        # 3. RealSense D456 cameras — color only for operator view
         # ============================================================
         _camera("cam_left", LaunchConfiguration("cam_left_serial"), cameras_on),
         _camera("cam_right", LaunchConfiguration("cam_right_serial"), cameras_on),
@@ -207,6 +193,7 @@ def generate_launch_description():
             period=SERVO_DELAY,
             actions=[
                 _include("aico2_moveit_config", "servo.launch.py",
+                         launch_arguments={"arm": arm},
                          condition=servo_on),
             ],
         ),
@@ -219,8 +206,41 @@ def generate_launch_description():
         TimerAction(
             period=VR_DELAY,
             actions=[
-                _include("aico2_vr_teleop", "vr_bridge.launch.py",
-                         condition=vr_on),
+                Node(
+                    package="aico2_vr_teleop",
+                    executable="vr_bridge",
+                    name="vr_bridge",
+                    output="screen",
+                    parameters=[{"planning_frame": planning_frame}],
+                    condition=vr_on,
+                ),
             ],
         ),
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument("arm", default_value="left",
+                              description="Which arm to teleop: left or right"),
+        DeclareLaunchArgument("use_cameras", default_value="true",
+                              description="Launch the RealSense D456 cameras"),
+        DeclareLaunchArgument("use_servo", default_value="true",
+                              description="Launch MoveIt Servo + move_group "
+                                          "(false for direct joint streaming)"),
+        DeclareLaunchArgument("use_foxglove", default_value="true",
+                              description="Launch foxglove_bridge for browser "
+                                          "video streaming"),
+        DeclareLaunchArgument("use_vr", default_value="false",
+                              description="Launch VR teleop bridge (WebXR "
+                                          "controller to Servo twist)"),
+        DeclareLaunchArgument("cam_left_serial", default_value="_327622300610",
+                              description="Serial of the left-view D456"),
+        DeclareLaunchArgument("cam_right_serial", default_value="_327622300144",
+                              description="Serial of the right-view D456"),
+        DeclareLaunchArgument("cam_head_serial", default_value="_324422301136",
+                              description="Serial of the head-mounted D456"),
+        DeclareLaunchArgument("shm_name", default_value="/aico2_rt_control",
+                              description="Shared memory name for rt_server"),
+        OpaqueFunction(function=_build_nodes),
     ])

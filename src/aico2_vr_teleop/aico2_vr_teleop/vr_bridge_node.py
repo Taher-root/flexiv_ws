@@ -8,6 +8,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import TwistStamped
 from sensor_msgs.msg import Image
+from moveit_msgs.srv import ServoCommandType
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -91,6 +92,8 @@ class VRBridgeNode(Node):
         self.camera_jpgs = {}
         self._setup_cameras(camera_topics, camera_names)
 
+        self._switch_servo_to_twist()
+
         app = self._create_app()
 
         thread = threading.Thread(
@@ -98,6 +101,29 @@ class VRBridgeNode(Node):
         )
         thread.start()
         self.get_logger().info(f'VR bridge serving on http://{host}:{port}')
+
+    # ------------------------------------------------------------------
+    # Servo activation
+    # ------------------------------------------------------------------
+
+    def _switch_servo_to_twist(self):
+        cli = self.create_client(
+            ServoCommandType, '/servo_node/switch_command_type',
+        )
+        if not cli.wait_for_service(timeout_sec=10.0):
+            self.get_logger().warn(
+                'servo switch_command_type service not available; '
+                'servo may not accept twist commands',
+            )
+            return
+        req = ServoCommandType.Request()
+        req.command_type = req.TWIST
+        future = cli.call_async(req)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+        if future.result() is not None:
+            self.get_logger().info('Servo switched to TWIST mode')
+        else:
+            self.get_logger().warn('Failed to switch servo to TWIST mode')
 
     # ------------------------------------------------------------------
     # Camera subscriptions
