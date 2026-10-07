@@ -4,7 +4,7 @@ import * as THREE from 'three';
 var messageData = null;
 const camTextures = {};
 const camMeshes = {};
-let poseCount = 0;
+const poseCounts = { left: 0, right: 0 };
 
 function logStatus(msg) {
     const el = document.getElementById('log');
@@ -33,12 +33,21 @@ async function activateXR() {
 
     const scene = new THREE.Scene();
 
-    const indicator = new THREE.Mesh(
+    const indicatorLeft = new THREE.Mesh(
+        new THREE.SphereGeometry(0.015, 12, 8),
+        new THREE.MeshBasicMaterial({ color: 0x00aaff })
+    );
+    indicatorLeft.visible = false;
+    scene.add(indicatorLeft);
+
+    const indicatorRight = new THREE.Mesh(
         new THREE.SphereGeometry(0.015, 12, 8),
         new THREE.MeshBasicMaterial({ color: 0x00ff00 })
     );
-    indicator.visible = false;
-    scene.add(indicator);
+    indicatorRight.visible = false;
+    scene.add(indicatorRight);
+
+    const indicators = { left: indicatorLeft, right: indicatorRight };
 
     createCamPlane(scene, 'left',  -0.22, 0.15, -0.7);
     createCamPlane(scene, 'right',  0.22, 0.15, -0.7);
@@ -90,7 +99,7 @@ async function activateXR() {
             renderer.render(scene, camera);
         }
 
-        collectControllerData(session, frame, referenceSpace, indicator);
+        collectControllerData(session, frame, referenceSpace, indicators);
     };
     session.requestAnimationFrame(onXRFrame);
 }
@@ -128,12 +137,17 @@ async function fetchCamFrames() {
 
 // ---- Pose sending ----
 
-let lastBackTrigger = 0;
-
 function sendPose(data) {
-    poseCount++;
-    if (poseCount % 30 === 0) {
-        logStatus('Poses: ' + poseCount + ' | trigger: ' + data.backTriggerValue.toFixed(2));
+    const h = data.hand || 'unknown';
+    poseCounts[h] = (poseCounts[h] || 0) + 1;
+    const total = (poseCounts.left || 0) + (poseCounts.right || 0);
+    if (total % 30 === 0) {
+        logStatus(
+            'L:' + (poseCounts.left || 0) +
+            ' R:' + (poseCounts.right || 0) +
+            ' | trig: ' + data.backTriggerValue.toFixed(2) +
+            ' (' + h + ')'
+        );
     }
     fetch('/pose', {
         method: 'POST',
@@ -149,7 +163,7 @@ function sendPose(data) {
 
 let controllerWarnCount = 0;
 
-function collectControllerData(session, frame, refSpace, indicator) {
+function collectControllerData(session, frame, refSpace, indicators) {
     if (session.inputSources.length === 0) {
         controllerWarnCount++;
         if (controllerWarnCount % 60 === 1) {
@@ -162,20 +176,21 @@ function collectControllerData(session, frame, refSpace, indicator) {
         if (!source.gamepad) continue;
 
         const hand = source.handedness || source.gamepad.hand;
-        if (hand === 'left') continue;
+        if (hand !== 'left' && hand !== 'right') continue;
 
         const pose = frame.getPose(source.gripSpace, refSpace);
         if (!pose) continue;
 
         const gp = source.gamepad;
         const backTrigger = gp.buttons[1].value;
-        lastBackTrigger = backTrigger;
 
-        // Show indicator near controller when clutch is held
-        indicator.visible = backTrigger > 0.95;
-        if (indicator.visible) {
-            const p = pose.transform.position;
-            indicator.position.set(p.x, p.y + 0.06, p.z);
+        const ind = indicators[hand];
+        if (ind) {
+            ind.visible = backTrigger > 0.95;
+            if (ind.visible) {
+                const p = pose.transform.position;
+                ind.position.set(p.x, p.y + 0.06, p.z);
+            }
         }
 
         const pos = pose.transform.position;
