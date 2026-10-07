@@ -10,8 +10,10 @@
 
     Two processes, because one cannot hold both: rt_server links the RDK and no
     ROS, rt_bridge links rclcpp and no RDK, and they share a small block of
-    shared memory. colcon builds only rt_bridge; the RDK programs have their own
-    plain CMake project under standalone/. See README.md.
+    shared memory. colcon builds everything that does not link the RDK --
+    rt_bridge, the shared-memory tools, the fake server and the tests -- and the
+    three RDK programs have their own plain CMake project under standalone/.
+    See README.md.
 
     Verified on hardware: 1 kHz with zero missed deadlines and 0.001 degrees of
     tracking error.
@@ -27,6 +29,8 @@
   <depend>trajectory_msgs</depend>
   <depend>control_msgs</depend>
   <depend>std_srvs</depend>
+
+  <test_depend>ament_cmake_test</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

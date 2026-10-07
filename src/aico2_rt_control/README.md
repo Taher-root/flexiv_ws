@@ -16,16 +16,20 @@ except one. The last blocker is installing the C++ library, a free download. See
 ## Start here: first-time setup, in order
 
 Verified end to end on `Rizon4-063352`. Expect 30–60 minutes, most of it waiting
-for Boost to build. Everything below the "Background" line is explanation, not
+for Boost to build — steps 1–7 are quick, and steps 6 and 6b need no robot and no
+RDK at all, so they are worth doing first. Everything below the "Background" line is explanation, not
 instructions.
 
 **Read these four traps first.** Each one cost real time to find:
 
-1. **`colcon` does not build the RT server.** This package has two build
-   systems on purpose: `colcon` builds `rt_bridge` (links `rclcpp`), and
-   `standalone/` is a plain CMake project for the RDK programs (link the RDK).
-   A binary linking both pulls two incompatible Fast-DDS versions into one
-   address space. **After a `git pull` you must rebuild both.**
+1. **`colcon` does not build the three RDK programs.** This package has two
+   build systems on purpose. `colcon` builds everything that does *not* link
+   the RDK — `rt_bridge`, `traj_publish`, `servo_publish`, `fake_server` and
+   the tests. `standalone/` is a plain CMake project for the three that do:
+   `rt_server`, `rt_hold_probe`, `joint_map_probe`. A binary linking both the
+   RDK and `rclcpp` pulls two incompatible Fast-DDS versions into one address
+   space, and merely *configuring* the RDK from a ROS-sourced shell picks the
+   wrong Fast-DDS silently. **After a `git pull` you must rebuild both.**
 2. **The RDK build must not see ROS 2.** `find_package` consults the
    *environment* `CMAKE_PREFIX_PATH`, so a shell with ROS sourced links Jazzy's
    Fast-DDS and the result stack-smashes. `noros.sh` and `install_rdk.sh
@@ -84,19 +88,34 @@ cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/rdk_standalone && cmake --build bu
 ### 5. Build both halves
 
 ```bash
-# RT half -- inside a noros.sh shell
+# Everything that does not link the RDK: the bridge, the shm tools,
+# fake_server and the tests.
+cd ~/flexiv_ws
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select aico2_rt_control
+
+# The three RDK programs -- inside a noros.sh shell
+bash src/aico2_rt_control/scripts/noros.sh
 cd ~/flexiv_ws/src/aico2_rt_control/standalone
 cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/rdk_standalone
 cmake --build build -j
 exit                                   # leave the ROS-free shell
-
-# ROS half
-cd ~/flexiv_ws
-source /opt/ros/jazzy/setup.bash
-colcon build --packages-select aico2_rt_control
 ```
 
-### 6. Run the tests (no robot, no ROS, ~1 s)
+### 6. Run the tests (no robot, no RDK, ~1 s)
+
+```bash
+cd ~/flexiv_ws
+colcon test --packages-select aico2_rt_control
+colcon test-result --verbose
+```
+
+Five suites: the shared-memory protocol, the sampler's maths, the 1 kHz state
+machine, goal validation, and the servo tracker. All five must pass before
+pointing anything at an arm.
+
+On a machine with **no ROS at all**, the same five build and run through their
+own plain CMake project, which also keeps `-Werror` on:
 
 ```bash
 cd ~/flexiv_ws/src/aico2_rt_control/test
@@ -104,9 +123,19 @@ cmake -S . -B build && cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Five suites: the shared-memory protocol, the sampler's maths, the 1 kHz state
-machine, goal validation, and the servo tracker. All five must pass before
-pointing anything at an arm.
+### 6b. Rehearse the whole thing with no robot and no RDK
+
+`fake_server` is `rt_server` with the robot replaced by a model, so the shared
+memory, the bridge, the action server and the servo tracker can all be
+exercised on a laptop. Worth doing before touching an arm, and it is the only
+part of the RT path that needs nothing installed beyond this workspace:
+
+```bash
+ros2 run aico2_rt_control fake_server &
+ros2 run aico2_rt_control rt_bridge --ros-args -r __ns:=/left_arm &
+ros2 run aico2_rt_control traj_publish --list            # reads the shm state
+ros2 run aico2_rt_control servo_publish --list
+```
 
 ### 7. Check the robot and the loop
 
