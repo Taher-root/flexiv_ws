@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AICO2 VR Teleop</title>
+    <script type="importmap">
+        {
+          "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.126.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.126.0/examples/jsm/"
+          }
+        }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/webxr-polyfill@latest/build/webxr-polyfill.js"></script>
+    <link rel="stylesheet" href="static/index.css">
+</head>
+<body>
+    <div class="container">
+        <div class="intro-content">
+            <h1>AICO2 VR Teleop</h1>
+            <p>Control the arm with the right controller. Hold the back trigger to move; release to stop.</p>
+            <button class="button" id="start-button">Start</button>
+            <div class="message" id="log"></div>
+        </div>
+    </div>
+    <script type="module" src="static/index.js"></script>
+</body>
+</html>
