@@ -9,6 +9,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import TwistStamped
 from sensor_msgs.msg import Image
 from moveit_msgs.srv import ServoCommandType
+from std_srvs.srv import SetBool
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -66,6 +67,7 @@ class VRBridgeNode(Node):
         self.declare_parameter('max_angular_vel', 1.0)
         self.declare_parameter('clutch_threshold', 0.95)
         self.declare_parameter('planning_frame', 'Left_link0')
+        self.declare_parameter('arm_ns', 'left_arm')
         self.declare_parameter('camera_topics', [
             '/cam_left/cam_left/color/image_raw',
             '/cam_right/cam_right/color/image_raw',
@@ -78,6 +80,7 @@ class VRBridgeNode(Node):
         self.max_ang = float(self.get_parameter('max_angular_vel').value)
         self.clutch_thresh = float(self.get_parameter('clutch_threshold').value)
         self.planning_frame = str(self.get_parameter('planning_frame').value)
+        self.arm_ns = str(self.get_parameter('arm_ns').value)
         camera_topics = list(self.get_parameter('camera_topics').value)
         camera_names = list(self.get_parameter('camera_names').value)
 
@@ -93,6 +96,7 @@ class VRBridgeNode(Node):
         self._setup_cameras(camera_topics, camera_names)
 
         self._switch_servo_to_twist()
+        self._enable_teleop_mode()
 
         app = self._create_app()
 
@@ -124,6 +128,28 @@ class VRBridgeNode(Node):
             self.get_logger().info('Servo switched to TWIST mode')
         else:
             self.get_logger().warn('Failed to switch servo to TWIST mode')
+
+    # ------------------------------------------------------------------
+    # Teleop mode activation
+    # ------------------------------------------------------------------
+
+    def _enable_teleop_mode(self):
+        srv_name = f'/{self.arm_ns}/set_teleop_mode'
+        cli = self.create_client(SetBool, srv_name)
+        if not cli.wait_for_service(timeout_sec=10.0):
+            self.get_logger().warn(
+                f'{srv_name} service not available; '
+                'rt_bridge may reject servo commands',
+            )
+            return
+        req = SetBool.Request()
+        req.data = True
+        future = cli.call_async(req)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+        if future.result() is not None and future.result().success:
+            self.get_logger().info('Teleop mode enabled')
+        else:
+            self.get_logger().warn('Failed to enable teleop mode')
 
     # ------------------------------------------------------------------
     # Camera subscriptions
