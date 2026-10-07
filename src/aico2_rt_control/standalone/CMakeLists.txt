@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16.3)
 project(aico2_rt_control_standalone CXX)
 
-# Builds rt_hold_probe with no ROS involvement at all.
+# Builds the RT server, probes and shm tools with no ROS involvement at all.
 #
 # Why this exists: the RDK v1.9 "ros2-jazzy" prebuilt archive stack-smashes in
 # the Robot constructor when linked against the Fast-DDS 2.14.6 / Fast-CDR 2.2.7
@@ -19,12 +19,14 @@ project(aico2_rt_control_standalone CXX)
 # software supporting v1.9.4+ (one self-contained .so with hidden symbols, where
 # the question cannot arise).
 #
-# Deliberately mirrors flexiv_rdk/example/CMakeLists.txt, so if this builds and
-# the examples build, nothing here is the difference.
+# Build:
+#   cd standalone && mkdir -p build && cd build
+#   cmake .. && make
 #
-#   cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/rdk_standalone
-#   cmake --build build -j
-#   ./build/rt_hold_probe Rizon4-063352
+# The RDK is found automatically. Search order:
+#   1. CMAKE_PREFIX_PATH (if you installed the RDK to a prefix)
+#   2. FLEXIV_RDK_DIR environment variable or cmake variable
+#   3. Common sibling directories relative to this workspace
 #
 # Do NOT source ROS 2 before configuring this: the point is to keep ROS's
 # Fast-DDS off the link line.
@@ -34,7 +36,63 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 message(STATUS "build type ${CMAKE_BUILD_TYPE}")
 
-find_package(flexiv_rdk REQUIRED)
+# ---------------------------------------------------------------------------
+# Find the Flexiv RDK: try installed package first, then source tree
+# ---------------------------------------------------------------------------
+find_package(flexiv_rdk QUIET)
+
+if(NOT flexiv_rdk_FOUND)
+  # Locate the RDK source tree. Check FLEXIV_RDK_DIR, then common locations.
+  if(NOT FLEXIV_RDK_DIR)
+    set(FLEXIV_RDK_DIR "$ENV{FLEXIV_RDK_DIR}")
+  endif()
+
+  if(NOT FLEXIV_RDK_DIR OR NOT EXISTS "${FLEXIV_RDK_DIR}/CMakeLists.txt")
+    # Walk up from this CMakeLists.txt to the workspace root:
+    #   standalone/ -> aico2_rt_control/ -> src/ -> flexiv_ws/
+    get_filename_component(_WS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+
+    set(_SEARCH_PATHS
+      # Sibling to the workspace (e.g. ~/flexiv_rdk next to ~/flexiv_ws)
+      "${_WS_ROOT}/../flexiv_rdk"
+      # Under a flexivrobotics folder next to the workspace
+      "${_WS_ROOT}/../flexivrobotics/flexiv_rdk"
+      # Inside ~/Documents
+      "$ENV{HOME}/Documents/flexiv_rdk"
+      "$ENV{HOME}/Documents/flexivrobotics/flexiv_rdk"
+      # Home directory
+      "$ENV{HOME}/flexiv_rdk"
+      "$ENV{HOME}/flexivrobotics/flexiv_rdk"
+      # Installed prefix
+      "$ENV{HOME}/rdk_standalone"
+    )
+
+    foreach(_path ${_SEARCH_PATHS})
+      get_filename_component(_path "${_path}" ABSOLUTE)
+      if(EXISTS "${_path}/CMakeLists.txt" AND EXISTS "${_path}/include/flexiv")
+        set(FLEXIV_RDK_DIR "${_path}")
+        break()
+      endif()
+    endforeach()
+  endif()
+
+  if(FLEXIV_RDK_DIR AND EXISTS "${FLEXIV_RDK_DIR}/CMakeLists.txt")
+    message(STATUS "Using Flexiv RDK source tree: ${FLEXIV_RDK_DIR}")
+    add_subdirectory("${FLEXIV_RDK_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/flexiv_rdk")
+  else()
+    message(FATAL_ERROR
+      "Could not find flexiv_rdk. Searched:\n"
+      "  - CMAKE_PREFIX_PATH (find_package)\n"
+      "  - FLEXIV_RDK_DIR variable\n"
+      "  - Common paths relative to workspace\n"
+      "\n"
+      "Fix: set -DFLEXIV_RDK_DIR=/path/to/flexiv_rdk or\n"
+      "     set -DCMAKE_PREFIX_PATH=/path/to/rdk_install_prefix")
+  endif()
+else()
+  message(STATUS "Found installed flexiv_rdk: ${flexiv_rdk_DIR}")
+endif()
+
 find_package(Threads REQUIRED)
 
 add_executable(rt_hold_probe ../src/rt_hold_probe.cpp)
