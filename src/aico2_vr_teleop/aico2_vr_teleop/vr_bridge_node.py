@@ -8,7 +8,8 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import TwistStamped
 from sensor_msgs.msg import Image
-from std_msgs.msg import Float32
+from std_msgs.msg import Empty, Float32
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from moveit_msgs.srv import ServoCommandType
 from std_srvs.srv import SetBool
 
@@ -16,6 +17,8 @@ import uvicorn
 from fastapi import FastAPI, Request
 from starlette.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
+
+READY_POSITIONS = [0.0, -0.7145, 0.0, 1.6559, 0.0, 1.5708, 0.0]
 
 TF_RUB2FLU = np.array([
     [0, 0, -1, 0],
@@ -86,8 +89,9 @@ class VRBridgeNode(Node):
         self.declare_parameter('camera_topics', [
             '/cam_left/cam_left/color/image_raw',
             '/cam_right/cam_right/color/image_raw',
+            '/cam_head/cam_head/color/image_raw',
         ])
-        self.declare_parameter('camera_names', ['left', 'right'])
+        self.declare_parameter('camera_names', ['left', 'right', 'head'])
 
         port = int(self.get_parameter('port').value)
         host = str(self.get_parameter('host').value)
@@ -107,6 +111,8 @@ class VRBridgeNode(Node):
                 pf = str(self.get_parameter(f'{side}_planning_frame').value)
                 ns = str(self.get_parameter(f'{side}_arm_ns').value)
                 tt = str(self.get_parameter(f'{side}_twist_topic').value)
+                prefix = ns.split('_')[0].capitalize()
+                jnames = [f'{prefix}_joint{i}' for i in range(1, 8)]
                 self._hands[side] = {
                     'planning_frame': pf,
                     'arm_ns': ns,
@@ -114,14 +120,22 @@ class VRBridgeNode(Node):
                     'twist_pub': self.create_publisher(TwistStamped, tt, 10),
                     'gripper_pub': self.create_publisher(
                         Float32, f'/{ns}/gripper_command', 10),
+                    'servo_cmd_pub': self.create_publisher(
+                        JointTrajectory, f'/{ns}/servo_joint_command', 10),
+                    'joint_names': jnames,
                     'gripper_grasping': False,
                     'prev_pose': None,
                     'prev_time': None,
+                    'go_to_ready': False,
+                    'button_a_held': False,
+                    'button_b_held': False,
                 }
         else:
             pf = str(self.get_parameter('planning_frame').value)
             ns = str(self.get_parameter('arm_ns').value)
             tt = str(self.get_parameter('twist_topic').value)
+            prefix = ns.split('_')[0].capitalize()
+            jnames = [f'{prefix}_joint{i}' for i in range(1, 8)]
             self._hands[hand_mode] = {
                 'planning_frame': pf,
                 'arm_ns': ns,
@@ -129,10 +143,19 @@ class VRBridgeNode(Node):
                 'twist_pub': self.create_publisher(TwistStamped, tt, 10),
                 'gripper_pub': self.create_publisher(
                     Float32, f'/{ns}/gripper_command', 10),
+                'servo_cmd_pub': self.create_publisher(
+                    JointTrajectory, f'/{ns}/servo_joint_command', 10),
+                'joint_names': jnames,
                 'gripper_grasping': False,
                 'prev_pose': None,
                 'prev_time': None,
+                'go_to_ready': False,
+                'button_a_held': False,
+                'button_b_held': False,
             }
+
+        self._record_toggle_pub = self.create_publisher(
+            Empty, '/episode_recorder/toggle', 10)
 
         self.camera_jpgs = {}
         self._setup_cameras(camera_topics, camera_names)
@@ -279,7 +302,9 @@ class VRBridgeNode(Node):
         async def pose(request: Request):
             try:
                 data = await request.json()
-                node._handle_pose(data)
+                items = data if isinstance(data, list) else [data]
+                for d in items:
+                    node._handle_pose(d)
                 status = 'ok'
             except Exception:
                 status = 'error'
@@ -317,9 +342,38 @@ class VRBridgeNode(Node):
         front_trigger = float(message.get('triggerValue', 0))
         self._handle_gripper(h, front_trigger)
 
+        button_a = float(message.get('buttonAValue', 0))
+        button_b = float(message.get('buttonBValue', 0))
+        back_trigger = float(message.get('backTriggerValue', 0))
+
+        if button_b > 0.5 and not h['button_b_held']:
+            h['button_b_held'] = True
+            self._record_toggle_pub.publish(Empty())
+        elif button_b < 0.2:
+            h['button_b_held'] = False
+
+        with self._lock:
+            if button_a > 0.5 and not h['button_a_held']:
+                h['button_a_held'] = True
+                h['go_to_ready'] = not h['go_to_ready']
+                if h['go_to_ready']:
+                    h['prev_pose'] = None
+                    h['prev_time'] = None
+                    self._publish_twist(h, np.zeros(3), np.zeros(3))
+                    self.get_logger().info(
+                        f'Go-to-ready activated ({hand})')
+                else:
+                    self.get_logger().info(
+                        f'Go-to-ready cancelled ({hand})')
+            elif button_a < 0.2:
+                h['button_a_held'] = False
+
+            if h['go_to_ready']:
+                self._publish_ready(h)
+                return
+
         position = message['position']
         orientation = message['orientation']
-        back_trigger = float(message.get('backTriggerValue', 0))
 
         pos = np.array([position['x'], position['y'], position['z']])
         quat = np.array([
@@ -381,6 +435,15 @@ class VRBridgeNode(Node):
             msg = Float32()
             msg.data = 0.0
             h['gripper_pub'].publish(msg)
+
+    def _publish_ready(self, h):
+        msg = JointTrajectory()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.joint_names = h['joint_names']
+        pt = JointTrajectoryPoint()
+        pt.positions = READY_POSITIONS
+        msg.points = [pt]
+        h['servo_cmd_pub'].publish(msg)
 
     def _publish_twist(self, h, linear, angular):
         msg = TwistStamped()

@@ -4,7 +4,7 @@ import * as THREE from 'three';
 var messageData = null;
 const camTextures = {};
 const camMeshes = {};
-const poseCounts = { left: 0, right: 0 };
+let poseCount = 0;
 
 function logStatus(msg) {
     const el = document.getElementById('log');
@@ -51,6 +51,7 @@ async function activateXR() {
 
     createCamPlane(scene, 'left',  -0.22, 0.15, -0.7);
     createCamPlane(scene, 'right',  0.22, 0.15, -0.7);
+    createCamPlane(scene, 'head',   0.00, -0.12, -0.7);
 
     const renderer = new THREE.WebGLRenderer({
         alpha: true,
@@ -137,22 +138,17 @@ async function fetchCamFrames() {
 
 // ---- Pose sending ----
 
-function sendPose(data) {
-    const h = data.hand || 'unknown';
-    poseCounts[h] = (poseCounts[h] || 0) + 1;
-    const total = (poseCounts.left || 0) + (poseCounts.right || 0);
-    if (total % 30 === 0) {
-        logStatus(
-            'L:' + (poseCounts.left || 0) +
-            ' R:' + (poseCounts.right || 0) +
-            ' | trig: ' + data.backTriggerValue.toFixed(2) +
-            ' (' + h + ')'
-        );
+let lastTriggerStr = '';
+
+function sendBatch(batch) {
+    poseCount++;
+    if (poseCount % 30 === 0) {
+        logStatus('Frames: ' + poseCount + ' | ' + lastTriggerStr);
     }
     fetch('/pose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body: JSON.stringify(batch),
     })
     .then(r => r.json())
     .then(d => { messageData = d; })
@@ -171,6 +167,8 @@ function collectControllerData(session, frame, refSpace, indicators) {
         }
         return;
     }
+
+    const batch = [];
 
     for (const source of session.inputSources) {
         if (!source.gamepad) continue;
@@ -196,7 +194,9 @@ function collectControllerData(session, frame, refSpace, indicators) {
         const pos = pose.transform.position;
         const ori = pose.transform.orientation;
 
-        sendPose({
+        lastTriggerStr = hand[0] + ':' + backTrigger.toFixed(2);
+
+        batch.push({
             position:    { x: pos.x,  y: pos.y,  z: pos.z  },
             orientation: { x: ori.x,  y: ori.y,  z: ori.z,  w: ori.w  },
             hand:             hand,
@@ -206,6 +206,10 @@ function collectControllerData(session, frame, refSpace, indicators) {
             buttonBValue:     gp.buttons[5].value,
             timestamp:        Date.now(),
         });
+    }
+
+    if (batch.length > 0) {
+        sendBatch(batch);
     }
 }
 
