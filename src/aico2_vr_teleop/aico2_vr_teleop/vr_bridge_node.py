@@ -8,6 +8,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import TwistStamped
 from sensor_msgs.msg import Image
+from std_msgs.msg import Float32
 from moveit_msgs.srv import ServoCommandType
 from std_srvs.srv import SetBool
 
@@ -66,6 +67,7 @@ class VRBridgeNode(Node):
         self.declare_parameter('max_linear_vel', 0.3)
         self.declare_parameter('max_angular_vel', 1.0)
         self.declare_parameter('clutch_threshold', 0.95)
+        self.declare_parameter('gripper_force', 20.0)
         self.declare_parameter('hand', 'right')
 
         self.declare_parameter('planning_frame', 'Left_link0')
@@ -92,6 +94,7 @@ class VRBridgeNode(Node):
         self.max_lin = float(self.get_parameter('max_linear_vel').value)
         self.max_ang = float(self.get_parameter('max_angular_vel').value)
         self.clutch_thresh = float(self.get_parameter('clutch_threshold').value)
+        self.gripper_force = float(self.get_parameter('gripper_force').value)
         hand_mode = str(self.get_parameter('hand').value)
         camera_topics = list(self.get_parameter('camera_topics').value)
         camera_names = list(self.get_parameter('camera_names').value)
@@ -109,6 +112,9 @@ class VRBridgeNode(Node):
                     'arm_ns': ns,
                     'twist_topic': tt,
                     'twist_pub': self.create_publisher(TwistStamped, tt, 10),
+                    'gripper_pub': self.create_publisher(
+                        Float32, f'/{ns}/gripper_command', 10),
+                    'gripper_grasping': False,
                     'prev_pose': None,
                     'prev_time': None,
                 }
@@ -121,6 +127,9 @@ class VRBridgeNode(Node):
                 'arm_ns': ns,
                 'twist_topic': tt,
                 'twist_pub': self.create_publisher(TwistStamped, tt, 10),
+                'gripper_pub': self.create_publisher(
+                    Float32, f'/{ns}/gripper_command', 10),
+                'gripper_grasping': False,
                 'prev_pose': None,
                 'prev_time': None,
             }
@@ -305,6 +314,9 @@ class VRBridgeNode(Node):
 
         h = self._hands[hand]
 
+        front_trigger = float(message.get('triggerValue', 0))
+        self._handle_gripper(h, front_trigger)
+
         position = message['position']
         orientation = message['orientation']
         back_trigger = float(message.get('backTriggerValue', 0))
@@ -357,6 +369,18 @@ class VRBridgeNode(Node):
 
             h['prev_pose'] = pose_ros.copy()
             h['prev_time'] = now
+
+    def _handle_gripper(self, h, trigger):
+        if trigger > 0.5 and not h['gripper_grasping']:
+            h['gripper_grasping'] = True
+            msg = Float32()
+            msg.data = self.gripper_force
+            h['gripper_pub'].publish(msg)
+        elif trigger < 0.2 and h['gripper_grasping']:
+            h['gripper_grasping'] = False
+            msg = Float32()
+            msg.data = 0.0
+            h['gripper_pub'].publish(msg)
 
     def _publish_twist(self, h, linear, angular):
         msg = TwistStamped()
