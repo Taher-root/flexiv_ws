@@ -84,8 +84,8 @@ scene_collision_proximity_threshold: 0.02
 ###############################################
 # Singularity management
 ###############################################
-lower_singularity_threshold: 30.0
-hard_stop_singularity_threshold: 60.0
+lower_singularity_threshold: 500.0
+hard_stop_singularity_threshold: 1000.0
 leaving_singularity_threshold_multiplier: 2.0
 
 ###############################################
