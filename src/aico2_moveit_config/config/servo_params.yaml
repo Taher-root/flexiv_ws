@@ -1,0 +1,95 @@
+# MoveIt Servo parameters for the left Rizon 4 arm.
+#
+# Servo takes Cartesian twist commands (TwistStamped) or joint jog commands
+# (JointJog) and produces joint-level trajectory commands at publish_period,
+# with online collision checking and singularity management. Its output goes
+# to rt_bridge's servo_joint_command topic, which feeds the 1 kHz RT loop
+# through shm.
+#
+# The planning_frame is Left_link0 (the arm's base), not base_link: Servo
+# resolves the twist in the planning frame, and a twist expressed in the arm
+# base is what the VR teleop's IK produces. Using base_link would add the
+# waist joints to the chain, which is correct for left_arm_waist but not for
+# left_arm.
+#
+# publish_period is 0.01 s (100 Hz). The RT tracker resamples at 1 kHz, so
+# Servo does not need to match the loop rate. 100 Hz is fast enough that
+# the tracker's lag formula gives ~2 ms of command age at most, and slow
+# enough that Servo's collision checks keep up.
+#
+# Collision checking is ON. That is the entire point of routing through
+# Servo rather than publishing directly to servo_joint_command: the arm
+# will not drive into itself or the chassis. The proximity thresholds are
+# conservative -- 1 cm for self-collision, 2 cm for scene objects -- and
+# can be loosened once the ACM in the SRDF covers the workspace pairs that
+# never collide.
+#
+# Singularity management: Servo slows and halts as the manipulability index
+# drops. The Rizon 4's wrist singularity (joint 6 near 0) is the main one.
+# The SRDF defines a `ready` named state with joint 6 at +pi/2, away from
+# the singularity -- plan there before engaging teleop.
+#
+# Usage:
+#   ros2 launch aico2_moveit_config servo.launch.py
+#   # then publish TwistStamped to /servo_node/delta_twist_cmds
+
+###############################################
+# Servo command output
+###############################################
+command_out_topic: /left_arm/servo_joint_command
+command_out_type: trajectory_msgs/JointTrajectory
+publish_joint_positions: true
+publish_joint_velocities: true
+publish_joint_accelerations: false
+
+###############################################
+# Servo command input
+###############################################
+cartesian_command_in_topic: ~/delta_twist_cmds
+joint_command_in_topic: ~/delta_joint_cmds
+command_in_type: unitless
+scale:
+  linear: 0.3
+  rotational: 0.3
+  joint: 0.5
+
+###############################################
+# Robot description
+###############################################
+move_group_name: left_arm
+planning_frame: Left_link0
+ee_frame_name: Left_flange
+robot_link_command_frame: Left_link0
+
+###############################################
+# Joint state source
+###############################################
+joint_topic: /left_arm/joint_states
+status_topic: ~/status
+
+###############################################
+# Timing
+###############################################
+publish_period: 0.01
+incoming_command_timeout: 0.1
+
+###############################################
+# Collision checking
+###############################################
+check_collisions: true
+collision_check_rate: 10.0
+self_collision_proximity_threshold: 0.01
+scene_collision_proximity_threshold: 0.02
+
+###############################################
+# Singularity management
+###############################################
+lower_singularity_threshold: 17.0
+hard_stop_singularity_threshold: 30.0
+leaving_singularity_threshold_multiplier: 2.0
+
+###############################################
+# Smoothing
+###############################################
+use_smoothing: true
+smoothing_filter_plugin_name: "online_signal_smoothing::ButterworthFilterPlugin"
