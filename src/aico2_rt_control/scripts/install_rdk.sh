@@ -165,7 +165,29 @@ if [[ -d "$SRC/thirdparty/cloned" ]]; then
 fi
 printf '%s\n' "$want" > "$stamp"
 
+# foonathan_memory_vendor is an ament package whose CMakeLists.txt calls
+# find_package(ament_cmake_test). Even with environment variables scrubbed,
+# cmake discovers /opt/ros/jazzy through PATH-derived prefixes and the cmake
+# user package registry (~/.cmake/packages/). A transparent wrapper injects
+# CMAKE_IGNORE_PREFIX_PATH to block that discovery for configure commands.
+if [[ $STANDALONE -eq 1 ]]; then
+    _real_cmake="$(command -v cmake)"
+    _cmake_wrap=$(mktemp -d)
+    cat > "$_cmake_wrap/cmake" <<WRAP
+#!/usr/bin/env bash
+for _a in "\$@"; do
+    case "\$_a" in --build|--install|--open) exec "$_real_cmake" "\$@" ;; esac
+done
+exec "$_real_cmake" -DCMAKE_IGNORE_PREFIX_PATH=/opt/ros/jazzy -DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF "\$@"
+WRAP
+    chmod +x "$_cmake_wrap/cmake"
+    export PATH="$_cmake_wrap:$PATH"
+    echo "cmake wrapper active: blocking /opt/ros/jazzy discovery"
+fi
+
 ( cd "$SRC/thirdparty" && bash "$deps" "$PREFIX" "$JOBS" )
+
+[[ -n "${_cmake_wrap:-}" ]] && rm -rf "$_cmake_wrap"
 
 step "Configuring"
 rm -rf "$SRC/build"
