@@ -260,9 +260,9 @@ rosdep install --from-paths src --ignore-src -r -y
 ```
 
 **`sudo apt update` first, every time.** `packages.ros.org` rebuilds its
-packages continuously and prunes the old `.deb` files from the pool, so an apt
-index more than a week or two old asks for versions that no longer exist. It
-fails as a wall of `404 Not Found` on real package names, which reads like a
+packages continuously and prunes the superseded `.deb` files from the pool, so
+an apt index more than a week or two old asks for files that no longer exist.
+It fails as a wall of `404 Not Found` on real package names, which looks like a
 broken mirror or a bad dependency and is neither:
 
 ```
@@ -272,38 +272,25 @@ E: Unable to fetch some archives, maybe run apt-get update or try with --fix-mis
 ```
 
 The date in the version string is the tell — compare it with today's. `apt`'s
-own suggestion at the end is the right one. (`and NNN not upgraded` in the same
-output means nothing here; it is just pending upgrades.)
+own suggestion at the end is the fix, and it is the whole fix: one `apt update`
+moved a stuck `image-proc` Candidate from `20260903` to `20260915` and the
+install completed. (`and NNN not upgraded` in the same output means nothing
+here; it just counts pending upgrades.)
 
-Whether the index or the repository is at fault is one command:
+Re-running `rosdep install` without an `apt update` in between reproduces the
+identical error, which is easy to misread as the repository being at fault
+rather than the index. If you want to be sure which it is:
 
 ```bash
 sudo apt update
-apt policy ros-jazzy-image-proc
+apt policy ros-jazzy-image-proc      # does Candidate: move?
 ```
 
-If the `Candidate:` version changes after the update, the index was stale and
-the problem is solved. If it does not, the repository is mid-sync: the index
-genuinely lists a `.deb` that has already been pruned from the pool, and no
-amount of retrying fixes it from this end. **It does not block the arms.** Only
-three keys in this workspace come from the image pipeline, and none of them is
-needed for the arms, MoveIt or the RT path:
-
-| key | wanted by | for |
-| --- | --- | --- |
-| `apriltag_ros` | `flexiv_amr_docking` | AprilTag docking |
-| `image_proc` | `flexiv_amr_docking` | rectifying the dock camera |
-| `joint_state_publisher_gui` | `flexiv_amr_description` | `display.launch.py` sliders |
-
-So skip them, build, and come back to them later:
-
-```bash
-rosdep install --from-paths src --ignore-src -r -y \
-  --skip-keys "apriltag_ros image_proc joint_state_publisher_gui"
-```
-
-`flexiv_amr_docking` and the `display.launch.py` sliders are what you lose
-until the mirror catches up. Retry the plain command in a day.
+Only if the Candidate does *not* move is the pool genuinely mid-sync, and then
+`--skip-keys "apriltag_ros image_proc joint_state_publisher_gui"` gets you to a
+build without them: they are AprilTag docking and the `display.launch.py`
+sliders, and nothing in the arms, MoveIt or the RT path uses them. Reach for
+that only after the `apt policy` check says to.
 
 This pulls MoveIt, Nav2, RTAB-Map and the rest from the `package.xml` files. It
 does **not** install `moveit_servo` — nothing declares it, deliberately, so the
