@@ -10,7 +10,6 @@
   <buildtool_depend>python3-setuptools</buildtool_depend>
 
   <depend>rclpy</depend>
-  <depend>rclpy_lifecycle</depend>
   <depend>lifecycle_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>diagnostic_msgs</depend>
