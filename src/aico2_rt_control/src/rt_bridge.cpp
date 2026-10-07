@@ -37,6 +37,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include <std_msgs/msg/float32.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 
@@ -162,6 +163,19 @@ public:
                 HandleSetTeleopMode(req, res);
             },
             rclcpp::ServicesQoS(), srv_cb_group_);
+
+        // Gripper: command subscriber + state publisher. The gripper channel
+        // is independent of the arm trajectory/servo path. Positive value =
+        // grasp with that force [N]; zero = open fully; negative = move to
+        // abs(value) width [m]. The convention is deliberately simple so a
+        // joystick button can drive it.
+        gripper_cmd_sub_ = create_subscription<std_msgs::msg::Float32>(
+            "gripper_command", 10,
+            [this](std_msgs::msg::Float32::ConstSharedPtr msg) {
+                HandleGripperCommand(msg->data);
+            });
+        gripper_state_pub_ = create_publisher<sensor_msgs::msg::JointState>(
+            "gripper_states", 10);
 
         RCLCPP_INFO(get_logger(), "attached to '%s', DoF %u, waist %s", shm_name_.c_str(),
             shm_->dof, shm_->control_waist ? "COMMANDED" : "pinned");
@@ -402,6 +416,42 @@ private:
         RCLCPP_INFO(get_logger(), "teleop DISABLED (%s)", res->message.c_str());
     }
 
+    /**
+     * @brief Write a gripper command into shm for rt_server's non-RT thread.
+     *
+     * Convention: value > 0 → grasp with that force (N). value == 0 → open
+     * fully at default velocity. value < 0 → move to abs(value) width (m).
+     */
+    void HandleGripperCommand(float value)
+    {
+        aico2_rt::GripperState gs{};
+        if (!aico2_rt::ReadGripperState(*shm_, gs) || gs.ready == 0u) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                "ignoring gripper command: no gripper configured on rt_server"
+                " (start rt_server with --gripper NAME)");
+            return;
+        }
+        aico2_rt::BeginGripperCmdWrite(*shm_);
+        aico2_rt::GripperCommand& gc = shm_->gripper_cmd;
+        if (value > 0.0f) {
+            gc.cmd = static_cast<std::uint32_t>(aico2_rt::GripperCmd::kGrasp);
+            gc.force = static_cast<double>(value);
+            gc.width = 0.0;
+            gc.velocity = 0.0;
+        } else if (value < 0.0f) {
+            gc.cmd = static_cast<std::uint32_t>(aico2_rt::GripperCmd::kMove);
+            gc.width = static_cast<double>(-value);
+            gc.velocity = gs.max_vel * 0.5;
+            gc.force = gs.max_force;
+        } else {
+            gc.cmd = static_cast<std::uint32_t>(aico2_rt::GripperCmd::kMove);
+            gc.width = gs.max_width;
+            gc.velocity = gs.max_vel * 0.5;
+            gc.force = gs.max_force;
+        }
+        aico2_rt::EndGripperCmdWrite(*shm_);
+    }
+
     /** @brief Poll the published state until it does (or stops) matching. */
     bool AwaitState(aico2_rt::ExecState want, bool present, double timeout_sec)
     {
@@ -617,6 +667,17 @@ private:
         msg.velocity.assign(meas.dq, meas.dq + n);
         msg.effort.assign(meas.tau, meas.tau + n);
         joint_state_pub_->publish(msg);
+
+        aico2_rt::GripperState gs{};
+        if (aico2_rt::ReadGripperState(*shm_, gs) && gs.ready != 0u) {
+            sensor_msgs::msg::JointState gmsg;
+            gmsg.header.stamp = now();
+            gmsg.name = {"gripper_width"};
+            gmsg.position = {gs.width};
+            gmsg.velocity = {};
+            gmsg.effort = {gs.force};
+            gripper_state_pub_->publish(gmsg);
+        }
     }
 
     std::string shm_name_;
@@ -634,6 +695,8 @@ private:
     rclcpp::CallbackGroup::SharedPtr srv_cb_group_;
     rclcpp::CallbackGroup::SharedPtr js_cb_group_;
     rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr servo_sub_;
+    rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr gripper_cmd_sub_;
+    rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr gripper_state_pub_;
     rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr teleop_srv_;
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp_action::Server<FollowJointTrajectory>::SharedPtr action_server_;

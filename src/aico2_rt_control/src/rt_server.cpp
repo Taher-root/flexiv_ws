@@ -24,8 +24,10 @@
 
 #include "aico2_rt_control/rt_executor.hpp"
 
+#include <flexiv/rdk/gripper.hpp>
 #include <flexiv/rdk/robot.hpp>
 #include <flexiv/rdk/scheduler.hpp>
+#include <flexiv/rdk/tool.hpp>
 #include <flexiv/rdk/utility.hpp>
 
 #include <atomic>
@@ -36,6 +38,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
+#include <memory>
 #include <new>
 #include <string>
 #include <sys/mman.h>
@@ -89,6 +92,7 @@ private:
 struct Options {
     std::string robot_sn;
     std::string shm_name = aico2_rt::kDefaultShmName;
+    std::string gripper_name;  // empty = no gripper
     bool control_waist = false;
     double max_acc = 3.0;   // rad/s^2; matches the Python driver's constant
     /** Servo-stream settings. Zero means "take the documented default", which
@@ -120,6 +124,10 @@ bool ParseArgs(int argc, char** argv, Options& opt)
             "                      RobotInfo carries no acceleration limit, so\n"
             "                      this cannot be read from the robot.\n"
             "  --duration S        stop after S seconds (default: until Ctrl-C)\n"
+            "  --gripper NAME      enable a gripper (e.g. Flexiv_Grav). The gripper\n"
+            "                      runs on its own device channel, independent of\n"
+            "                      the arm control mode. Commands arrive via shm\n"
+            "                      from the bridge; state is published back.\n"
             "  --impedance R       compliant instead of stiff: use RT_JOINT_IMPEDANCE\n"
             "                      with R * K_q_nom joint stiffness, R in (0, 1].\n"
             "                      R=1 is nominal stiffness, lower yields more.\n"
@@ -172,6 +180,8 @@ bool ParseArgs(int argc, char** argv, Options& opt)
             opt.servo_settle = std::atof(argv[++i]);
         } else if (a == "--impedance" && has_next) {
             opt.stiffness_ratio = std::atof(argv[++i]);
+        } else if (a == "--gripper" && has_next) {
+            opt.gripper_name = argv[++i];
         } else {
             std::fprintf(stderr, "unrecognised argument: %s\n", a.c_str());
             return false;
@@ -350,6 +360,34 @@ int main(int argc, char** argv)
         }
         shm->servo_cfg = scfg;
 
+        // Gripper (optional, independent of RT arm control)
+        std::unique_ptr<flexiv::rdk::Gripper> gripper;
+        std::unique_ptr<flexiv::rdk::Tool> tool;
+        if (!opt.gripper_name.empty()) {
+            std::printf("initialising gripper '%s'\n", opt.gripper_name.c_str());
+            gripper = std::make_unique<flexiv::rdk::Gripper>(robot);
+            tool = std::make_unique<flexiv::rdk::Tool>(robot);
+            gripper->Enable(opt.gripper_name);
+            tool->Switch(opt.gripper_name);
+            gripper->Init();
+            const auto gp = gripper->params();
+            std::printf("gripper ready: max_width %.4f m, max_force %.1f N, max_vel %.4f m/s\n",
+                gp.max_width, gp.max_force, gp.max_vel);
+
+            aico2_rt::BeginGripperStateWrite(*shm);
+            aico2_rt::GripperState& gs = shm->gripper_state;
+            gs.ready = 1;
+            gs.max_width = gp.max_width;
+            gs.max_force = gp.max_force;
+            gs.max_vel = gp.max_vel;
+            auto gs0 = gripper->states();
+            gs.width = gs0.width;
+            gs.force = gs0.force;
+            gs.is_moving = gs0.is_moving ? 1u : 0u;
+            aico2_rt::EndGripperStateWrite(*shm);
+        }
+        std::uint64_t last_gripper_cmd_seq = 0;
+
         RobotAdapter adapter(robot, dof);
 
         constexpr int kMaxRestarts = 10;
@@ -441,6 +479,38 @@ int main(int argc, char** argv)
                 m.operational = robot.operational() ? 1u : 0u;
                 m.fault = robot.fault() ? 1u : 0u;
                 aico2_rt::EndMeasuredWrite(*shm);
+
+                // Gripper: poll for new commands, publish state
+                if (gripper) {
+                    const auto seq = shm->gripper_cmd_seq.load(std::memory_order_acquire);
+                    if (seq != last_gripper_cmd_seq && (seq & 1u) == 0) {
+                        aico2_rt::GripperCommand gc{};
+                        if (aico2_rt::ReadGripperCmd(*shm, gc)) {
+                            last_gripper_cmd_seq = seq;
+                            const auto cmd = static_cast<aico2_rt::GripperCmd>(gc.cmd);
+                            switch (cmd) {
+                                case aico2_rt::GripperCmd::kGrasp:
+                                    gripper->Grasp(gc.force);
+                                    break;
+                                case aico2_rt::GripperCmd::kMove:
+                                    gripper->Move(gc.width, gc.velocity, gc.force);
+                                    break;
+                                case aico2_rt::GripperCmd::kStop:
+                                    gripper->Stop();
+                                    break;
+                                case aico2_rt::GripperCmd::kNone:
+                                    break;
+                            }
+                        }
+                    }
+                    const auto gst = gripper->states();
+                    aico2_rt::BeginGripperStateWrite(*shm);
+                    aico2_rt::GripperState& gs = shm->gripper_state;
+                    gs.width = gst.width;
+                    gs.force = gst.force;
+                    gs.is_moving = gst.is_moving ? 1u : 0u;
+                    aico2_rt::EndGripperStateWrite(*shm);
+                }
 
                 if (++ticks % 200 == 0) {
                     std::printf("cycles %llu  missed %llu  max %.3f ms  state %u\n",
