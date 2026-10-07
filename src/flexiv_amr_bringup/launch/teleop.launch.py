@@ -137,7 +137,7 @@ def generate_launch_description():
                               description="Serial of the right-view D456"),
         DeclareLaunchArgument("cam_head_serial", default_value="_324422301136",
                               description="Serial of the head-mounted D456"),
-        DeclareLaunchArgument("shm_name", default_value="/aico2_rt",
+        DeclareLaunchArgument("shm_name", default_value="/aico2_rt_control",
                               description="Shared memory name for rt_server"),
 
         # ============================================================
