@@ -33,63 +33,66 @@
 #   ros2 launch aico2_moveit_config servo.launch.py
 #   # then publish TwistStamped to /servo_node/delta_twist_cmds
 
-###############################################
-# Servo command output
-###############################################
-command_out_topic: /left_arm/servo_joint_command
-command_out_type: trajectory_msgs/JointTrajectory
-publish_joint_positions: true
-publish_joint_velocities: true
-publish_joint_accelerations: false
+servo_node:
+  ros__parameters:
 
-###############################################
-# Servo command input
-###############################################
-cartesian_command_in_topic: ~/delta_twist_cmds
-joint_command_in_topic: ~/delta_joint_cmds
-command_in_type: unitless
-scale:
-  linear: 0.3
-  rotational: 0.3
-  joint: 0.5
+    ###############################################
+    # Servo command output
+    ###############################################
+    command_out_topic: /left_arm/servo_joint_command
+    command_out_type: trajectory_msgs/JointTrajectory
+    publish_joint_positions: true
+    publish_joint_velocities: true
+    publish_joint_accelerations: false
 
-###############################################
-# Robot description
-###############################################
-move_group_name: left_arm
-planning_frame: Left_link0
-ee_frame_name: Left_flange
-robot_link_command_frame: Left_link0
+    ###############################################
+    # Servo command input
+    ###############################################
+    cartesian_command_in_topic: ~/delta_twist_cmds
+    joint_command_in_topic: ~/delta_joint_cmds
+    command_in_type: unitless
+    scale:
+      linear: 0.3
+      rotational: 0.3
+      joint: 0.5
 
-###############################################
-# Joint state source
-###############################################
-joint_topic: /left_arm/joint_states
-status_topic: ~/status
+    ###############################################
+    # Robot description
+    ###############################################
+    move_group_name: left_arm
+    planning_frame: Left_link0
+    ee_frame_name: Left_flange
+    robot_link_command_frame: Left_link0
 
-###############################################
-# Timing
-###############################################
-publish_period: 0.01
-incoming_command_timeout: 0.1
+    ###############################################
+    # Joint state source
+    ###############################################
+    joint_topic: /left_arm/joint_states
+    status_topic: ~/status
 
-###############################################
-# Collision checking
-###############################################
-check_collisions: true
-collision_check_rate: 10.0
-self_collision_proximity_threshold: 0.01
-scene_collision_proximity_threshold: 0.02
+    ###############################################
+    # Timing
+    ###############################################
+    publish_period: 0.01
+    incoming_command_timeout: 0.1
 
-###############################################
-# Singularity management
-###############################################
-lower_singularity_threshold: 17.0
-hard_stop_singularity_threshold: 30.0
-leaving_singularity_threshold_multiplier: 2.0
+    ###############################################
+    # Collision checking
+    ###############################################
+    check_collisions: true
+    collision_check_rate: 10.0
+    self_collision_proximity_threshold: 0.01
+    scene_collision_proximity_threshold: 0.02
 
-###############################################
-# Smoothing
-###############################################
-use_smoothing: true
-smoothing_filter_plugin_name: "online_signal_smoothing::ButterworthFilterPlugin"
+    ###############################################
+    # Singularity management
+    ###############################################
+    lower_singularity_threshold: 17.0
+    hard_stop_singularity_threshold: 30.0
+    leaving_singularity_threshold_multiplier: 2.0
+
+    ###############################################
+    # Smoothing
+    ###############################################
+    use_smoothing: true
+    smoothing_filter_plugin_name: "online_signal_smoothing::ButterworthFilterPlugin"
