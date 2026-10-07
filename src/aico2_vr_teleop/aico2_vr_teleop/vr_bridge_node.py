@@ -279,7 +279,9 @@ class VRBridgeNode(Node):
         async def pose(request: Request):
             try:
                 data = await request.json()
-                node._handle_pose(data)
+                items = data if isinstance(data, list) else [data]
+                for d in items:
+                    node._handle_pose(d)
                 status = 'ok'
             except Exception:
                 status = 'error'
