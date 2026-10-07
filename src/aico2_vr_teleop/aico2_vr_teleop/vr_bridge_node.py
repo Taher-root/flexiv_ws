@@ -142,14 +142,24 @@ class VRBridgeNode(Node):
                 'rt_bridge may reject servo commands',
             )
             return
-        req = SetBool.Request()
-        req.data = True
-        future = cli.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
-        if future.result() is not None and future.result().success:
-            self.get_logger().info('Teleop mode enabled')
-        else:
-            self.get_logger().warn('Failed to enable teleop mode')
+        for attempt in range(3):
+            req = SetBool.Request()
+            req.data = True
+            future = cli.call_async(req)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+            result = future.result()
+            if result is not None and result.success:
+                self.get_logger().info(f'Teleop mode enabled: {result.message}')
+                return
+            msg = result.message if result is not None else 'no response'
+            self.get_logger().warn(
+                f'set_teleop_mode attempt {attempt + 1}/3 failed: {msg}',
+            )
+            time.sleep(2.0)
+        self.get_logger().error(
+            'Could not enable teleop mode after 3 attempts; '
+            'arm will not move. Check that rt_server is running.',
+        )
 
     # ------------------------------------------------------------------
     # Camera subscriptions
