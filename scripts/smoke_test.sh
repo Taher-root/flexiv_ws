@@ -49,7 +49,7 @@ fi
 # ---------------------------------------------------------------- 2. build
 if [ "${1:-}" != "--no-build" ]; then
   step "2. colcon build"
-  if colcon build --symlink-install >/tmp/build.log 2>&1; then
+  if colcon build >/tmp/build.log 2>&1; then
     ok "all packages built"
   else
     bad "build failed — see /tmp/build.log"; tail -20 /tmp/build.log | sed 's/^/        /'

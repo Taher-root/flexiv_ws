@@ -218,7 +218,7 @@ the wall time is Boost compiling in step 8.
  3. ROS 2 Jazzy desktop                   apt, below
  4. Clone + rosdep                        below
  5. flexivrdk==1.9.0 wheel                below -- NOT 2.x
- 6. colcon build --symlink-install         §4
+ 6. colcon build                           §4
  7. Verify: RViz, then one arm driver      §5
  ---- stop here unless you want the RT path ----
  8. C++ RDK via install_rdk.sh             src/aico2_rt_control/README.md step 4
@@ -260,9 +260,9 @@ rosdep install --from-paths src --ignore-src -r -y
 ```
 
 **`sudo apt update` first, every time.** `packages.ros.org` rebuilds its
-packages continuously and prunes the old `.deb` files from the pool, so an apt
-index more than a week or two old asks for versions that no longer exist. It
-fails as a wall of `404 Not Found` on real package names, which reads like a
+packages continuously and prunes the superseded `.deb` files from the pool, so
+an apt index more than a week or two old asks for files that no longer exist.
+It fails as a wall of `404 Not Found` on real package names, which looks like a
 broken mirror or a bad dependency and is neither:
 
 ```
@@ -272,30 +272,25 @@ E: Unable to fetch some archives, maybe run apt-get update or try with --fix-mis
 ```
 
 The date in the version string is the tell — compare it with today's. `apt`'s
-own suggestion at the end is the right one. A large `and NNN not upgraded` in
-the same output says the same thing.
+own suggestion at the end is the fix, and it is the whole fix: one `apt update`
+moved a stuck `image-proc` Candidate from `20260903` to `20260915` and the
+install completed. (`and NNN not upgraded` in the same output means nothing
+here; it just counts pending upgrades.)
 
-If `sudo apt update` does not clear it, the repository is mid-sync: the index
-genuinely lists a `.deb` that has already been pruned from the pool, and no
-amount of retrying fixes it from this end. **It does not block the arms.** Only
-three keys in this workspace come from the image pipeline, and none of them is
-needed for the arms, MoveIt or the RT path:
-
-| key | wanted by | for |
-| --- | --- | --- |
-| `apriltag_ros` | `flexiv_amr_docking` | AprilTag docking |
-| `image_proc` | `flexiv_amr_docking` | rectifying the dock camera |
-| `joint_state_publisher_gui` | `flexiv_amr_description` | `display.launch.py` sliders |
-
-So skip them, build, and come back to them later:
+Re-running `rosdep install` without an `apt update` in between reproduces the
+identical error, which is easy to misread as the repository being at fault
+rather than the index. If you want to be sure which it is:
 
 ```bash
-rosdep install --from-paths src --ignore-src -r -y \
-  --skip-keys "apriltag_ros image_proc joint_state_publisher_gui"
+sudo apt update
+apt policy ros-jazzy-image-proc      # does Candidate: move?
 ```
 
-`flexiv_amr_docking` and the `display.launch.py` sliders are what you lose
-until the mirror catches up. Retry the plain command in a day.
+Only if the Candidate does *not* move is the pool genuinely mid-sync, and then
+`--skip-keys "apriltag_ros image_proc joint_state_publisher_gui"` gets you to a
+build without them: they are AprilTag docking and the `display.launch.py`
+sliders, and nothing in the arms, MoveIt or the RT path uses them. Reach for
+that only after the `apt policy` check says to.
 
 This pulls MoveIt, Nav2, RTAB-Map and the rest from the `package.xml` files. It
 does **not** install `moveit_servo` — nothing declares it, deliberately, so the
@@ -472,15 +467,39 @@ machine breaks the same way.
 
 ```bash
 cd ~/flexiv_ws
-colcon build --symlink-install
+colcon build
 source install/setup.bash
+```
+
+**A plain install, not `--symlink-install`.** The install tree is a real copy,
+which is the convention here. It costs one thing worth knowing: with symlinks,
+editing a Python node or a launch file takes effect on the next run, whereas
+with a plain install **nothing you edit matters until you rebuild that
+package.** So:
+
+```bash
+colcon build --packages-select aico2_left_arm_driver && source install/setup.bash
+```
+
+after touching a driver, a launch file, or a YAML in `config/`. The payoff is
+that what runs is exactly what was built — no source tree editing underneath a
+running system, and no divergence between a machine built one way and a machine
+built the other.
+
+**Switching an existing workspace from symlink to plain, or back, needs the
+trees removed first.** colcon will not replace a symlinked install in place,
+and the result is a mix of the two that behaves like neither:
+
+```bash
+rm -rf build install log && colcon build
 ```
 
 ### colcon notes that matter for debugging
 
 **Source `install/setup.bash` in every terminal, after every build.** A shell
 sourced before a build will not see newly installed launch files, configs, or
-entry points. Most "my change did nothing" reports are this.
+entry points. Most "my change did nothing" reports are this — and with a plain
+install, so is the other half, where the rebuild itself was skipped.
 
 **Data files are copied at build time.** `flexiv_amr_nav2/CMakeLists.txt` has:
 
@@ -524,7 +543,7 @@ renamed targets, deleted files still installed, CMake cache pointing at old
 paths. When something makes no sense:
 
 ```bash
-rm -rf build install log && colcon build --symlink-install
+rm -rf build install log && colcon build
 ```
 
 `--cmake-clean-cache` is the lighter version for CMake-only staleness.
