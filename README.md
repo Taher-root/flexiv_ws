@@ -275,6 +275,28 @@ The date in the version string is the tell — compare it with today's. `apt`'s
 own suggestion at the end is the right one. A large `and NNN not upgraded` in
 the same output says the same thing.
 
+If `sudo apt update` does not clear it, the repository is mid-sync: the index
+genuinely lists a `.deb` that has already been pruned from the pool, and no
+amount of retrying fixes it from this end. **It does not block the arms.** Only
+three keys in this workspace come from the image pipeline, and none of them is
+needed for the arms, MoveIt or the RT path:
+
+| key | wanted by | for |
+| --- | --- | --- |
+| `apriltag_ros` | `flexiv_amr_docking` | AprilTag docking |
+| `image_proc` | `flexiv_amr_docking` | rectifying the dock camera |
+| `joint_state_publisher_gui` | `flexiv_amr_description` | `display.launch.py` sliders |
+
+So skip them, build, and come back to them later:
+
+```bash
+rosdep install --from-paths src --ignore-src -r -y \
+  --skip-keys "apriltag_ros image_proc joint_state_publisher_gui"
+```
+
+`flexiv_amr_docking` and the `display.launch.py` sliders are what you lose
+until the mirror catches up. Retry the plain command in a day.
+
 This pulls MoveIt, Nav2, RTAB-Map and the rest from the `package.xml` files. It
 does **not** install `moveit_servo` — nothing declares it, deliberately, so the
 base build stays light. Add it only if you want the servo path:
