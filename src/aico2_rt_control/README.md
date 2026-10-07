@@ -368,7 +368,7 @@ entering and leaving cleanly. The *lag figure* from that run is not meaningful
 period of 43 ms. The formula is verified by `test_servo_tracker`, directly
 against the tracker, to within 1%.
 
-### Through ROS
+### Through ROS (manual)
 
 ```bash
 # A: the RT half (ROS-free shell -- see noros.sh)
@@ -390,15 +390,49 @@ no-op) and `joint_state_rate_hz`, now 200 Hz because `/joint_states` is MoveIt
 Servo's only view of where the arm is and so the slowest link in its feedback
 loop.
 
-### What is still missing for VR teleop end to end
+### Through ROS (one-command teleop launch)
 
-The RT half is done. What is not built:
+```bash
+# A: the RT half (ROS-free shell)
+./rt_server Rizon4-063352 --max-acc 12 --servo-max-jerk 360
 
-| Gap | Where |
-| --- | --- |
-| `moveit_servo` installed, and a real Servo params file | check with `ros2 pkg prefix moveit_servo` |
-| a node publishing `TwistStamped` from the teleop's callback seam | new; hangs off `Teleop.subscribe()` in `vr-teleop` |
-| a launch file wiring Servo + bridge + teleop together | `flexiv_amr_bringup/` |
+# B: everything else -- cameras, foxglove, rt_bridge, move_group, MoveIt Servo
+ros2 launch flexiv_amr_bringup teleop.launch.py \
+    cam_left_serial:=_XXXXXXXXXX \
+    cam_right_serial:=_YYYYYYYYYY \
+    cam_wrist_serial:=_ZZZZZZZZZZ
+
+# C: open Foxglove Studio in a browser
+#    https://app.foxglove.dev -> connect to ws://<laptop-ip>:8765
+#    add Image panels for /cam_left/cam_left/color/image_raw, etc.
+
+# D: arm the stream
+ros2 service call /left_arm/set_teleop_mode std_srvs/srv/SetBool "{data: true}"
+
+# E: the VR machine publishes TwistStamped to /servo_node/delta_twist_cmds
+#    MoveIt Servo -> /left_arm/servo_joint_command -> rt_bridge -> shm -> arm
+```
+
+The teleop launch brings up:
+- `robot_state_publisher` (URDF -> TF for Servo and Foxglove)
+- `rt_bridge` under `/left_arm` (shm <-> ROS)
+- 3 RealSense D456 cameras as `/cam_left`, `/cam_right`, `/cam_wrist` (color only)
+- `foxglove_bridge` (WebSocket at port 8765 for browser video streaming)
+- `move_group` (planning scene for collision checking)
+- `servo_node` (TwistStamped -> collision-checked JointTrajectory at 100 Hz)
+
+Use `use_servo:=false` for direct joint streaming without collision checking.
+Use `use_cameras:=false` if the cameras are running in another launch.
+
+Find your D456 serial numbers with `rs-enumerate-devices | grep Serial`.
+
+### What is still needed for end-to-end VR teleop
+
+The arm side (RT + ROS + MoveIt Servo + cameras + streaming) is wired. The
+remaining piece is on the VR machine: a node that publishes `TwistStamped` to
+`/servo_node/delta_twist_cmds` from the headset's hand tracking or controller.
+This hangs off `Teleop.subscribe()` in the `vr-teleop` / `aico2_vr_teleop`
+package on the teleop machine.
 
 Note that the four `*_moveit_servo.yaml` files in the arm driver packages are
 **not** Servo configs — they are driver parameter files with
