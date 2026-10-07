@@ -52,7 +52,7 @@
 namespace aico2_rt {
 
 /** Bump when the layout changes; both sides refuse a mismatch. */
-constexpr std::uint32_t kShmVersion = 2;
+constexpr std::uint32_t kShmVersion = 3;
 constexpr std::uint32_t kShmMagic = 0x41494332;  // "AIC2"
 
 /** 9 on this robot (2 external waist axes + 7 arm). Headroom costs nothing. */
@@ -196,6 +196,37 @@ inline const char* RejectReasonName(RejectReason r)
     }
     return "unknown";
 }
+
+// ---------------------------------------------------------------------------
+// Gripper. Separate from the RT loop: the gripper has its own device channel
+// on the robot controller. Commands are written by the bridge and executed by
+// rt_server's non-RT thread; state goes the other way.
+// ---------------------------------------------------------------------------
+
+enum class GripperCmd : std::uint32_t {
+    kNone = 0,
+    kGrasp = 1,   ///< force control: close with `force` N
+    kMove = 2,    ///< position control: move to `width` m
+    kStop = 3,    ///< hold current finger width
+};
+
+struct GripperCommand {
+    std::uint32_t cmd;       ///< GripperCmd
+    std::uint32_t _pad;
+    double force;            ///< kGrasp: target force. kMove: force limit [N]
+    double width;            ///< kMove: target opening [m]
+    double velocity;         ///< kMove: finger velocity [m/s]
+};
+
+struct GripperState {
+    double width;            ///< current finger opening [m]
+    double force;            ///< current finger force [N]
+    std::uint32_t is_moving; ///< fingers in motion
+    std::uint32_t ready;     ///< gripper enabled and initialised
+    double max_width;        ///< from GripperParams
+    double max_force;        ///< from GripperParams
+    double max_vel;          ///< from GripperParams
+};
 
 /** A trajectory, written by the bridge and read by the RT task. */
 struct Slot {
@@ -369,6 +400,16 @@ struct Shm {
 
     alignas(64) char _pad2[64];
 
+    // ---- gripper: bridge -> rt_server (non-RT) --------------------------
+    std::atomic<std::uint64_t> gripper_cmd_seq;
+    GripperCommand gripper_cmd;
+
+    // ---- gripper: rt_server (non-RT) -> bridge --------------------------
+    std::atomic<std::uint64_t> gripper_state_seq;
+    GripperState gripper_state;
+
+    alignas(64) char _pad5[64];
+
     Slot slots[kNumSlots];
 };
 
@@ -541,6 +582,36 @@ inline bool ReadStatus(const Shm& shm, RtStatus& out, int max_tries = 8)
 inline bool ReadMeasured(const Shm& shm, Measured& out, int max_tries = 8)
 {
     return ReadSeqlocked(shm.measured_seq, shm.measured, out, max_tries);
+}
+
+inline void BeginGripperCmdWrite(Shm& shm)
+{
+    shm.gripper_cmd_seq.fetch_add(1, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
+}
+inline void EndGripperCmdWrite(Shm& shm)
+{
+    std::atomic_thread_fence(std::memory_order_release);
+    shm.gripper_cmd_seq.fetch_add(1, std::memory_order_relaxed);
+}
+inline bool ReadGripperCmd(const Shm& shm, GripperCommand& out, int max_tries = 8)
+{
+    return ReadSeqlocked(shm.gripper_cmd_seq, shm.gripper_cmd, out, max_tries);
+}
+
+inline void BeginGripperStateWrite(Shm& shm)
+{
+    shm.gripper_state_seq.fetch_add(1, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
+}
+inline void EndGripperStateWrite(Shm& shm)
+{
+    std::atomic_thread_fence(std::memory_order_release);
+    shm.gripper_state_seq.fetch_add(1, std::memory_order_relaxed);
+}
+inline bool ReadGripperState(const Shm& shm, GripperState& out, int max_tries = 8)
+{
+    return ReadSeqlocked(shm.gripper_state_seq, shm.gripper_state, out, max_tries);
 }
 
 inline void BeginServoWrite(Shm& shm)

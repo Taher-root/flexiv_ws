@@ -16,6 +16,8 @@ What runs (in staged order):
   7. vr_bridge (opt)                   WebXR poses -> Servo twist at port 8181
 
 rt_server must already be running in a separate (ROS-free) terminal.
+With arm:=both, two rt_server instances are needed (one per arm, each with
+its own --shm name matching shm_name_left / shm_name_right).
 
 Camera serials are baked in as defaults (left: 327622300610, right: 327622300144,
 head: 324422301136). Override with cam_left_serial, cam_right_serial,
@@ -31,6 +33,9 @@ Usage:
 
   # Right arm with VR teleop:
   ros2 launch flexiv_amr_bringup teleop.launch.py arm:=right use_vr:=true
+
+  # Both arms with VR teleop:
+  ros2 launch flexiv_amr_bringup teleop.launch.py arm:=both use_vr:=true
 
   # Skip cameras (already running elsewhere):
   ros2 launch flexiv_amr_bringup teleop.launch.py use_cameras:=false
@@ -59,6 +64,10 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 _PLANNING_FRAMES = {"left": "Left_link0", "right": "Right_link0"}
+_DEFAULT_SHM = {
+    "left": "/aico2_rt_control",
+    "right": "/aico2_rt_control_right",
+}
 
 SERVO_DELAY = 4.0
 MOVE_GROUP_DELAY = 2.0
@@ -99,10 +108,49 @@ def _include(package, launch_file, launch_arguments=None, condition=None):
     )
 
 
-def _build_nodes(context):
-    arm = context.launch_configurations.get("arm", "left")
+def _arm_nodes(arm, shm_name, servo_on, vr_on):
+    """Nodes for one arm: rt_bridge + servo + vr_bridge."""
     arm_ns = f"{arm}_arm"
     planning_frame = _PLANNING_FRAMES.get(arm, "Left_link0")
+    nodes = [
+        Node(
+            package="aico2_rt_control",
+            executable="rt_bridge",
+            name="rt_bridge",
+            namespace=arm_ns,
+            output="screen",
+            parameters=[{"shm_name": shm_name}],
+        ),
+        TimerAction(
+            period=SERVO_DELAY,
+            actions=[
+                _include("aico2_moveit_config", "servo.launch.py",
+                         launch_arguments={"arm": arm},
+                         condition=servo_on),
+            ],
+        ),
+        TimerAction(
+            period=VR_DELAY,
+            actions=[
+                Node(
+                    package="aico2_vr_teleop",
+                    executable="vr_bridge",
+                    name=f"vr_bridge_{arm}",
+                    output="screen",
+                    parameters=[{
+                        "planning_frame": planning_frame,
+                        "arm_ns": arm_ns,
+                    }],
+                    condition=vr_on,
+                ),
+            ],
+        ),
+    ]
+    return nodes
+
+
+def _build_nodes(context):
+    arm = context.launch_configurations.get("arm", "left")
 
     use_cameras = LaunchConfiguration("use_cameras")
     use_servo = LaunchConfiguration("use_servo")
@@ -125,7 +173,7 @@ def _build_nodes(context):
         use_vr, "'.lower() != 'true'",
     ]))
 
-    return [
+    nodes = [
         # ============================================================
         # 1. robot_state_publisher — URDF -> TF
         # ============================================================
@@ -139,27 +187,14 @@ def _build_nodes(context):
         ),
 
         # ============================================================
-        # 2. rt_bridge — shm <-> ROS, namespaced to /<arm>_arm
-        # ============================================================
-        Node(
-            package="aico2_rt_control",
-            executable="rt_bridge",
-            name="rt_bridge",
-            namespace=arm_ns,
-            output="screen",
-            parameters=[{"shm_name": LaunchConfiguration("shm_name")}],
-        ),
-
-        # ============================================================
-        # 3. RealSense D456 cameras — color only for operator view
+        # 2. RealSense D456 cameras — color only for operator view
         # ============================================================
         _camera("cam_left", LaunchConfiguration("cam_left_serial"), cameras_on),
         _camera("cam_right", LaunchConfiguration("cam_right_serial"), cameras_on),
         _camera("cam_head", LaunchConfiguration("cam_head_serial"), head_cam_on),
 
         # ============================================================
-        # 4. foxglove_bridge — WebSocket for Foxglove Studio in browser
-        #    Open https://app.foxglove.dev, connect to ws://<ip>:8765
+        # 3. foxglove_bridge — WebSocket for Foxglove Studio in browser
         # ============================================================
         Node(
             package="foxglove_bridge",
@@ -176,7 +211,7 @@ def _build_nodes(context):
         ),
 
         # ============================================================
-        # 5. move_group — planning scene (needed by Servo for collisions)
+        # 4. move_group — planning scene (needed by Servo for collisions)
         # ============================================================
         TimerAction(
             period=MOVE_GROUP_DELAY,
@@ -185,47 +220,32 @@ def _build_nodes(context):
                          condition=servo_on),
             ],
         ),
-
-        # ============================================================
-        # 6. MoveIt Servo — TwistStamped -> collision-checked JointTrajectory
-        # ============================================================
-        TimerAction(
-            period=SERVO_DELAY,
-            actions=[
-                _include("aico2_moveit_config", "servo.launch.py",
-                         launch_arguments={"arm": arm},
-                         condition=servo_on),
-            ],
-        ),
-
-        # ============================================================
-        # 7. VR bridge — WebXR controller poses -> Servo twist commands
-        #    Starts after Servo so the twist topic is ready.
-        #    Connect Quest 3 via ADB: adb reverse tcp:8181 tcp:8181
-        # ============================================================
-        TimerAction(
-            period=VR_DELAY,
-            actions=[
-                Node(
-                    package="aico2_vr_teleop",
-                    executable="vr_bridge",
-                    name="vr_bridge",
-                    output="screen",
-                    parameters=[{
-                        "planning_frame": planning_frame,
-                        "arm_ns": arm_ns,
-                    }],
-                    condition=vr_on,
-                ),
-            ],
-        ),
     ]
+
+    # ============================================================
+    # 5+. Per-arm nodes: rt_bridge, servo, vr_bridge
+    # ============================================================
+    if arm == "both":
+        shm_left = context.launch_configurations.get(
+            "shm_name_left", _DEFAULT_SHM["left"])
+        shm_right = context.launch_configurations.get(
+            "shm_name_right", _DEFAULT_SHM["right"])
+        nodes += _arm_nodes("left", shm_left, servo_on, vr_on)
+        nodes += _arm_nodes("right", shm_right, servo_on, vr_on)
+    else:
+        shm_key = f"shm_name_{arm}"
+        shm_name = context.launch_configurations.get(
+            shm_key, context.launch_configurations.get(
+                "shm_name", _DEFAULT_SHM.get(arm, _DEFAULT_SHM["left"])))
+        nodes += _arm_nodes(arm, shm_name, servo_on, vr_on)
+
+    return nodes
 
 
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("arm", default_value="left",
-                              description="Which arm to teleop: left or right"),
+                              description="Which arm to teleop: left, right, or both"),
         DeclareLaunchArgument("use_cameras", default_value="true",
                               description="Launch the RealSense D456 cameras"),
         DeclareLaunchArgument("use_servo", default_value="true",
@@ -244,6 +264,14 @@ def generate_launch_description():
         DeclareLaunchArgument("cam_head_serial", default_value="_324422301136",
                               description="Serial of the head-mounted D456"),
         DeclareLaunchArgument("shm_name", default_value="/aico2_rt_control",
-                              description="Shared memory name for rt_server"),
+                              description="Shared memory name for rt_server "
+                                          "(single-arm mode)"),
+        DeclareLaunchArgument("shm_name_left", default_value="/aico2_rt_control",
+                              description="Shared memory name for left arm "
+                                          "rt_server (both-arm mode)"),
+        DeclareLaunchArgument("shm_name_right",
+                              default_value="/aico2_rt_control_right",
+                              description="Shared memory name for right arm "
+                                          "rt_server (both-arm mode)"),
         OpaqueFunction(function=_build_nodes),
     ])

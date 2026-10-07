@@ -24,8 +24,10 @@
 
 #include "aico2_rt_control/rt_executor.hpp"
 
+#include <flexiv/rdk/gripper.hpp>
 #include <flexiv/rdk/robot.hpp>
 #include <flexiv/rdk/scheduler.hpp>
+#include <flexiv/rdk/tool.hpp>
 #include <flexiv/rdk/utility.hpp>
 
 #include <atomic>
@@ -36,6 +38,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
+#include <memory>
 #include <new>
 #include <string>
 #include <sys/mman.h>
@@ -89,6 +92,7 @@ private:
 struct Options {
     std::string robot_sn;
     std::string shm_name = aico2_rt::kDefaultShmName;
+    std::string gripper_name;  // empty = no gripper
     bool control_waist = false;
     double max_acc = 3.0;   // rad/s^2; matches the Python driver's constant
     /** Servo-stream settings. Zero means "take the documented default", which
@@ -120,6 +124,10 @@ bool ParseArgs(int argc, char** argv, Options& opt)
             "                      RobotInfo carries no acceleration limit, so\n"
             "                      this cannot be read from the robot.\n"
             "  --duration S        stop after S seconds (default: until Ctrl-C)\n"
+            "  --gripper NAME      enable a gripper (e.g. Flexiv_Grav). The gripper\n"
+            "                      runs on its own device channel, independent of\n"
+            "                      the arm control mode. Commands arrive via shm\n"
+            "                      from the bridge; state is published back.\n"
             "  --impedance R       compliant instead of stiff: use RT_JOINT_IMPEDANCE\n"
             "                      with R * K_q_nom joint stiffness, R in (0, 1].\n"
             "                      R=1 is nominal stiffness, lower yields more.\n"
@@ -172,6 +180,8 @@ bool ParseArgs(int argc, char** argv, Options& opt)
             opt.servo_settle = std::atof(argv[++i]);
         } else if (a == "--impedance" && has_next) {
             opt.stiffness_ratio = std::atof(argv[++i]);
+        } else if (a == "--gripper" && has_next) {
+            opt.gripper_name = argv[++i];
         } else {
             std::fprintf(stderr, "unrecognised argument: %s\n", a.c_str());
             return false;
@@ -331,32 +341,6 @@ int main(int argc, char** argv)
         std::printf("holding at %s\n", flexiv::rdk::utility::Vec2Str(q_now).c_str());
 
         const bool impedance = opt.stiffness_ratio > 0.0;
-        if (impedance) {
-            std::printf("switching to RT_JOINT_IMPEDANCE (compliant)\n");
-            robot.SwitchMode(flexiv::rdk::Mode::RT_JOINT_IMPEDANCE);
-            // SetJointImpedance is only applicable in the impedance modes, so
-            // it has to follow the switch, never precede it.
-            //
-            // The external axes report K_q_nom as infinite: they are not
-            // impedance controlled, and the Python driver already established
-            // that the right thing is to pass their nominal value straight
-            // through and scale only the arm axes. Scaling infinity would be
-            // meaningless, and substituting a finite number would be inventing
-            // a stiffness the robot never offered.
-            std::vector<double> K_q(info.K_q_nom);
-            for (std::uint32_t j = ext; j < dof; ++j) {
-                K_q[j] = info.K_q_nom[j] * opt.stiffness_ratio;
-            }
-            robot.SetJointImpedance(K_q);
-            std::printf("joint stiffness set to %.0f%% of nominal on axes %u..%u:\n  %s\n",
-                opt.stiffness_ratio * 100.0, ext, dof - 1,
-                flexiv::rdk::utility::Vec2Str(K_q).c_str());
-            std::printf("NOTE: a compliant arm does not track as closely by design."
-                        " Position error is expected to grow as stiffness falls.\n");
-        } else {
-            std::printf("switching to RT_JOINT_POSITION (stiff)\n");
-            robot.SwitchMode(flexiv::rdk::Mode::RT_JOINT_POSITION);
-        }
 
         // Publish the configuration a writer needs in order to produce a
         // trajectory this server will accept without clamping. This has to
@@ -375,104 +359,226 @@ int main(int argc, char** argv)
             scfg.max_jerk[j] = opt.servo_max_jerk;
         }
         shm->servo_cfg = scfg;
-        shm->servo_enable.store(0u);
+
+        // Gripper (optional, independent of RT arm control)
+        std::unique_ptr<flexiv::rdk::Gripper> gripper;
+        std::unique_ptr<flexiv::rdk::Tool> tool;
+        if (!opt.gripper_name.empty()) {
+            std::printf("initialising gripper '%s'\n", opt.gripper_name.c_str());
+            gripper = std::make_unique<flexiv::rdk::Gripper>(robot);
+            tool = std::make_unique<flexiv::rdk::Tool>(robot);
+            gripper->Enable(opt.gripper_name);
+            tool->Switch(opt.gripper_name);
+            gripper->Init();
+            const auto gp = gripper->params();
+            std::printf("gripper ready: max_width %.4f m, max_force %.1f N, max_vel %.4f m/s\n",
+                gp.max_width, gp.max_force, gp.max_vel);
+
+            aico2_rt::BeginGripperStateWrite(*shm);
+            aico2_rt::GripperState& gs = shm->gripper_state;
+            gs.ready = 1;
+            gs.max_width = gp.max_width;
+            gs.max_force = gp.max_force;
+            gs.max_vel = gp.max_vel;
+            auto gs0 = gripper->states();
+            gs.width = gs0.width;
+            gs.force = gs0.force;
+            gs.is_moving = gs0.is_moving ? 1u : 0u;
+            aico2_rt::EndGripperStateWrite(*shm);
+        }
+        std::uint64_t last_gripper_cmd_seq = 0;
 
         RobotAdapter adapter(robot, dof);
-        aico2_rt::RtExecutor<RobotAdapter> executor;
-        // Init substitutes the documented defaults for anything left at zero,
-        // so the figures logged below are the ones actually in force.
-        executor.Init(shm, &adapter, dof, limits, q_now.data());
-        // Read back rather than recomputing: Init normalised the zeros into
-        // the mapping, so these are the figures the loop will enforce. The
-        // predicted lag is printed because it is the number anyone driving a
-        // teleop stream actually wants, and it is not obvious from the limits.
-        const aico2_rt::ServoConfig& eff = shm->servo_cfg;
-        const double arm_acc = limits.ddq_max[ext < dof ? ext : 0];
-        const double arm_jerk = eff.max_jerk[ext < dof ? ext : 0];
-        std::printf("servo stream: jerk %.1f rad/s^3, timeout %.3f s, max jump %.3f rad,"
-                    " settle %.3f s\n",
-            arm_jerk, eff.timeout_sec, eff.max_jump_rad, eff.settle_sec);
-        std::printf("  predicted tracking lag at 1 rad/s: %.0f ms"
-                    " (%.0f from ddq_max, %.0f from max_jerk)\n",
-            1000.0 * (1.0 / (2.0 * arm_acc) + arm_acc / arm_jerk),
-            1000.0 / (2.0 * arm_acc), 1000.0 * arm_acc / arm_jerk);
 
-        // Anything thrown out of the periodic task would cross the scheduler
-        // boundary, so it is caught here and reported through a flag the main
-        // thread polls. Nothing in the normal path throws.
-        std::atomic<bool> task_error{false};
-        static char err_text[256] = {};
-
-        flexiv::rdk::Scheduler scheduler;
-        scheduler.AddTask(
-            [&] {
-                try {
-                    executor.Cycle(aico2_rt::MonotonicSeconds());
-                } catch (const std::exception& e) {
-                    std::snprintf(err_text, sizeof(err_text), "%s", e.what());
-                    task_error.store(true, std::memory_order_release);
+        constexpr int kMaxRestarts = 10;
+        int restarts = 0;
+        while (!g_shutdown.load() && restarts <= kMaxRestarts) {
+            // (Re-)read the current position on every entry: after a fault the
+            // arm may have moved, so the executor must hold from wherever it
+            // is now.
+            auto q_hold = robot.states().q;
+            if (!opt.control_waist) {
+                for (std::uint32_t j = 0; j < ext && j < dof; ++j) {
+                    limits.q_min[j] = q_hold[j] - 1e-3;
+                    limits.q_max[j] = q_hold[j] + 1e-3;
                 }
-            },
-            "rt_control", 1, scheduler.max_priority());
-
-        std::printf("scheduler started at 1 kHz; shm '%s'. Ctrl-C to stop.\n",
-            opt.shm_name.c_str());
-        scheduler.Start();
-
-        // Non-RT thread: publish measured state for the bridge, and watch for
-        // reasons to stop. states() allocates, which is why it is here.
-        const double t_start = aico2_rt::MonotonicSeconds();
-        std::uint64_t ticks = 0;
-        while (!g_shutdown.load() && !executor.stop_requested()
-               && !task_error.load(std::memory_order_acquire)) {
-            const auto st = robot.states();
-            aico2_rt::BeginMeasuredWrite(*shm);
-            aico2_rt::Measured& m = shm->measured;
-            m.stamp_mono = aico2_rt::MonotonicSeconds();
-            for (std::uint32_t j = 0; j < dof; ++j) {
-                m.q[j] = st.q[j];
-                m.dq[j] = st.dq[j];
-                m.tau[j] = st.tau[j];
+                shm->limits = limits;
             }
-            m.dof = dof;
-            m.operational = robot.operational() ? 1u : 0u;
-            m.fault = robot.fault() ? 1u : 0u;
-            aico2_rt::EndMeasuredWrite(*shm);
 
-            if (++ticks % 200 == 0) {  // ~every 2 s
-                std::printf("cycles %llu  missed %llu  max %.3f ms  state %u\n",
-                    static_cast<unsigned long long>(executor.cycles()),
-                    static_cast<unsigned long long>(executor.missed()),
-                    executor.max_period() * 1e3,
-                    static_cast<unsigned>(executor.state()));
+            shm->servo_enable.store(0u);
+
+            if (impedance) {
+                std::printf("switching to RT_JOINT_IMPEDANCE (compliant)\n");
+                robot.SwitchMode(flexiv::rdk::Mode::RT_JOINT_IMPEDANCE);
+                std::vector<double> K_q(info.K_q_nom);
+                for (std::uint32_t j = ext; j < dof; ++j) {
+                    K_q[j] = info.K_q_nom[j] * opt.stiffness_ratio;
+                }
+                robot.SetJointImpedance(K_q);
+                if (restarts == 0) {
+                    std::printf("joint stiffness set to %.0f%% of nominal on axes %u..%u:\n  %s\n",
+                        opt.stiffness_ratio * 100.0, ext, dof - 1,
+                        flexiv::rdk::utility::Vec2Str(K_q).c_str());
+                    std::printf("NOTE: a compliant arm does not track as closely by design."
+                                " Position error is expected to grow as stiffness falls.\n");
+                }
+            } else {
+                std::printf("switching to RT_JOINT_POSITION (stiff)\n");
+                robot.SwitchMode(flexiv::rdk::Mode::RT_JOINT_POSITION);
             }
-            if (opt.duration > 0.0 && aico2_rt::MonotonicSeconds() - t_start >= opt.duration) {
+
+            aico2_rt::RtExecutor<RobotAdapter> executor;
+            executor.Init(shm, &adapter, dof, limits, q_hold.data());
+
+            if (restarts == 0) {
+                const aico2_rt::ServoConfig& eff = shm->servo_cfg;
+                const double arm_acc = limits.ddq_max[ext < dof ? ext : 0];
+                const double arm_jerk = eff.max_jerk[ext < dof ? ext : 0];
+                std::printf("servo stream: jerk %.1f rad/s^3, timeout %.3f s, max jump %.3f rad,"
+                            " settle %.3f s\n",
+                    arm_jerk, eff.timeout_sec, eff.max_jump_rad, eff.settle_sec);
+                std::printf("  predicted tracking lag at 1 rad/s: %.0f ms"
+                            " (%.0f from ddq_max, %.0f from max_jerk)\n",
+                    1000.0 * (1.0 / (2.0 * arm_acc) + arm_acc / arm_jerk),
+                    1000.0 / (2.0 * arm_acc), 1000.0 * arm_acc / arm_jerk);
+            }
+
+            std::atomic<bool> task_error{false};
+            static char err_text[256] = {};
+
+            flexiv::rdk::Scheduler scheduler;
+            scheduler.AddTask(
+                [&] {
+                    try {
+                        executor.Cycle(aico2_rt::MonotonicSeconds());
+                    } catch (const std::exception& e) {
+                        std::snprintf(err_text, sizeof(err_text), "%s", e.what());
+                        task_error.store(true, std::memory_order_release);
+                    }
+                },
+                "rt_control", 1, scheduler.max_priority());
+
+            std::printf("scheduler started at 1 kHz; shm '%s'. Ctrl-C to stop.\n",
+                opt.shm_name.c_str());
+            scheduler.Start();
+
+            const double t_start = aico2_rt::MonotonicSeconds();
+            std::uint64_t ticks = 0;
+            while (!g_shutdown.load() && !executor.stop_requested()
+                   && !task_error.load(std::memory_order_acquire)) {
+                const auto st = robot.states();
+                aico2_rt::BeginMeasuredWrite(*shm);
+                aico2_rt::Measured& m = shm->measured;
+                m.stamp_mono = aico2_rt::MonotonicSeconds();
+                for (std::uint32_t j = 0; j < dof; ++j) {
+                    m.q[j] = st.q[j];
+                    m.dq[j] = st.dq[j];
+                    m.tau[j] = st.tau[j];
+                }
+                m.dof = dof;
+                m.operational = robot.operational() ? 1u : 0u;
+                m.fault = robot.fault() ? 1u : 0u;
+                aico2_rt::EndMeasuredWrite(*shm);
+
+                // Gripper: poll for new commands, publish state
+                if (gripper) {
+                    const auto seq = shm->gripper_cmd_seq.load(std::memory_order_acquire);
+                    if (seq != last_gripper_cmd_seq && (seq & 1u) == 0) {
+                        aico2_rt::GripperCommand gc{};
+                        if (aico2_rt::ReadGripperCmd(*shm, gc)) {
+                            last_gripper_cmd_seq = seq;
+                            const auto cmd = static_cast<aico2_rt::GripperCmd>(gc.cmd);
+                            switch (cmd) {
+                                case aico2_rt::GripperCmd::kGrasp:
+                                    gripper->Grasp(gc.force);
+                                    break;
+                                case aico2_rt::GripperCmd::kMove:
+                                    gripper->Move(gc.width, gc.velocity, gc.force);
+                                    break;
+                                case aico2_rt::GripperCmd::kStop:
+                                    gripper->Stop();
+                                    break;
+                                case aico2_rt::GripperCmd::kNone:
+                                    break;
+                            }
+                        }
+                    }
+                    const auto gst = gripper->states();
+                    aico2_rt::BeginGripperStateWrite(*shm);
+                    aico2_rt::GripperState& gs = shm->gripper_state;
+                    gs.width = gst.width;
+                    gs.force = gst.force;
+                    gs.is_moving = gst.is_moving ? 1u : 0u;
+                    aico2_rt::EndGripperStateWrite(*shm);
+                }
+
+                if (++ticks % 200 == 0) {
+                    std::printf("cycles %llu  missed %llu  max %.3f ms  state %u\n",
+                        static_cast<unsigned long long>(executor.cycles()),
+                        static_cast<unsigned long long>(executor.missed()),
+                        executor.max_period() * 1e3,
+                        static_cast<unsigned>(executor.state()));
+                }
+                if (opt.duration > 0.0 && aico2_rt::MonotonicSeconds() - t_start >= opt.duration) {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+
+            scheduler.Stop();
+            robot.Stop();
+
+            std::printf("\n--- 1 kHz loop, achieved ---\n"
+                        "cycles          %llu\n"
+                        "mean period     %.6f ms  (nominal 1.000)\n"
+                        "min period      %.6f ms\n"
+                        "max period      %.6f ms\n"
+                        "missed >1.5ms   %llu\n",
+                static_cast<unsigned long long>(executor.cycles()), executor.mean_period() * 1e3,
+                executor.min_period() * 1e3, executor.max_period() * 1e3,
+                static_cast<unsigned long long>(executor.missed()));
+
+            if (g_shutdown.load()) {
                 break;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            if (opt.duration > 0.0) {
+                break;
+            }
+
+            // Recoverable fault: clear and re-enter RT mode.
+            if (task_error.load()) {
+                std::fprintf(stderr, "\ncontrol task threw: %s\n", err_text);
+            } else if (executor.stop_requested()) {
+                std::fprintf(stderr, "\nrobot reported a fault or left operational state\n");
+            }
+            ++restarts;
+            std::fprintf(stderr, "recovering (attempt %d/%d)...\n", restarts, kMaxRestarts);
+
+            if (robot.fault()) {
+                robot.ClearFault();
+            }
+            bool recovered = false;
+            for (int w = 0; w < 100 && !g_shutdown.load(); ++w) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                if (robot.operational() && !robot.fault()) {
+                    recovered = true;
+                    break;
+                }
+                if (robot.fault()) {
+                    robot.ClearFault();
+                }
+            }
+            if (!recovered) {
+                std::fprintf(stderr, "could not recover after 10 s\n");
+                rc = 1;
+                break;
+            }
+            std::printf("recovered, re-entering RT mode\n");
         }
-
-        scheduler.Stop();
-        robot.Stop();
-
-        if (task_error.load()) {
-            std::fprintf(stderr, "\nthe control task threw: %s\n", err_text);
-            rc = 1;
-        } else if (executor.stop_requested()) {
-            std::fprintf(stderr, "\nstopped: the robot reported a fault or left"
-                                 " operational state\n");
+        if (restarts > kMaxRestarts) {
+            std::fprintf(stderr, "exceeded %d restarts, giving up\n", kMaxRestarts);
             rc = 1;
         }
-
-        std::printf("\n--- 1 kHz loop, achieved ---\n"
-                    "cycles          %llu\n"
-                    "mean period     %.6f ms  (nominal 1.000)\n"
-                    "min period      %.6f ms\n"
-                    "max period      %.6f ms\n"
-                    "missed >1.5ms   %llu\n",
-            static_cast<unsigned long long>(executor.cycles()), executor.mean_period() * 1e3,
-            executor.min_period() * 1e3, executor.max_period() * 1e3,
-            static_cast<unsigned long long>(executor.missed()));
 
     } catch (const std::exception& e) {
         std::fprintf(stderr, "error: %s\n", e.what());
