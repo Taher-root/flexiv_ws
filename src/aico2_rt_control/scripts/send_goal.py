@@ -58,8 +58,12 @@ class Sender(Node):
         self.client = ActionClient(self, FollowJointTrajectory, "follow_joint_trajectory")
 
     def _on_state(self, msg):
-        if self.state is None:
-            self.state = msg
+        # Keep the LATEST sample, not the first. Holding the first made the
+        # closing error line compare the target against the pre-move position,
+        # so it always printed an error exactly equal to the travel -- which
+        # looked like total tracking failure on a move that had in fact
+        # completed correctly.
+        self.state = msg
 
     def wait_for_state(self, timeout=5.0):
         end = self.get_clock().now().nanoseconds + int(timeout * 1e9)
@@ -185,11 +189,17 @@ def main():
     if res.result.error_string:
         print(f"error_string: {res.result.error_string}")
 
-    rclpy.spin_once(node, timeout_sec=0.5)
+    # The server holds the final point once finished, so a fresh sample is
+    # what matters here; spin long enough to be sure one has arrived.
+    deadline = node.get_clock().now().nanoseconds + int(0.5e9)
+    while node.get_clock().now().nanoseconds < deadline:
+        rclpy.spin_once(node, timeout_sec=0.05)
     final = node.state.position[index] if node.state else float("nan")
     want = (q_now + delta) / DEG
-    print(f"commanded {want:.3f} deg, measured {final / DEG:.3f} deg, "
-          f"error {final / DEG - want:.3f} deg")
+    print(f"started at {q_now / DEG:.3f} deg")
+    print(f"commanded  {want:.3f} deg")
+    print(f"measured   {final / DEG:.3f} deg")
+    print(f"error      {final / DEG - want:+.4f} deg")
     return 0 if code == 0 else 1
 
 

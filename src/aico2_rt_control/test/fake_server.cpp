@@ -52,11 +52,12 @@ struct ModelRobot {
     }
 };
 
+// The clock from shm_protocol.hpp, not a process-relative one: servo_publish
+// stamps targets with it from another process, and the tracker compares the two
+// directly. See MonotonicSeconds()' comment there.
 double Mono()
 {
-    using Clock = std::chrono::steady_clock;
-    static const Clock::time_point t0 = Clock::now();
-    return std::chrono::duration<double>(Clock::now() - t0).count();
+    return MonotonicSeconds();
 }
 
 }  // namespace

@@ -23,11 +23,12 @@ find_package(rclcpp_action REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(control_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 
 add_executable(rt_bridge src/rt_bridge.cpp)
 target_include_directories(rt_bridge PRIVATE include)
 ament_target_dependencies(rt_bridge
-  rclcpp rclcpp_action sensor_msgs trajectory_msgs control_msgs)
+  rclcpp rclcpp_action sensor_msgs trajectory_msgs control_msgs std_srvs)
 # shm_open/shm_unlink: in librt on glibc before 2.34, harmless after.
 target_link_libraries(rt_bridge rt)
 

@@ -73,7 +73,31 @@ std::unique_ptr<Shm> FreshShm()
     shm->dof = kDof;
     shm->published_slot.store(kNoSlot);
     shm->reading_slot.store(kNoSlot);
+    shm->servo_cfg.timeout_sec = 0.1;
+    shm->servo_cfg.max_jump_rad = 0.5;
+    shm->servo_cfg.settle_sec = 0.03;
+    for (std::uint32_t j = 0; j < kMaxDof; ++j) {
+        shm->servo_cfg.max_jerk[j] = 400.0;   // 30 * ddq_max from WideLimits
+    }
     return shm;
+}
+
+/** Write a servo target naming every joint, as a producer would. */
+void PublishServoTarget(Shm& shm, const double* q, double stamp_mono,
+    std::uint32_t mask = (1u << kDof) - 1u)
+{
+    BeginServoWrite(shm);
+    ServoTarget& t = shm.servo_target;
+    t.stamp_mono = stamp_mono;
+    for (std::uint32_t j = 0; j < kMaxDof; ++j) {
+        t.q[j] = (j < kDof) ? q[j] : 0.0;
+        t.dq[j] = 0.0;
+    }
+    t.mask = mask;
+    t.dof = kDof;
+    t.have_dq = 0u;
+    t.seq = t.seq + 1;
+    EndServoWrite(shm);
 }
 
 /** Fill a slot with a ramp on joint 0 from `from` to `to` over `T` seconds,
@@ -97,6 +121,234 @@ void FillRamp(Slot& s, std::uint64_t id, double from, double to, double T, int n
             p.ddq[j] = (j == 0) ? (to - from) * dde : 0.0;
         }
     }
+}
+
+/** Servo mode is entered from a hold, tracks a streamed target, and is left
+ *  by braking rather than by dropping a live velocity on the floor. */
+void TestServoModeTracksAStreamedTarget()
+{
+    std::printf("servo mode enters from a hold, tracks, and brakes on exit\n");
+    auto shm = FreshShm();
+    FakeRobot robot;
+    RtExecutor<FakeRobot> ex;
+    double hold[kMaxDof] = {};
+    ex.Init(shm.get(), &robot, kDof, WideLimits(), hold);
+
+    double now = 0.0;
+    ex.Cycle(now);
+    Check(ex.state() == ExecState::kIdle, "starts idle");
+
+    shm->servo_enable.store(1u);
+    now += kLoopPeriodSec;
+    ex.Cycle(now);
+    Check(ex.state() == ExecState::kServoing, "enters servo mode from idle");
+
+    // Stream a target 0.2 rad away on joint 4, refreshed every cycle so it
+    // never goes stale, and let the tracker converge.
+    double tgt[kMaxDof] = {};
+    tgt[4] = 0.2;
+    for (int i = 0; i < 3000; ++i) {
+        now += kLoopPeriodSec;
+        PublishServoTarget(*shm, tgt, now);
+        ex.Cycle(now);
+    }
+    Check(ex.state() == ExecState::kServoing, "stays in servo mode while fed");
+    Check(!ex.servo_stale(), "a target refreshed every cycle is never stale");
+    Close(ex.command().q[4], 0.2, 2e-4, "converges on the streamed target");
+    Close(ex.command().q[0], 0.0, 1e-12, "other joints untouched");
+
+    // Now move the target so the arm is genuinely in motion, then switch servo
+    // mode off mid-flight.
+    tgt[4] = 0.6;
+    for (int i = 0; i < 150; ++i) {
+        now += kLoopPeriodSec;
+        PublishServoTarget(*shm, tgt, now);
+        ex.Cycle(now);
+    }
+    Check(std::fabs(ex.command().dq[4]) > 0.05, "was moving when servo was switched off");
+
+    shm->servo_enable.store(0u);
+    const std::size_t at_release = robot.streamed.size();
+    for (int i = 0; i < 3000; ++i) {
+        now += kLoopPeriodSec;
+        ex.Cycle(now);
+    }
+    Check(ex.state() == ExecState::kIdle, "falls back to a hold once stopped");
+    Close(ex.command().dq[4], 0.0, 1e-12, "stopped with exactly zero velocity");
+
+    // The deceleration must be a ramp, not a step: the whole reason leaving
+    // servo mode is deferred until the tracker reports at rest.
+    double worst = 0.0;
+    for (std::size_t i = at_release + 1; i < robot.streamed.size(); ++i) {
+        worst = std::fmax(worst,
+            std::fabs(robot.streamed[i].dq[4] - robot.streamed[i - 1].dq[4]));
+    }
+    Check(worst <= WideLimits().ddq_max[4] * kLoopPeriodSec + 1e-9,
+        "release decelerates within ddq_max, with no velocity step");
+}
+
+/** A producer that stops being refreshed must bring the arm to a stop. */
+void TestStaleServoTargetBrakes()
+{
+    std::printf("a stale servo target brakes the arm and says so\n");
+    auto shm = FreshShm();
+    FakeRobot robot;
+    RtExecutor<FakeRobot> ex;
+    double hold[kMaxDof] = {};
+    ex.Init(shm.get(), &robot, kDof, WideLimits(), hold);
+    shm->servo_enable.store(1u);
+
+    double now = 0.0;
+    double tgt[kMaxDof] = {};
+    // Within max_jump_rad: a single target further than that is refused as a
+    // glitch, which would leave nothing being tracked at all.
+    tgt[4] = 0.4;
+    for (int i = 0; i < 300; ++i) {   // come up to speed
+        now += kLoopPeriodSec;
+        PublishServoTarget(*shm, tgt, now);
+        ex.Cycle(now);
+    }
+    Check(ex.command().dq[4] > 0.1, "moving before the producer stops");
+    Check(!ex.servo_stale(), "not stale while being fed");
+
+    // Stop refreshing. The target's stamp stays where it was, so its age grows
+    // past servo_cfg.timeout_sec purely from the loop's own clock.
+    for (int i = 0; i < 3000; ++i) {
+        now += kLoopPeriodSec;
+        ex.Cycle(now);
+    }
+    Check(ex.servo_stale(), "reports the target as stale");
+    Check(ex.state() == ExecState::kServoing, "still in servo mode, just holding");
+    Close(ex.command().dq[4], 0.0, 1e-12, "brakes to a standstill");
+
+    // And picks straight back up when the producer returns, without needing
+    // servo mode to be cycled.
+    tgt[4] = ex.command().q[4] + 0.1;
+    for (int i = 0; i < 2000; ++i) {
+        now += kLoopPeriodSec;
+        PublishServoTarget(*shm, tgt, now);
+        ex.Cycle(now);
+    }
+    Check(!ex.servo_stale(), "no longer stale once fed again");
+    Close(ex.command().q[4], tgt[4], 2e-4, "resumes tracking");
+}
+
+/** The two channels are mutually exclusive, in both directions. */
+void TestChannelsAreMutuallyExclusive()
+{
+    std::printf("a trajectory and a servo stream cannot both drive the arm\n");
+    {
+        auto shm = FreshShm();
+        FakeRobot robot;
+        RtExecutor<FakeRobot> ex;
+        double hold[kMaxDof] = {};
+        ex.Init(shm.get(), &robot, kDof, WideLimits(), hold);
+        shm->servo_enable.store(1u);
+        ex.Cycle(0.0);
+        Check(ex.state() == ExecState::kServoing, "servoing");
+
+        // A goal published behind the bridge's back.
+        FillRamp(shm->slots[0], 7, 0.0, 0.3, 1.0, 20);
+        shm->published_slot.store(0);
+        shm->publish_seq.store(1);
+        ex.Cycle(kLoopPeriodSec);
+        Check(ex.state() == ExecState::kServoing, "the stream keeps the arm");
+        Check(ex.reject_reason() == RejectReason::kServoActive, "and says why the goal was dropped");
+        Check(shm->adopted_seq.load() == 1, "the publish is still acknowledged, not left hanging");
+    }
+    {
+        auto shm = FreshShm();
+        FakeRobot robot;
+        RtExecutor<FakeRobot> ex;
+        double hold[kMaxDof] = {};
+        ex.Init(shm.get(), &robot, kDof, WideLimits(), hold);
+
+        FillRamp(shm->slots[0], 7, 0.0, 0.3, 1.0, 20);
+        shm->published_slot.store(0);
+        shm->publish_seq.store(1);
+        ex.Cycle(0.0);
+        Check(ex.state() == ExecState::kRunning, "running a trajectory");
+
+        shm->servo_enable.store(1u);
+        ex.Cycle(kLoopPeriodSec);
+        Check(ex.state() == ExecState::kRunning, "servo mode does not interrupt it");
+        Check(ex.reject_reason() == RejectReason::kTrajectoryActive, "and says why");
+    }
+}
+
+/** The waist is pinned unless rt_server was told to command it, and a producer
+ *  streaming an arm group has no business moving it. */
+void TestServoCannotMoveThePinnedWaist()
+{
+    std::printf("servo targets cannot move the waist unless --control-waist\n");
+    auto shm = FreshShm();
+    shm->n_external = 2;
+    shm->control_waist = 0u;
+    FakeRobot robot;
+    RtExecutor<FakeRobot> ex;
+    double hold[kMaxDof] = {};
+    hold[0] = 0.15;
+    hold[1] = -0.25;
+    ex.Init(shm.get(), &robot, kDof, WideLimits(), hold);
+    shm->servo_enable.store(1u);
+
+    double now = 0.0;
+    double tgt[kMaxDof] = {};
+    tgt[0] = 1.0;    // both waist axes asked to move a long way...
+    tgt[1] = 1.0;
+    tgt[5] = 0.2;    // ...alongside a legitimate arm joint
+    for (int i = 0; i < 3000; ++i) {
+        now += kLoopPeriodSec;
+        PublishServoTarget(*shm, tgt, now);
+        ex.Cycle(now);
+    }
+    Close(ex.command().q[0], 0.15, 1e-12, "waist axis 0 did not move at all");
+    Close(ex.command().q[1], -0.25, 1e-12, "waist axis 1 did not move at all");
+    Close(ex.command().q[5], 0.2, 2e-4, "the arm joint in the same target still moved");
+}
+
+/** A target that jumps further than max_jump_rad is a glitch, and refusing it
+ *  has to be visible or it presents as the arm mysteriously not following. */
+void TestServoRejectsAJumpAndCountsIt()
+{
+    std::printf("a servo target that jumps is refused, and the count is published\n");
+    auto shm = FreshShm();
+    FakeRobot robot;
+    RtExecutor<FakeRobot> ex;
+    double hold[kMaxDof] = {};
+    ex.Init(shm.get(), &robot, kDof, WideLimits(), hold);
+    shm->servo_enable.store(1u);
+
+    double now = 0.0;
+    double tgt[kMaxDof] = {};
+    tgt[3] = 0.1;
+    for (int i = 0; i < 2000; ++i) {
+        now += kLoopPeriodSec;
+        PublishServoTarget(*shm, tgt, now);
+        ex.Cycle(now);
+    }
+    Check(ex.servo_rejected() == 0, "nothing refused so far");
+
+    double wild[kMaxDof] = {};
+    wild[3] = 4.0;    // an IK branch flip, or a clutch that forgot to re-seed
+    now += kLoopPeriodSec;
+    PublishServoTarget(*shm, wild, now);
+    ex.Cycle(now);
+    Check(ex.servo_rejected() == 1, "the refusal is counted");
+
+    for (int i = 0; i < 2000; ++i) {
+        now += kLoopPeriodSec;
+        ex.Cycle(now);   // deliberately not refreshing: the stamp is now stale
+    }
+    // Within a milliradian of the last good target. The point is that it is
+    // nowhere near the 4.0 rad that was asked for, not the exact convergence
+    // -- test_servo_tracker covers that against realistic joint limits.
+    Close(ex.command().q[3], 0.1, 1e-3, "the arm stayed where the last good target put it");
+    Check(ex.command().q[3] < 0.2, "and nowhere near the target that was refused");
+
+    RtStatus st{};
+    Check(ReadStatus(*shm, st), "status is readable");
+    Check(st.servo_rejected == 1, "and carries the count across the mapping");
 }
 
 void TestIdleHoldsCapturedPosition()
@@ -362,6 +614,11 @@ int main()
     TestRejectsMalformedSlot();
     TestSecondTrajectoryPreemptsFirst();
     TestTimingStatsAreSane();
+    TestServoModeTracksAStreamedTarget();
+    TestStaleServoTargetBrakes();
+    TestChannelsAreMutuallyExclusive();
+    TestServoCannotMoveThePinnedWaist();
+    TestServoRejectsAJumpAndCountsIt();
     std::printf("%s (%d failures)\n", g_failures == 0 ? "PASS" : "FAIL", g_failures);
     return g_failures == 0 ? 0 : 1;
 }

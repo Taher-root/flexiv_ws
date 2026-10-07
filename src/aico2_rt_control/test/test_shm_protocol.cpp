@@ -130,6 +130,94 @@ void TestSeqlockNeverTears()
     delete shm;
 }
 
+/**
+ * The servo target has its own seqlock because it has its own writer -- the
+ * bridge -- and a seqlock with two writers is not a seqlock. It is also the one
+ * region read on every RT cycle, so a torn read here is a physically
+ * meaningless pose streamed straight to nine joints.
+ */
+void TestServoTargetNeverTears()
+{
+    std::printf("the servo target's own seqlock never yields a torn target\n");
+    auto* shm = new Shm{};
+    std::atomic<bool> stop{false};
+    std::atomic<long> reads{0}, torn{0};
+
+    // The bridge side, overwriting as fast as it can.
+    std::thread writer([&] {
+        for (std::uint64_t k = 1; !stop.load(std::memory_order_relaxed); ++k) {
+            const double v = static_cast<double>(k);
+            double q[kMaxDof], dq[kMaxDof];
+            for (std::size_t j = 0; j < kMaxDof; ++j) {
+                q[j] = v;
+                dq[j] = v;
+            }
+            WriteServoTarget(*shm, q, dq, 0x1FFu, 9, true, v);
+        }
+    });
+
+    ServoTarget out{};
+    while (reads.load() < 50000) {
+        if (!ReadServoTarget(*shm, out, 64)) {
+            continue;
+        }
+        if (out.seq == 0u) {
+            // The pristine mapping, read before the writer thread got going.
+            // seq == 0 is the protocol's own "never written", so this is a
+            // coherent state and not a tear -- counting it as one is how this
+            // test first reported hundreds of failures against a seqlock that
+            // was working correctly.
+            continue;
+        }
+        reads.fetch_add(1);
+        const double k = out.stamp_mono;
+        bool consistent = (out.dof == 9) && (out.mask == 0x1FFu)
+                       && (out.seq == static_cast<std::uint64_t>(k));
+        // Only the first `dof` entries carry the value: WriteServoTarget
+        // zeroes the rest, so checking all sixteen would call every read torn.
+        for (std::size_t j = 0; j < 9 && consistent; ++j) {
+            consistent = out.q[j] == k && out.dq[j] == k;
+        }
+        for (std::size_t j = 9; j < kMaxDof && consistent; ++j) {
+            consistent = out.q[j] == 0.0 && out.dq[j] == 0.0;
+        }
+        if (!consistent) {
+            torn.fetch_add(1);
+        }
+    }
+    stop.store(true);
+    writer.join();
+
+    std::printf("  %ld coherent targets, %ld torn\n", reads.load(), torn.load());
+    Check(torn.load() == 0, "no torn servo targets");
+    Check(reads.load() > 0, "reads actually happened");
+    delete shm;
+}
+
+/**
+ * The RT loop's read budget is four tries, not a spin. A read that fails must
+ * leave the caller free to carry on with the target it already has, so the
+ * contract is that a failure is reported rather than waited out.
+ */
+void TestServoReadIsBoundedNotBlocking()
+{
+    std::printf("a servo read in progress fails fast instead of spinning\n");
+    auto* shm = new Shm{};
+    double q[kMaxDof] = {};
+    WriteServoTarget(*shm, q, nullptr, 0x1FFu, 9, false, 1.0);
+
+    ServoTarget out{};
+    Check(ReadServoTarget(*shm, out), "reads cleanly when no write is in flight");
+    Check(out.seq == 1, "and sees the target that was written");
+
+    // Leave the seqlock odd, as a writer halfway through would.
+    BeginServoWrite(*shm);
+    Check(!ReadServoTarget(*shm, out), "refuses to return a target mid-write");
+    EndServoWrite(*shm);
+    Check(ReadServoTarget(*shm, out), "and recovers once the write completes");
+    delete shm;
+}
+
 void TestReadStateReportsFailureMidWrite()
 {
     std::printf("a read during a write reports failure rather than garbage\n");
@@ -231,6 +319,8 @@ int main()
     TestSlotRotationNeverCollides();
     TestPublishSeqIncreases();
     TestSeqlockNeverTears();
+    TestServoTargetNeverTears();
+    TestServoReadIsBoundedNotBlocking();
     TestReadStateReportsFailureMidWrite();
     TestAcrossRealProcesses();
     TestSizeIsReasonable();

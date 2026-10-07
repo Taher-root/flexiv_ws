@@ -86,6 +86,16 @@ target_compile_options(traj_publish PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(traj_publish Threads::Threads rt)
 install(TARGETS traj_publish DESTINATION bin)
 
+# The servo twin of traj_publish: drives the latest-target stream instead of a
+# trajectory, so the tracker can be measured on the arm with neither ROS nor
+# MoveIt Servo running. Also needs no RDK.
+add_executable(servo_publish ../src/servo_publish.cpp)
+target_include_directories(servo_publish PRIVATE ../include)
+target_compile_features(servo_publish PRIVATE cxx_std_17)
+target_compile_options(servo_publish PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(servo_publish Threads::Threads rt)
+install(TARGETS servo_publish DESTINATION bin)
+
 # The static archive references spdlog and fmt without carrying them.
 find_package(spdlog QUIET)
 find_package(fmt QUIET)

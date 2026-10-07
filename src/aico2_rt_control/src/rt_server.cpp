@@ -85,19 +85,24 @@ private:
     std::vector<double> q_, dq_, ddq_;
 };
 
-double MonotonicSeconds()
-{
-    using Clock = std::chrono::steady_clock;
-    static const Clock::time_point t0 = Clock::now();
-    return std::chrono::duration<double>(Clock::now() - t0).count();
-}
-
 struct Options {
     std::string robot_sn;
     std::string shm_name = aico2_rt::kDefaultShmName;
     bool control_waist = false;
     double max_acc = 3.0;   // rad/s^2; matches the Python driver's constant
+    /** Servo-stream settings. Zero means "take the documented default", which
+     *  rt_executor substitutes; see kDefaultServoTimeoutSec and friends. The
+     *  jerk limit defaults to a multiple of max_acc rather than a constant,
+     *  because the tracker's lag carries a ddq_max / max_jerk term -- a fixed
+     *  jerk limit would make raising --max-acc stop helping. */
+    double servo_max_jerk = 0.0;
+    double servo_timeout = 0.0;
+    double servo_max_jump = 0.0;
+    double servo_settle = 0.0;
     double duration = 0.0;  // 0 = until signalled
+    /** 0 = stiff position control. >0 selects impedance at this fraction of
+     *  the robot's nominal joint stiffness. */
+    double stiffness_ratio = 0.0;
 };
 
 bool ParseArgs(int argc, char** argv, Options& opt)
@@ -113,8 +118,35 @@ bool ParseArgs(int argc, char** argv, Options& opt)
             "  --max-acc A         acceleration clamp, rad/s^2 (default 3.0).\n"
             "                      RobotInfo carries no acceleration limit, so\n"
             "                      this cannot be read from the robot.\n"
-            "  --duration S        stop after S seconds (default: until Ctrl-C)\n",
-            argv[0], aico2_rt::kDefaultShmName);
+            "  --duration S        stop after S seconds (default: until Ctrl-C)\n"
+            "  --impedance R       compliant instead of stiff: use RT_JOINT_IMPEDANCE\n"
+            "                      with R * K_q_nom joint stiffness, R in (0, 1].\n"
+            "                      R=1 is nominal stiffness, lower yields more.\n"
+            "                      Arm axes only -- the external axes report an\n"
+            "                      infinite K_q_nom and are not impedance\n"
+            "                      controlled, so they stay rigid either way.\n"
+            "\n"
+            " servo stream (MoveIt Servo / VR teleop; see servo_tracker.hpp)\n"
+            "  --servo-max-jerk J  jerk limit, rad/s^3 (default 30 * max-acc).\n"
+            "                      The RDK has no jerk limit of its own, so\n"
+            "                      this loop is the only place one exists.\n"
+            "                      It is half the lag story: tracking lag is\n"
+            "                      v/(2*max-acc) + max-acc/J seconds, so\n"
+            "                      raising --max-acc without raising this\n"
+            "                      eventually makes following WORSE.\n"
+            "  --servo-timeout S   stop chasing a target older than S seconds\n"
+            "                      (default %.2f). A dead producer brings the\n"
+            "                      arm to a jerk-limited stop after this.\n"
+            "  --servo-max-jump R  ignore a target more than R rad from the\n"
+            "                      current command (default %.2f). Catches IK\n"
+            "                      branch flips and un-seeded clutch\n"
+            "                      re-engages, which would otherwise be\n"
+            "                      followed at full speed.\n"
+            "  --servo-settle T    terminal settling time constant, seconds\n"
+            "                      (default 0.03). Shapes the last fraction\n"
+            "                      of a degree only; it is NOT the lag.\n",
+            argv[0], aico2_rt::kDefaultShmName,
+            aico2_rt::kDefaultServoTimeoutSec, aico2_rt::kDefaultServoMaxJumpRad);
         return false;
     }
     opt.robot_sn = argv[1];
@@ -129,13 +161,33 @@ bool ParseArgs(int argc, char** argv, Options& opt)
             opt.max_acc = std::atof(argv[++i]);
         } else if (a == "--duration" && has_next) {
             opt.duration = std::atof(argv[++i]);
+        } else if (a == "--servo-max-jerk" && has_next) {
+            opt.servo_max_jerk = std::atof(argv[++i]);
+        } else if (a == "--servo-timeout" && has_next) {
+            opt.servo_timeout = std::atof(argv[++i]);
+        } else if (a == "--servo-max-jump" && has_next) {
+            opt.servo_max_jump = std::atof(argv[++i]);
+        } else if (a == "--servo-settle" && has_next) {
+            opt.servo_settle = std::atof(argv[++i]);
+        } else if (a == "--impedance" && has_next) {
+            opt.stiffness_ratio = std::atof(argv[++i]);
         } else {
             std::fprintf(stderr, "unrecognised argument: %s\n", a.c_str());
             return false;
         }
     }
+    if (opt.servo_max_jerk < 0.0 || opt.servo_timeout < 0.0 || opt.servo_max_jump < 0.0
+        || opt.servo_settle < 0.0) {
+        std::fprintf(stderr, "the --servo-* values cannot be negative\n");
+        return false;
+    }
     if (opt.max_acc <= 0.0) {
         std::fprintf(stderr, "--max-acc must be positive\n");
+        return false;
+    }
+    if (opt.stiffness_ratio < 0.0 || opt.stiffness_ratio > 1.0) {
+        std::fprintf(stderr, "--impedance must be in (0, 1]: it is a fraction of the"
+                             " robot's own nominal stiffness\n");
         return false;
     }
     return true;
@@ -275,18 +327,73 @@ int main(int argc, char** argv)
         }
 
         std::printf("holding at %s\n", flexiv::rdk::utility::Vec2Str(q_now).c_str());
-        std::printf("switching to RT_JOINT_POSITION\n");
-        robot.SwitchMode(flexiv::rdk::Mode::RT_JOINT_POSITION);
 
-        RobotAdapter adapter(robot, dof);
-        aico2_rt::RtExecutor<RobotAdapter> executor;
-        executor.Init(shm, &adapter, dof, limits, q_now.data());
+        const bool impedance = opt.stiffness_ratio > 0.0;
+        if (impedance) {
+            std::printf("switching to RT_JOINT_IMPEDANCE (compliant)\n");
+            robot.SwitchMode(flexiv::rdk::Mode::RT_JOINT_IMPEDANCE);
+            // SetJointImpedance is only applicable in the impedance modes, so
+            // it has to follow the switch, never precede it.
+            //
+            // The external axes report K_q_nom as infinite: they are not
+            // impedance controlled, and the Python driver already established
+            // that the right thing is to pass their nominal value straight
+            // through and scale only the arm axes. Scaling infinity would be
+            // meaningless, and substituting a finite number would be inventing
+            // a stiffness the robot never offered.
+            std::vector<double> K_q(info.K_q_nom);
+            for (std::uint32_t j = ext; j < dof; ++j) {
+                K_q[j] = info.K_q_nom[j] * opt.stiffness_ratio;
+            }
+            robot.SetJointImpedance(K_q);
+            std::printf("joint stiffness set to %.0f%% of nominal on axes %u..%u:\n  %s\n",
+                opt.stiffness_ratio * 100.0, ext, dof - 1,
+                flexiv::rdk::utility::Vec2Str(K_q).c_str());
+            std::printf("NOTE: a compliant arm does not track as closely by design."
+                        " Position error is expected to grow as stiffness falls.\n");
+        } else {
+            std::printf("switching to RT_JOINT_POSITION (stiff)\n");
+            robot.SwitchMode(flexiv::rdk::Mode::RT_JOINT_POSITION);
+        }
+
         // Publish the configuration a writer needs in order to produce a
-        // trajectory this server will accept without clamping.
+        // trajectory this server will accept without clamping. This has to
+        // happen BEFORE Init: the executor reads n_external and servo_cfg out
+        // of the mapping, so initialising first left it masking waist axes it
+        // believed did not exist.
         shm->dof = dof;
         shm->n_external = ext;
         shm->control_waist = opt.control_waist ? 1u : 0u;
         shm->limits = limits;
+        aico2_rt::ServoConfig scfg{};
+        scfg.timeout_sec = opt.servo_timeout;
+        scfg.max_jump_rad = opt.servo_max_jump;
+        scfg.settle_sec = opt.servo_settle;
+        for (std::uint32_t j = 0; j < aico2_rt::kMaxDof; ++j) {
+            scfg.max_jerk[j] = opt.servo_max_jerk;
+        }
+        shm->servo_cfg = scfg;
+        shm->servo_enable.store(0u);
+
+        RobotAdapter adapter(robot, dof);
+        aico2_rt::RtExecutor<RobotAdapter> executor;
+        // Init substitutes the documented defaults for anything left at zero,
+        // so the figures logged below are the ones actually in force.
+        executor.Init(shm, &adapter, dof, limits, q_now.data());
+        // Read back rather than recomputing: Init normalised the zeros into
+        // the mapping, so these are the figures the loop will enforce. The
+        // predicted lag is printed because it is the number anyone driving a
+        // teleop stream actually wants, and it is not obvious from the limits.
+        const aico2_rt::ServoConfig& eff = shm->servo_cfg;
+        const double arm_acc = limits.ddq_max[ext < dof ? ext : 0];
+        const double arm_jerk = eff.max_jerk[ext < dof ? ext : 0];
+        std::printf("servo stream: jerk %.1f rad/s^3, timeout %.3f s, max jump %.3f rad,"
+                    " settle %.3f s\n",
+            arm_jerk, eff.timeout_sec, eff.max_jump_rad, eff.settle_sec);
+        std::printf("  predicted tracking lag at 1 rad/s: %.0f ms"
+                    " (%.0f from ddq_max, %.0f from max_jerk)\n",
+            1000.0 * (1.0 / (2.0 * arm_acc) + arm_acc / arm_jerk),
+            1000.0 / (2.0 * arm_acc), 1000.0 * arm_acc / arm_jerk);
 
         // Anything thrown out of the periodic task would cross the scheduler
         // boundary, so it is caught here and reported through a flag the main
@@ -298,7 +405,7 @@ int main(int argc, char** argv)
         scheduler.AddTask(
             [&] {
                 try {
-                    executor.Cycle(MonotonicSeconds());
+                    executor.Cycle(aico2_rt::MonotonicSeconds());
                 } catch (const std::exception& e) {
                     std::snprintf(err_text, sizeof(err_text), "%s", e.what());
                     task_error.store(true, std::memory_order_release);
@@ -312,14 +419,14 @@ int main(int argc, char** argv)
 
         // Non-RT thread: publish measured state for the bridge, and watch for
         // reasons to stop. states() allocates, which is why it is here.
-        const double t_start = MonotonicSeconds();
+        const double t_start = aico2_rt::MonotonicSeconds();
         std::uint64_t ticks = 0;
         while (!g_shutdown.load() && !executor.stop_requested()
                && !task_error.load(std::memory_order_acquire)) {
             const auto st = robot.states();
             aico2_rt::BeginMeasuredWrite(*shm);
             aico2_rt::Measured& m = shm->measured;
-            m.stamp_mono = MonotonicSeconds();
+            m.stamp_mono = aico2_rt::MonotonicSeconds();
             for (std::uint32_t j = 0; j < dof; ++j) {
                 m.q[j] = st.q[j];
                 m.dq[j] = st.dq[j];
@@ -337,7 +444,7 @@ int main(int argc, char** argv)
                     executor.max_period() * 1e3,
                     static_cast<unsigned>(executor.state()));
             }
-            if (opt.duration > 0.0 && MonotonicSeconds() - t_start >= opt.duration) {
+            if (opt.duration > 0.0 && aico2_rt::MonotonicSeconds() - t_start >= opt.duration) {
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));

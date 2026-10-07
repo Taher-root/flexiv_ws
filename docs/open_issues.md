@@ -76,6 +76,24 @@ limit**, so acceleration switches abruptly between `+max_acc`, 0 and `-max_acc`.
 
 **Not swept:** 20 and 30 Hz. The minimum may sit below 50.
 
+**Addressed on the RT path (2026-10-06).** Both halves of the mechanism above
+are gone once `aico2_rt_control` is driving instead of `SendJointPosition`,
+because there is no generator on the robot behind `StreamJointPosition`:
+
+- *No timing information* — the loop supplies `q`, `dq` and `ddq` on a fixed
+  1 kHz schedule, so there is no send rate for the motion to depend on. For a
+  whole plan the interpolation is a quintic Hermite resample (C², so no
+  acceleration step at a waypoint); for a teleop stream it is a tracker.
+- *No jerk limit* — `servo_tracker.hpp` applies one, per joint, as the control
+  input rather than as a post-filter. It defaults to 30× the acceleration limit.
+
+Worth noting for anyone tuning the NRT path in the meantime: the jerk limit is
+not free there either. On the RT tracker the lag is
+`v/(2·ddq_max) + ddq_max/max_jerk`, so the `max_jerk ≈ 10 × max_acc` chosen for
+feel in issue 1 costs about 100 ms of following lag at any speed. 30× brings
+that to 33 ms. That trade does not exist at all in NRT, where there is simply no
+jerk limit to set.
+
 **Answered by Flexiv support (2026-10-05):** RT control **is** available on
 the Rizon series with the RDK-Professional licence we hold, but only from
 **C++** — the Python bindings are NRT-only by design, which matches what we
