@@ -3,7 +3,7 @@
 One command brings up everything the operator needs for VR teleop with live
 camera feeds, collision-checked arm motion, and the 1 kHz RT control loop:
 
-  ros2 launch flexiv_amr_bringup teleop.launch.py
+  ros2 launch flexiv_amr_bringup teleop.launch.py use_vr:=true
 
 What runs (in staged order):
 
@@ -13,6 +13,7 @@ What runs (in staged order):
   4. foxglove_bridge                   WebSocket -> Foxglove Studio in browser
   5. move_group                        planning scene for collision checking
   6. servo_node                        TwistStamped -> JointTrajectory at 100 Hz
+  7. vr_bridge (opt)                   WebXR poses -> Servo twist at port 8181
 
 rt_server must already be running in a separate (ROS-free) terminal.
 
@@ -25,8 +26,11 @@ ws://<laptop-ip>:8765. Add Image panels for /cam_left/cam_left/color/image_raw,
 /cam_right/cam_right/color/image_raw, /cam_head/cam_head/color/image_raw.
 
 Usage:
-  # Default (serials baked in):
+  # Default (serials baked in, no VR):
   ros2 launch flexiv_amr_bringup teleop.launch.py
+
+  # With VR teleop (Quest 3 via ADB: adb reverse tcp:8181 tcp:8181):
+  ros2 launch flexiv_amr_bringup teleop.launch.py use_vr:=true
 
   # Skip cameras (already running elsewhere):
   ros2 launch flexiv_amr_bringup teleop.launch.py use_cameras:=false
@@ -51,6 +55,7 @@ from launch_ros.substitutions import FindPackageShare
 
 SERVO_DELAY = 4.0
 MOVE_GROUP_DELAY = 2.0
+VR_DELAY = 5.0
 
 
 def _camera(camera_name, serial, condition):
@@ -91,6 +96,7 @@ def generate_launch_description():
     use_cameras = LaunchConfiguration("use_cameras")
     use_servo = LaunchConfiguration("use_servo")
     use_foxglove = LaunchConfiguration("use_foxglove")
+    use_vr = LaunchConfiguration("use_vr")
 
     urdf_path = os.path.join(
         get_package_share_directory("flexiv_amr_description"),
@@ -102,6 +108,7 @@ def generate_launch_description():
     cameras_on = IfCondition(use_cameras)
     servo_on = IfCondition(use_servo)
     foxglove_on = IfCondition(use_foxglove)
+    vr_on = IfCondition(use_vr)
 
     return LaunchDescription([
         # ---- Arguments ----
@@ -113,6 +120,9 @@ def generate_launch_description():
         DeclareLaunchArgument("use_foxglove", default_value="true",
                               description="Launch foxglove_bridge for browser "
                                           "video streaming"),
+        DeclareLaunchArgument("use_vr", default_value="false",
+                              description="Launch VR teleop bridge (WebXR "
+                                          "controller to Servo twist)"),
         DeclareLaunchArgument("cam_left_serial", default_value="_327622300610",
                               description="Serial of the left-view D456"),
         DeclareLaunchArgument("cam_right_serial", default_value="_327622300144",
@@ -190,6 +200,19 @@ def generate_launch_description():
             actions=[
                 _include("aico2_moveit_config", "servo.launch.py",
                          condition=servo_on),
+            ],
+        ),
+
+        # ============================================================
+        # 7. VR bridge — WebXR controller poses -> Servo twist commands
+        #    Starts after Servo so the twist topic is ready.
+        #    Connect Quest 3 via ADB: adb reverse tcp:8181 tcp:8181
+        # ============================================================
+        TimerAction(
+            period=VR_DELAY,
+            actions=[
+                _include("aico2_vr_teleop", "vr_bridge.launch.py",
+                         condition=vr_on),
             ],
         ),
     ])
