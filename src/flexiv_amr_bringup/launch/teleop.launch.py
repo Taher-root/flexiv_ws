@@ -108,10 +108,12 @@ def _include(package, launch_file, launch_arguments=None, condition=None):
     )
 
 
-def _arm_nodes(arm, shm_name, servo_on, vr_on):
-    """Nodes for one arm: rt_bridge + servo + vr_bridge."""
+def _arm_nodes(arm, shm_name, servo_on, vr_on, include_vr=True):
+    """Nodes for one arm: rt_bridge + servo + optionally vr_bridge."""
     arm_ns = f"{arm}_arm"
     planning_frame = _PLANNING_FRAMES.get(arm, "Left_link0")
+    servo_node_name = f"servo_node_{arm}"
+    twist_topic = f"/{servo_node_name}/delta_twist_cmds"
     nodes = [
         Node(
             package="aico2_rt_control",
@@ -125,27 +127,35 @@ def _arm_nodes(arm, shm_name, servo_on, vr_on):
             period=SERVO_DELAY,
             actions=[
                 _include("aico2_moveit_config", "servo.launch.py",
-                         launch_arguments={"arm": arm},
+                         launch_arguments={
+                             "arm": arm,
+                             "node_name": servo_node_name,
+                         },
                          condition=servo_on),
             ],
         ),
-        TimerAction(
-            period=VR_DELAY,
-            actions=[
-                Node(
-                    package="aico2_vr_teleop",
-                    executable="vr_bridge",
-                    name=f"vr_bridge_{arm}",
-                    output="screen",
-                    parameters=[{
-                        "planning_frame": planning_frame,
-                        "arm_ns": arm_ns,
-                    }],
-                    condition=vr_on,
-                ),
-            ],
-        ),
     ]
+    if include_vr:
+        nodes.append(
+            TimerAction(
+                period=VR_DELAY,
+                actions=[
+                    Node(
+                        package="aico2_vr_teleop",
+                        executable="vr_bridge",
+                        name=f"vr_bridge_{arm}",
+                        output="screen",
+                        parameters=[{
+                            "hand": arm,
+                            "planning_frame": planning_frame,
+                            "arm_ns": arm_ns,
+                            "twist_topic": twist_topic,
+                        }],
+                        condition=vr_on,
+                    ),
+                ],
+            ),
+        )
     return nodes
 
 
@@ -230,8 +240,35 @@ def _build_nodes(context):
             "shm_name_left", _DEFAULT_SHM["left"])
         shm_right = context.launch_configurations.get(
             "shm_name_right", _DEFAULT_SHM["right"])
-        nodes += _arm_nodes("left", shm_left, servo_on, vr_on)
-        nodes += _arm_nodes("right", shm_right, servo_on, vr_on)
+        nodes += _arm_nodes("left", shm_left, servo_on, vr_on,
+                            include_vr=False)
+        nodes += _arm_nodes("right", shm_right, servo_on, vr_on,
+                            include_vr=False)
+        nodes.append(
+            TimerAction(
+                period=VR_DELAY,
+                actions=[
+                    Node(
+                        package="aico2_vr_teleop",
+                        executable="vr_bridge",
+                        name="vr_bridge",
+                        output="screen",
+                        parameters=[{
+                            "hand": "both",
+                            "left_planning_frame": _PLANNING_FRAMES["left"],
+                            "left_arm_ns": "left_arm",
+                            "left_twist_topic":
+                                "/servo_node_left/delta_twist_cmds",
+                            "right_planning_frame": _PLANNING_FRAMES["right"],
+                            "right_arm_ns": "right_arm",
+                            "right_twist_topic":
+                                "/servo_node_right/delta_twist_cmds",
+                        }],
+                        condition=vr_on,
+                    ),
+                ],
+            ),
+        )
     else:
         shm_key = f"shm_name_{arm}"
         shm_name = context.launch_configurations.get(

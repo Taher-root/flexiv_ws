@@ -76,6 +76,7 @@ def generate_launch_description():
 
     def _launch_servo(context):
         arm = context.launch_configurations.get("arm", "left")
+        node_name = context.launch_configurations.get("node_name", "servo_node")
         overrides = _ARM_CONFIG.get(arm, _ARM_CONFIG["left"])
         servo_yaml.update(overrides)
         servo_params = {"moveit_servo": servo_yaml}
@@ -84,7 +85,7 @@ def generate_launch_description():
         return [Node(
             package="moveit_servo",
             executable="servo_node",
-            name="servo_node",
+            name=node_name,
             output="screen",
             arguments=["--ros-args", "--log-level", ll],
             parameters=[
@@ -98,5 +99,8 @@ def generate_launch_description():
         DeclareLaunchArgument("log_level", default_value="info"),
         DeclareLaunchArgument("arm", default_value="left",
                               description="Which arm to servo: left or right"),
+        DeclareLaunchArgument("node_name", default_value="servo_node",
+                              description="ROS node name for this servo "
+                                          "instance (unique per arm)"),
         OpaqueFunction(function=_launch_servo),
     ])
