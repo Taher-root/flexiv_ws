@@ -9,27 +9,24 @@ What runs (in staged order):
 
   1. robot_state_publisher            URDF -> TF
   2. rt_bridge (ns /left_arm)         shm <-> ROS (joint_states, servo, FJT)
-  3. 3x RealSense D456 cameras        /cam_left, /cam_right, /cam_wrist color
+  3. 3x RealSense D456 cameras        /cam_left, /cam_right, /cam_head color
   4. foxglove_bridge                   WebSocket -> Foxglove Studio in browser
   5. move_group                        planning scene for collision checking
   6. servo_node                        TwistStamped -> JointTrajectory at 100 Hz
 
 rt_server must already be running in a separate (ROS-free) terminal.
 
-Camera serial numbers: set cam_left_serial, cam_right_serial, cam_wrist_serial
-to the three D456s plugged into the laptop. Find them with:
-  rs-enumerate-devices | grep Serial
+Camera serials are baked in as defaults (left: 327622300610, right: 327622300144,
+head: 324422301136). Override with cam_left_serial, cam_right_serial,
+cam_head_serial if you swap cameras.
 
 Video streaming: open https://app.foxglove.dev in a browser and connect to
-ws://<laptop-ip>:8765. Add Image panels for /cam_left/cam_left/color/image_raw
-etc. No software to install on the viewing machine.
+ws://<laptop-ip>:8765. Add Image panels for /cam_left/cam_left/color/image_raw,
+/cam_right/cam_right/color/image_raw, /cam_head/cam_head/color/image_raw.
 
 Usage:
-  # Minimal (fill in your serials):
-  ros2 launch flexiv_amr_bringup teleop.launch.py \\
-      cam_left_serial:=_XXXXXXXXXX \\
-      cam_right_serial:=_YYYYYYYYYY \\
-      cam_wrist_serial:=_ZZZZZZZZZZ
+  # Default (serials baked in):
+  ros2 launch flexiv_amr_bringup teleop.launch.py
 
   # Skip cameras (already running elsewhere):
   ros2 launch flexiv_amr_bringup teleop.launch.py use_cameras:=false
@@ -116,13 +113,12 @@ def generate_launch_description():
         DeclareLaunchArgument("use_foxglove", default_value="true",
                               description="Launch foxglove_bridge for browser "
                                           "video streaming"),
-        DeclareLaunchArgument("cam_left_serial", default_value="_000000000000",
-                              description="Serial of the left-view D456 "
-                                          "(rs-enumerate-devices | grep Serial)"),
-        DeclareLaunchArgument("cam_right_serial", default_value="_000000000000",
+        DeclareLaunchArgument("cam_left_serial", default_value="_327622300610",
+                              description="Serial of the left-view D456"),
+        DeclareLaunchArgument("cam_right_serial", default_value="_327622300144",
                               description="Serial of the right-view D456"),
-        DeclareLaunchArgument("cam_wrist_serial", default_value="_000000000000",
-                              description="Serial of the wrist-mounted D456"),
+        DeclareLaunchArgument("cam_head_serial", default_value="_324422301136",
+                              description="Serial of the head-mounted D456"),
         DeclareLaunchArgument("shm_name", default_value="/aico2_rt",
                               description="Shared memory name for rt_server"),
 
@@ -155,7 +151,7 @@ def generate_launch_description():
         # ============================================================
         _camera("cam_left", LaunchConfiguration("cam_left_serial"), cameras_on),
         _camera("cam_right", LaunchConfiguration("cam_right_serial"), cameras_on),
-        _camera("cam_wrist", LaunchConfiguration("cam_wrist_serial"), cameras_on),
+        _camera("cam_head", LaunchConfiguration("cam_head_serial"), cameras_on),
 
         # ============================================================
         # 4. foxglove_bridge — WebSocket for Foxglove Studio in browser
