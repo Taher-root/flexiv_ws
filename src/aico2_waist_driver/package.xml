@@ -7,7 +7,7 @@
   <maintainer email="oelinux@todo.todo">oelinux</maintainer>
   <license>Proprietary</license>
 
-  <buildtool_depend>ament_python</buildtool_depend>
+  <buildtool_depend>python3-setuptools</buildtool_depend>
 
   <depend>rclpy</depend>
   <depend>rclpy_lifecycle</depend>
