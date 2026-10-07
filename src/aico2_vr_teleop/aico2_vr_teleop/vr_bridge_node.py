@@ -4,7 +4,6 @@ import math
 import threading
 
 import numpy as np
-import transforms3d as t3d
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import TwistStamped
@@ -21,6 +20,22 @@ TF_RUB2FLU = np.array([
     [0, 1, 0, 0],
     [0, 0, 0, 1],
 ])
+
+
+def _quat2mat(q):
+    w, x, y, z = q
+    return np.array([
+        [1 - 2*(y*y + z*z), 2*(x*y - w*z),     2*(x*z + w*y)],
+        [2*(x*y + w*z),     1 - 2*(x*x + z*z), 2*(y*z - w*x)],
+        [2*(x*z - w*y),     2*(y*z + w*x),     1 - 2*(x*x + y*y)],
+    ])
+
+
+def _pose_matrix(pos, quat):
+    T = np.eye(4)
+    T[:3, :3] = _quat2mat(quat)
+    T[:3, 3] = pos
+    return T
 
 
 def _mat2axangle(R):
@@ -194,9 +209,7 @@ class VRBridgeNode(Node):
             orientation['y'], orientation['z'],
         ])
 
-        pose_rub = t3d.affines.compose(
-            pos, t3d.quaternions.quat2mat(quat), [1, 1, 1],
-        )
+        pose_rub = _pose_matrix(pos, quat)
         pose_ros = TF_RUB2FLU @ pose_rub
         pose_ros[:3, :3] = (
             pose_ros[:3, :3] @ np.linalg.inv(TF_RUB2FLU[:3, :3])
