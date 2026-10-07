@@ -218,7 +218,7 @@ the wall time is Boost compiling in step 8.
  3. ROS 2 Jazzy desktop                   apt, below
  4. Clone + rosdep                        below
  5. flexivrdk==1.9.0 wheel                below -- NOT 2.x
- 6. colcon build --symlink-install         §4
+ 6. colcon build                           §4
  7. Verify: RViz, then one arm driver      §5
  ---- stop here unless you want the RT path ----
  8. C++ RDK via install_rdk.sh             src/aico2_rt_control/README.md step 4
@@ -467,15 +467,39 @@ machine breaks the same way.
 
 ```bash
 cd ~/flexiv_ws
-colcon build --symlink-install
+colcon build
 source install/setup.bash
+```
+
+**A plain install, not `--symlink-install`.** The install tree is a real copy,
+which is the convention here. It costs one thing worth knowing: with symlinks,
+editing a Python node or a launch file takes effect on the next run, whereas
+with a plain install **nothing you edit matters until you rebuild that
+package.** So:
+
+```bash
+colcon build --packages-select aico2_left_arm_driver && source install/setup.bash
+```
+
+after touching a driver, a launch file, or a YAML in `config/`. The payoff is
+that what runs is exactly what was built — no source tree editing underneath a
+running system, and no divergence between a machine built one way and a machine
+built the other.
+
+**Switching an existing workspace from symlink to plain, or back, needs the
+trees removed first.** colcon will not replace a symlinked install in place,
+and the result is a mix of the two that behaves like neither:
+
+```bash
+rm -rf build install log && colcon build
 ```
 
 ### colcon notes that matter for debugging
 
 **Source `install/setup.bash` in every terminal, after every build.** A shell
 sourced before a build will not see newly installed launch files, configs, or
-entry points. Most "my change did nothing" reports are this.
+entry points. Most "my change did nothing" reports are this — and with a plain
+install, so is the other half, where the rebuild itself was skipped.
 
 **Data files are copied at build time.** `flexiv_amr_nav2/CMakeLists.txt` has:
 
@@ -519,7 +543,7 @@ renamed targets, deleted files still installed, CMake cache pointing at old
 paths. When something makes no sense:
 
 ```bash
-rm -rf build install log && colcon build --symlink-install
+rm -rf build install log && colcon build
 ```
 
 `--cmake-clean-cache` is the lighter version for CMake-only staleness.

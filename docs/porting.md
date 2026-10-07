@@ -82,7 +82,7 @@ those would have installed nothing and failed at launch. Keep the audit honest:
 ## 4. Build
 
 ```bash
-colcon build --symlink-install
+colcon build
 source install/setup.bash
 ```
 
