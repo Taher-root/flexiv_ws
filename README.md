@@ -253,10 +253,27 @@ rosdep update
 **4. Clone and resolve dependencies.**
 
 ```bash
+sudo apt update                      # NOT optional -- see below
 git clone <repo> ~/flexiv_ws
 cd ~/flexiv_ws
 rosdep install --from-paths src --ignore-src -r -y
 ```
+
+**`sudo apt update` first, every time.** `packages.ros.org` rebuilds its
+packages continuously and prunes the old `.deb` files from the pool, so an apt
+index more than a week or two old asks for versions that no longer exist. It
+fails as a wall of `404 Not Found` on real package names, which reads like a
+broken mirror or a bad dependency and is neither:
+
+```
+Err:5 .../ros-jazzy-camera-calibration-parsers amd64 5.1.8-1noble.20260902.080400
+  404  Not Found
+E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?
+```
+
+The date in the version string is the tell — compare it with today's. `apt`'s
+own suggestion at the end is the right one. A large `and NNN not upgraded` in
+the same output says the same thing.
 
 This pulls MoveIt, Nav2, RTAB-Map and the rest from the `package.xml` files. It
 does **not** install `moveit_servo` — nothing declares it, deliberately, so the

@@ -21,12 +21,26 @@ echo "ROS_DISTRO: $ROS_DISTRO"
 
 # ---------------------------------------------------------------- 1. rosdep
 step "1. rosdep — every declared dependency resolves"
+# NO -r here, deliberately. -r means "carry on despite errors", which turns an
+# unresolvable key from a failure into a warning on stdout -- and on a machine
+# where everything is already installed, rosdep then exits 0 and this check
+# passes. That is exactly how four packages shipped for three weeks declaring
+# <buildtool_depend>ament_python</buildtool_depend>, which is not a rosdep key
+# at all, without this check ever going red. There is nothing to carry on past
+# in a simulation anyway.
+#
+# The grep is a second line of defence: it does not rely on the exit code at
+# all, because the failure mode above was precisely an exit code that lied.
 if command -v rosdep >/dev/null; then
-  if rosdep install --from-paths src --ignore-src -r -s >/tmp/rosdep_sim.txt 2>&1; then
+  rc=0
+  rosdep install --from-paths src --ignore-src -s >/tmp/rosdep_sim.txt 2>&1 || rc=$?
+  unresolved="$(grep -ciE "could not have their rosdep keys resolved|Cannot locate rosdep definition" /tmp/rosdep_sim.txt || true)"
+  if [ "$rc" -eq 0 ] && [ "$unresolved" -eq 0 ]; then
     ok "rosdep resolves all keys (dry run)"
   else
     bad "rosdep could not resolve everything — see /tmp/rosdep_sim.txt"
-    grep -iE "cannot|error|not found" /tmp/rosdep_sim.txt | head -5 | sed 's/^/        /'
+    grep -iE "cannot locate|could not have their|error|not found" /tmp/rosdep_sim.txt \
+      | head -8 | sed 's/^/        /'
   fi
 else
   bad "rosdep not installed"
