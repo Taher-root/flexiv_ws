@@ -9,7 +9,7 @@ What runs (in staged order):
 
   1. robot_state_publisher            URDF -> TF
   2. rt_bridge (ns /<arm>_arm)        shm <-> ROS (joint_states, servo, FJT)
-  3. RealSense D456 cameras            /cam_left, /cam_right (+ /cam_head if no VR)
+  3. RealSense D456 cameras            /cam_left, /cam_right, /cam_head
   4. foxglove_bridge                   WebSocket -> Foxglove Studio in browser
   5. move_group                        planning scene for collision checking
   6. servo_node                        TwistStamped -> JointTrajectory at 100 Hz
@@ -36,6 +36,9 @@ Usage:
 
   # Both arms with VR teleop:
   ros2 launch flexiv_amr_bringup teleop.launch.py arm:=both use_vr:=true
+
+  # With episode recording for pi0.5 data collection:
+  ros2 launch flexiv_amr_bringup teleop.launch.py arm:=left use_vr:=true use_recorder:=true
 
   # Skip cameras (already running elsewhere):
   ros2 launch flexiv_amr_bringup teleop.launch.py use_cameras:=false
@@ -178,10 +181,7 @@ def _build_nodes(context):
     servo_on = IfCondition(use_servo)
     foxglove_on = IfCondition(use_foxglove)
     vr_on = IfCondition(use_vr)
-    head_cam_on = IfCondition(PythonExpression([
-        "'", use_cameras, "'.lower() == 'true' and '",
-        use_vr, "'.lower() != 'true'",
-    ]))
+    head_cam_on = IfCondition(use_cameras)
 
     nodes = [
         # ============================================================
@@ -276,6 +276,32 @@ def _build_nodes(context):
                 "shm_name", _DEFAULT_SHM.get(arm, _DEFAULT_SHM["left"])))
         nodes += _arm_nodes(arm, shm_name, servo_on, vr_on)
 
+    # ============================================================
+    # Episode recorder — button B on Quest toggles recording
+    # ============================================================
+    use_recorder = LaunchConfiguration("use_recorder")
+    rec_arm_ns = f"{arm}_arm" if arm != "both" else "left_arm"
+    nodes.append(
+        Node(
+            package="aico2_vr_teleop",
+            executable="episode_recorder",
+            name="episode_recorder",
+            output="screen",
+            parameters=[{
+                "arm_ns": rec_arm_ns,
+                "output_dir": "~/recordings",
+                "record_rate": 15.0,
+                "camera_topics": [
+                    "/cam_left/cam_left/color/image_raw",
+                    "/cam_right/cam_right/color/image_raw",
+                    "/cam_head/cam_head/color/image_raw",
+                ],
+                "camera_names": ["cam_left", "cam_right", "cam_head"],
+            }],
+            condition=IfCondition(use_recorder),
+        ),
+    )
+
     return nodes
 
 
@@ -294,6 +320,10 @@ def generate_launch_description():
         DeclareLaunchArgument("use_vr", default_value="false",
                               description="Launch VR teleop bridge (WebXR "
                                           "controller to Servo twist)"),
+        DeclareLaunchArgument("use_recorder", default_value="false",
+                              description="Launch episode recorder for "
+                                          "pi0.5 data collection (button B "
+                                          "on Quest toggles recording)"),
         DeclareLaunchArgument("cam_left_serial", default_value="_327622300610",
                               description="Serial of the left-view D456"),
         DeclareLaunchArgument("cam_right_serial", default_value="_327622300144",

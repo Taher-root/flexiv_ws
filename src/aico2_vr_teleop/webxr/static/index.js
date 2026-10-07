@@ -51,6 +51,7 @@ async function activateXR() {
 
     createCamPlane(scene, 'left',  -0.22, 0.15, -0.7);
     createCamPlane(scene, 'right',  0.22, 0.15, -0.7);
+    createCamPlane(scene, 'head',   0.00, -0.12, -0.7);
 
     const renderer = new THREE.WebGLRenderer({
         alpha: true,

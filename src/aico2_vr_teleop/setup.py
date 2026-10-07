@@ -19,6 +19,7 @@ setup(
     entry_points={
         'console_scripts': [
             'vr_bridge = aico2_vr_teleop.vr_bridge_node:main',
+            'episode_recorder = aico2_vr_teleop.episode_recorder:main',
         ],
     },
 )

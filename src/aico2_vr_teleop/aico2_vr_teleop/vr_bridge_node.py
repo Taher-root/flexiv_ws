@@ -8,7 +8,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import TwistStamped
 from sensor_msgs.msg import Image
-from std_msgs.msg import Float32
+from std_msgs.msg import Empty, Float32
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from moveit_msgs.srv import ServoCommandType
 from std_srvs.srv import SetBool
@@ -89,8 +89,9 @@ class VRBridgeNode(Node):
         self.declare_parameter('camera_topics', [
             '/cam_left/cam_left/color/image_raw',
             '/cam_right/cam_right/color/image_raw',
+            '/cam_head/cam_head/color/image_raw',
         ])
-        self.declare_parameter('camera_names', ['left', 'right'])
+        self.declare_parameter('camera_names', ['left', 'right', 'head'])
 
         port = int(self.get_parameter('port').value)
         host = str(self.get_parameter('host').value)
@@ -127,6 +128,7 @@ class VRBridgeNode(Node):
                     'prev_time': None,
                     'go_to_ready': False,
                     'button_a_held': False,
+                    'button_b_held': False,
                 }
         else:
             pf = str(self.get_parameter('planning_frame').value)
@@ -149,7 +151,11 @@ class VRBridgeNode(Node):
                 'prev_time': None,
                 'go_to_ready': False,
                 'button_a_held': False,
+                'button_b_held': False,
             }
+
+        self._record_toggle_pub = self.create_publisher(
+            Empty, '/episode_recorder/toggle', 10)
 
         self.camera_jpgs = {}
         self._setup_cameras(camera_topics, camera_names)
@@ -337,7 +343,14 @@ class VRBridgeNode(Node):
         self._handle_gripper(h, front_trigger)
 
         button_a = float(message.get('buttonAValue', 0))
+        button_b = float(message.get('buttonBValue', 0))
         back_trigger = float(message.get('backTriggerValue', 0))
+
+        if button_b > 0.5 and not h['button_b_held']:
+            h['button_b_held'] = True
+            self._record_toggle_pub.publish(Empty())
+        elif button_b < 0.2:
+            h['button_b_held'] = False
 
         with self._lock:
             if button_a > 0.5 and not h['button_a_held']:
