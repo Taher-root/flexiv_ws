@@ -132,9 +132,9 @@ else
     echo "Building for original AICO2 (RDK $RDK_TAG)"
 fi
 
-if [ ! -d "$WS/.git" ]; then
-    echo "Workspace not found at $WS"
-    echo "Clone it first, then re-run. Use --help for full instructions."
+if [ ! -d "$WS/src" ]; then
+    echo "Workspace not found at $WS (no src/ directory)"
+    echo "Copy or clone it first, then re-run. Use --help for full instructions."
     exit 1
 fi
 
