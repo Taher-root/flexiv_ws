@@ -26,7 +26,7 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, Pyth
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
-AMR_IP = "192.168.1.110"
+_DEFAULT_AMR_IP = "192.168.1.110"
 AMR_STATE_PORT = 19204
 
 # Shared rtabmap rgbd_odometry tuning; frame/topics differ per camera.
@@ -126,7 +126,11 @@ def generate_launch_description():
         )
     )
 
+    amr_ip = LaunchConfiguration("amr_ip")
+
     return LaunchDescription([
+        DeclareLaunchArgument("amr_ip", default_value=_DEFAULT_AMR_IP,
+                              description="IP address of the Seer AMR chassis"),
         DeclareLaunchArgument("use_camera", default_value="true",
                               description="Launch RealSense camera(s) + depth-to-laserscan"),
         DeclareLaunchArgument("use_top_camera", default_value="false",
@@ -152,14 +156,14 @@ def generate_launch_description():
             executable="seer_lidar_publisher",
             name="seer_lidar_publisher",
             output="screen",
-            parameters=[{"amr_ip": AMR_IP, "amr_port": AMR_STATE_PORT, "poll_rate": 10.0}],
+            parameters=[{"amr_ip": amr_ip, "amr_port": AMR_STATE_PORT, "poll_rate": 10.0}],
         ),
         Node(
             package="flexiv_amr_driver",
             executable="seer_imu_publisher",
             name="seer_imu_publisher",
             output="screen",
-            parameters=[{"amr_ip": AMR_IP, "amr_port": AMR_STATE_PORT, "poll_rate": 50.0}],
+            parameters=[{"amr_ip": amr_ip, "amr_port": AMR_STATE_PORT, "poll_rate": 50.0}],
         ),
 
         # ===== Bottom D456 (default /camera namespace) =====

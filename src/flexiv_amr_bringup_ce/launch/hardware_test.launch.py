@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Robot hardware without mapping or navigation: URDF/TF, chassis, sensors.
 
-AICO 2-4CE variant.
+AICO 2-4CE variant — uses the CE subnet (192.168.192.x).
 
 Usage:
   ros2 launch flexiv_amr_bringup_ce hardware_test.launch.py
@@ -14,6 +14,8 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
+
+CE_AMR_IP = "192.168.192.5"
 
 
 def _include(package, launch_file, launch_arguments=None):
@@ -43,10 +45,13 @@ def generate_launch_description():
 
         _include("flexiv_amr_description_ce", "display.launch.py", {"use_gui": "false"}),
 
-        _include("flexiv_amr_driver", "amr_driver.launch.py",
-                 {"use_robokit": LaunchConfiguration("use_robokit")}),
+        _include("flexiv_amr_driver", "amr_driver.launch.py", {
+            "use_robokit": LaunchConfiguration("use_robokit"),
+            "amr_ip": CE_AMR_IP,
+        }),
 
         _include("flexiv_amr_sensors", "sensors.launch.py", {
+            "amr_ip": CE_AMR_IP,
             "use_camera": LaunchConfiguration("use_camera"),
             "use_top_camera": LaunchConfiguration("use_top_camera"),
             "use_visual_odom": LaunchConfiguration("use_visual_odom"),
