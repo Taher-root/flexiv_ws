@@ -43,16 +43,23 @@ if [[ $SKIP_ROS -eq 0 ]]; then
     sudo apt update && sudo apt install -y \
         software-properties-common curl gnupg lsb-release
 
-    sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
-        -o /usr/share/keyrings/ros-archive-keyring.gpg
+    if apt-cache policy ros-jazzy-desktop 2>/dev/null | grep -q "Candidate:"; then
+        echo "ROS 2 apt source already configured -- skipping key and source list setup"
+    else
+        sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+            -o /usr/share/keyrings/ros-archive-keyring.gpg
 
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
 http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | \
-        sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+            sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
 
-    sudo apt update
+        sudo apt update
+    fi
+
     sudo apt install -y ros-jazzy-desktop
-    echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
+    if ! grep -q "source /opt/ros/jazzy/setup.bash" ~/.bashrc 2>/dev/null; then
+        echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
+    fi
 else
     echo "Skipping ROS 2 install (--skip-ros)"
 fi
@@ -148,10 +155,12 @@ step "Building ROS 2 workspace"
 cd "$WS"
 rosdep install --from-paths src --ignore-src -r -y 2>/dev/null || true
 
-colcon build --symlink-install 2>&1 | tail -5
+colcon build 2>&1 | tail -5
 source "$WS/install/setup.bash"
 
-echo "source $WS/install/setup.bash" >> ~/.bashrc
+if ! grep -q "source $WS/install/setup.bash" ~/.bashrc 2>/dev/null; then
+    echo "source $WS/install/setup.bash" >> ~/.bashrc
+fi
 
 # ============================================================================
 # 8. Install Flexiv RDK (standalone, for rt_server)
