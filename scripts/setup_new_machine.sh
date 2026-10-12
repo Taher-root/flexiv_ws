@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # ============================================================================
-# AICO2 / AICO 2-4CE full stack setup on a fresh Ubuntu 24.04 machine.
+# AICO2 / AICO 2-4CE dependency install + standalone RT server build.
 #
-# Prerequisite: ROS 2 Jazzy desktop must already be installed and sourced.
-#   https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html
-#   echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
+# Prerequisites (do these yourself first):
+#   1. Ubuntu 24.04
+#   2. ROS 2 Jazzy desktop installed and sourced
+#      https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html
+#   3. Workspace cloned to ~/flexiv_ws (via SFTP or git)
 #
-# Installs all system and Python dependencies, builds ROS packages and the
-# standalone RT server.
+# What this script does:
+#   - Installs system (apt) and Python (pip) dependencies
+#   - Initializes rosdep
+#   - Builds the Flexiv RDK standalone library
+#   - Builds the standalone rt_server binary
 #
 # Usage:
 #   bash setup_new_machine.sh          # original AICO2 (RDK v1.9)
@@ -35,8 +40,15 @@ else
     echo "Setting up for original AICO2 (RDK $RDK_TAG)"
 fi
 
+WS="$HOME/flexiv_ws"
+if [ ! -d "$WS/.git" ]; then
+    echo "Workspace not found at $WS"
+    echo "Clone it first via SFTP or git, then re-run."
+    exit 1
+fi
+
 # ============================================================================
-# 1. Check ROS 2 Jazzy is available
+# 1. Check ROS 2 Jazzy
 # ============================================================================
 step "Checking ROS 2 Jazzy"
 
@@ -49,7 +61,6 @@ if [[ -z "${ROS_DISTRO:-}" ]]; then
         exit 1
     fi
 fi
-
 echo "ROS_DISTRO=$ROS_DISTRO"
 
 # ============================================================================
@@ -57,6 +68,7 @@ echo "ROS_DISTRO=$ROS_DISTRO"
 # ============================================================================
 step "Installing system dependencies"
 
+sudo apt update
 sudo apt install -y \
     build-essential cmake git python3-pip python3-colcon-common-extensions \
     python3-rosdep python3-vcstool \
@@ -115,41 +127,7 @@ fi
 rosdep update
 
 # ============================================================================
-# 6. Clone workspace (if not already present)
-# ============================================================================
-step "Setting up workspace"
-
-WS="$HOME/flexiv_ws"
-if [ ! -d "$WS/.git" ]; then
-    echo "Clone the workspace manually via SFTP or git, then re-run this script."
-    echo "Expected location: $WS"
-    echo ""
-    echo "If using git:"
-    echo "  git clone <your-repo-url> $WS"
-    echo ""
-    echo "Once cloned, re-run this script with --skip-ros"
-    exit 0
-fi
-
-cd "$WS"
-
-# ============================================================================
-# 7. Build ROS 2 workspace
-# ============================================================================
-step "Building ROS 2 workspace"
-
-cd "$WS"
-rosdep install --from-paths src --ignore-src -r -y 2>/dev/null || true
-
-colcon build 2>&1 | tail -5
-source "$WS/install/setup.bash"
-
-if ! grep -q "source $WS/install/setup.bash" ~/.bashrc 2>/dev/null; then
-    echo "source $WS/install/setup.bash" >> ~/.bashrc
-fi
-
-# ============================================================================
-# 8. Install Flexiv RDK (standalone, for rt_server)
+# 6. Install Flexiv RDK (standalone, for rt_server)
 # ============================================================================
 step "Installing Flexiv RDK standalone (for rt_server)"
 
@@ -157,7 +135,7 @@ export RDK_TAG="$RDK_TAG"
 bash "$WS/src/aico2_rt_control/scripts/install_rdk.sh" --standalone
 
 # ============================================================================
-# 9. Build standalone rt_server
+# 7. Build standalone rt_server
 # ============================================================================
 step "Building standalone rt_server"
 
@@ -169,31 +147,39 @@ bash "$WS/src/aico2_rt_control/scripts/noros.sh" bash -c "
 "
 
 # ============================================================================
-# 10. Summary
+# Done
 # ============================================================================
 step "Setup complete"
 
 cat <<EOF
 
-AICO2 stack is ready. Key locations:
-  Workspace:    $WS
+Dependencies installed and rt_server built. Next steps:
+
+  1. Build the ROS 2 workspace:
+       cd $WS
+       source /opt/ros/jazzy/setup.bash
+       rosdep install --from-paths src --ignore-src -r -y
+       colcon build
+
+  2. Source it (and add to bashrc):
+       source $WS/install/setup.bash
+       echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
+       echo "source $WS/install/setup.bash" >> ~/.bashrc
+
+  3. Run the full system:
+       ros2 launch flexiv_amr_bringup full_system.launch.py
+
+  4. Run VR teleop:
+       # Terminal 1 (ROS-free):
+       bash $WS/src/aico2_rt_control/scripts/noros.sh
+       sudo $WS/src/aico2_rt_control/standalone/build/rt_server <SERIAL> --gripper Flexiv-GN01
+
+       # Terminal 2 (ROS):
+       ros2 launch flexiv_amr_bringup teleop.launch.py arm:=left use_vr:=true
+
+Key locations:
   RDK install:  ~/rdk_standalone
   rt_server:    $WS/src/aico2_rt_control/standalone/build/rt_server
-
-Quick test (source a new terminal first):
-  source /opt/ros/jazzy/setup.bash
-  source $WS/install/setup.bash
-
-To run the full system:
-  ros2 launch flexiv_amr_bringup full_system.launch.py
-
-To run VR teleop:
-  # Terminal 1 (ROS-free):
-  bash $WS/src/aico2_rt_control/scripts/noros.sh
-  sudo $WS/src/aico2_rt_control/standalone/build/rt_server <SERIAL> --gripper Flexiv-GN01
-
-  # Terminal 2 (ROS):
-  ros2 launch flexiv_amr_bringup teleop.launch.py arm:=left use_vr:=true
 
 EOF
 
