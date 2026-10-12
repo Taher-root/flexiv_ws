@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>flexiv_amr_bringup_ce</name>
+  <version>0.0.1</version>
+  <description>Bringup launch files for Flexiv AICO 2-4CE AMR (v3.11.2 CE, RDK v1.9.3)</description>
+  <maintainer email="taherk@seas.upenn.edu">Taher Kathawala</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Packages whose launch files / nodes this package brings up -->
+  <exec_depend>flexiv_amr_driver</exec_depend>
+  <exec_depend>flexiv_amr_description_ce</exec_depend>
+  <exec_depend>flexiv_amr_sensors</exec_depend>
+  <exec_depend>flexiv_amr_nav2</exec_depend>
+  <exec_depend>aico2_left_arm_driver</exec_depend>
+  <exec_depend>aico2_right_arm_driver</exec_depend>
+  <exec_depend>aico2_waist_driver</exec_depend>
+  <exec_depend>aico2_moveit_config</exec_depend>
+  <exec_depend>aico2_rt_control</exec_depend>
+  <exec_depend>aico2_vr_teleop</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>realsense2_camera</exec_depend>
+  <exec_depend>foxglove_bridge</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>lifecycle_msgs</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

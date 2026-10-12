@@ -117,6 +117,12 @@ def _arm_nodes(arm, shm_name, servo_on, vr_on, include_vr=True):
     planning_frame = _PLANNING_FRAMES.get(arm, "Left_link0")
     servo_node_name = f"servo_node_{arm}"
     twist_topic = f"/{servo_node_name}/delta_twist_cmds"
+    prefix = arm.capitalize()
+    joint_names = (
+        ["AGV_Joint1", "AGV_Joint2"]
+        + [f"{prefix}_joint{i}" for i in range(1, 8)]
+    )
+    servo_joint_names = [f"{prefix}_joint{i}" for i in range(1, 8)]
     nodes = [
         Node(
             package="aico2_rt_control",
@@ -124,7 +130,11 @@ def _arm_nodes(arm, shm_name, servo_on, vr_on, include_vr=True):
             name="rt_bridge",
             namespace=arm_ns,
             output="screen",
-            parameters=[{"shm_name": shm_name}],
+            parameters=[{
+                "shm_name": shm_name,
+                "joint_names": joint_names,
+                "servo_joint_names": servo_joint_names,
+            }],
         ),
         TimerAction(
             period=SERVO_DELAY,
