@@ -2,24 +2,25 @@
 # ============================================================================
 # AICO2 / AICO 2-4CE full stack setup on a fresh Ubuntu 24.04 machine.
 #
-# Installs ROS 2 Jazzy, all system and Python dependencies, clones the
-# workspace, builds ROS packages and the standalone RT server.
+# Prerequisite: ROS 2 Jazzy desktop must already be installed and sourced.
+#   https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html
+#   echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
+#
+# Installs all system and Python dependencies, builds ROS packages and the
+# standalone RT server.
 #
 # Usage:
-#   bash setup_new_machine.sh                    # original AICO2 (RDK v1.9)
-#   bash setup_new_machine.sh --ce               # AICO 2-4CE   (RDK v1.9.3)
-#   bash setup_new_machine.sh --ce --skip-ros    # if ROS 2 is already installed
+#   bash setup_new_machine.sh          # original AICO2 (RDK v1.9)
+#   bash setup_new_machine.sh --ce     # AICO 2-4CE   (RDK v1.9.3)
 #
 # Run as your regular user, NOT root (the script calls sudo where needed).
 # ============================================================================
 set -euo pipefail
 
 CE=0
-SKIP_ROS=0
 for arg in "$@"; do
     case "$arg" in
         --ce) CE=1 ;;
-        --skip-ros) SKIP_ROS=1 ;;
         *) echo "Unknown arg: $arg"; exit 1 ;;
     esac
 done
@@ -35,36 +36,21 @@ else
 fi
 
 # ============================================================================
-# 1. ROS 2 Jazzy
+# 1. Check ROS 2 Jazzy is available
 # ============================================================================
-if [[ $SKIP_ROS -eq 0 ]]; then
-    step "Installing ROS 2 Jazzy"
+step "Checking ROS 2 Jazzy"
 
-    sudo apt update && sudo apt install -y \
-        software-properties-common curl gnupg lsb-release
-
-    if apt-cache policy ros-jazzy-desktop 2>/dev/null | grep -q "Candidate:"; then
-        echo "ROS 2 apt source already configured -- skipping key and source list setup"
+if [[ -z "${ROS_DISTRO:-}" ]]; then
+    if [[ -f /opt/ros/jazzy/setup.bash ]]; then
+        source /opt/ros/jazzy/setup.bash
     else
-        sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
-            -o /usr/share/keyrings/ros-archive-keyring.gpg
-
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
-http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | \
-            sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
-
-        sudo apt update
+        echo "ROS 2 Jazzy is not installed."
+        echo "Install it first: https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html"
+        exit 1
     fi
-
-    sudo apt install -y ros-jazzy-desktop
-    if ! grep -q "source /opt/ros/jazzy/setup.bash" ~/.bashrc 2>/dev/null; then
-        echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
-    fi
-else
-    echo "Skipping ROS 2 install (--skip-ros)"
 fi
 
-source /opt/ros/jazzy/setup.bash
+echo "ROS_DISTRO=$ROS_DISTRO"
 
 # ============================================================================
 # 2. System dependencies
