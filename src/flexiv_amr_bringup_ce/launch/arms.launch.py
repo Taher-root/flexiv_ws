@@ -93,8 +93,7 @@ def _lifecycle_startup(driver, connect_delay_sec: float = 0.0):
 
 
 def generate_launch_description():
-    left_pkg = FindPackageShare("aico2_left_arm_driver")
-    right_pkg = FindPackageShare("aico2_right_arm_driver")
+    ce_pkg = FindPackageShare("flexiv_amr_bringup_ce")
     waist_pkg = FindPackageShare("aico2_waist_driver")
 
     mock_hardware = LaunchConfiguration("mock_hardware")
@@ -118,7 +117,7 @@ def generate_launch_description():
         output="screen",
         remappings=joint_states_remap,
         parameters=[
-            PathJoinSubstitution([left_pkg, "config", "left_arm_hardware.yaml"]),
+            PathJoinSubstitution([ce_pkg, "config", "left_arm_hardware.yaml"]),
             {
                 "robot_sn": LEFT_SN,
                 "auto_enable": True,
@@ -141,7 +140,7 @@ def generate_launch_description():
         output="screen",
         remappings=joint_states_remap,
         parameters=[
-            PathJoinSubstitution([right_pkg, "config", "right_arm_hardware.yaml"]),
+            PathJoinSubstitution([ce_pkg, "config", "right_arm_hardware.yaml"]),
             {
                 "robot_sn": RIGHT_SN,
                 "auto_enable": True,

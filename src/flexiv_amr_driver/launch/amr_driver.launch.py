@@ -31,6 +31,7 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     use_robokit = LaunchConfiguration("use_robokit")
+    amr_ip = LaunchConfiguration("amr_ip")
 
     # One params file, chosen by the same flag that chooses the controller.
     params_file = PathJoinSubstitution([
@@ -48,13 +49,18 @@ def generate_launch_description():
             default_value="false",
             description="Use the Robokit TCP velocity controller and its params",
         ),
+        DeclareLaunchArgument(
+            "amr_ip",
+            default_value="192.168.1.110",
+            description="IP address of the Seer AMR chassis",
+        ),
 
         Node(
             package="flexiv_amr_driver",
             executable="velocity_controller",
             name="velocity_controller",
             output="screen",
-            parameters=[params_file],
+            parameters=[params_file, {"amr_ip": amr_ip}],
             condition=UnlessCondition(use_robokit),
         ),
         Node(
@@ -62,7 +68,7 @@ def generate_launch_description():
             executable="robokit_velocity_controller",
             name="robokit_velocity_controller",
             output="screen",
-            parameters=[params_file],
+            parameters=[params_file, {"amr_ip": amr_ip}],
             condition=IfCondition(use_robokit),
         ),
 
@@ -71,13 +77,13 @@ def generate_launch_description():
             executable="odometry_publisher",
             name="odometry_publisher",
             output="screen",
-            parameters=[params_file],
+            parameters=[params_file, {"amr_ip": amr_ip}],
         ),
         Node(
             package="flexiv_amr_driver",
             executable="status_monitor",
             name="status_monitor",
             output="screen",
-            parameters=[params_file],
+            parameters=[params_file, {"amr_ip": amr_ip}],
         ),
     ])
