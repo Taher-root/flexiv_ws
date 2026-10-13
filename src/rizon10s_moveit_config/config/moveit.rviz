@@ -1,0 +1,26 @@
+Panels:
+  - Class: rviz_common/Displays
+  - Class: rviz_common/Views
+Visualization Manager:
+  Displays:
+    - Class: moveit_rviz_plugin/MotionPlanning
+      Name: MotionPlanning
+      Enabled: true
+      Planning Scene Topic:
+        Value: /monitored_planning_scene
+      Robot Description: robot_description
+      Planning Group: arm
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Enabled: true
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+  Global Options:
+    Fixed Frame: world

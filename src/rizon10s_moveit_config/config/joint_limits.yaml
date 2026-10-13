@@ -1,0 +1,16 @@
+# MoveIt velocity/acceleration/jerk limits for the Rizon 10s.
+#
+# Velocities from flexiv_description/config/Rizon10s/joint_limits.yaml.
+# Accelerations set conservatively at roughly half the velocity limit.
+# Jerk limits at roughly 10x acceleration for Ruckig smoothing.
+default_velocity_scaling_factor: 0.3
+default_acceleration_scaling_factor: 0.3
+
+joint_limits:
+  joint1: {has_velocity_limits: true, max_velocity: 1.7453, has_acceleration_limits: true, max_acceleration: 0.87, has_jerk_limits: true, max_jerk: 8.7}
+  joint2: {has_velocity_limits: true, max_velocity: 1.7453, has_acceleration_limits: true, max_acceleration: 0.87, has_jerk_limits: true, max_jerk: 8.7}
+  joint3: {has_velocity_limits: true, max_velocity: 2.0944, has_acceleration_limits: true, max_acceleration: 1.0, has_jerk_limits: true, max_jerk: 10.0}
+  joint4: {has_velocity_limits: true, max_velocity: 2.0944, has_acceleration_limits: true, max_acceleration: 1.0, has_jerk_limits: true, max_jerk: 10.0}
+  joint5: {has_velocity_limits: true, max_velocity: 3.8397, has_acceleration_limits: true, max_acceleration: 1.9, has_jerk_limits: true, max_jerk: 19.0}
+  joint6: {has_velocity_limits: true, max_velocity: 3.8397, has_acceleration_limits: true, max_acceleration: 1.9, has_jerk_limits: true, max_jerk: 19.0}
+  joint7: {has_velocity_limits: true, max_velocity: 3.8397, has_acceleration_limits: true, max_acceleration: 1.9, has_jerk_limits: true, max_jerk: 19.0}

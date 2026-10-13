@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>rizon10s_driver</name>
+  <version>0.1.0</version>
+  <description>Rizon 10s single-arm driver (Flexiv RDK) with lifecycle and mock mode.</description>
+  <maintainer email="oelinux@todo.todo">oelinux</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>python3-setuptools</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>lifecycle_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>control_msgs</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>trajectory_msgs</depend>
+  <depend>aico2_grippers</depend>
+  <depend>aico2_msgs</depend>
+
+  <exec_depend>action_msgs</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

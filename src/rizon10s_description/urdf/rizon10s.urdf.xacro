@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<robot name="Rizon10s" xmlns:xacro="http://wiki.ros.org/xacro">
+  <xacro:include filename="$(find flexiv_description)/urdf/flexiv.urdf.xacro" />
+  <xacro:flexiv_robot robot_type="Rizon10s" />
+</robot>
