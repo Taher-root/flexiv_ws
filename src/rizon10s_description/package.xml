@@ -4,7 +4,7 @@
   <name>rizon10s_description</name>
   <version>0.1.0</version>
   <description>URDF description for the Flexiv Rizon 10s single arm.</description>
-  <maintainer email="oelinux@todo.todo">oelinux</maintainer>
+  <maintainer email="taherk@seas.upenn.edu">Taher Kapadia</maintainer>
   <license>Proprietary</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>

@@ -4,7 +4,7 @@
   <name>rizon10s_driver</name>
   <version>0.1.0</version>
   <description>Rizon 10s single-arm driver (Flexiv RDK) with lifecycle and mock mode.</description>
-  <maintainer email="oelinux@todo.todo">oelinux</maintainer>
+  <maintainer email="taherk@seas.upenn.edu">Taher Kapadia</maintainer>
   <license>Proprietary</license>
 
   <buildtool_depend>python3-setuptools</buildtool_depend>
@@ -18,8 +18,8 @@
   <depend>control_msgs</depend>
   <depend>rcl_interfaces</depend>
   <depend>trajectory_msgs</depend>
-  <depend>aico2_grippers</depend>
-  <depend>aico2_msgs</depend>
+  <depend>rizon10s_grippers</depend>
+  <depend>rizon10s_msgs</depend>
 
   <exec_depend>action_msgs</exec_depend>
   <exec_depend>builtin_interfaces</exec_depend>

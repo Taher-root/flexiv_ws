@@ -3,15 +3,33 @@
 <package format="3">
   <name>rizon10s_rt_control</name>
   <version>0.1.0</version>
-  <description>RT control launch for a single Rizon 10s arm, wrapping aico2_rt_control.</description>
-  <maintainer email="oelinux@todo.todo">oelinux</maintainer>
-  <license>Proprietary</license>
+  <description>
+    Real-time (1 kHz) joint control for the Rizon 10s arm via the Flexiv
+    RDK C++ API.
+
+    Two processes: rt_server links the RDK and no ROS, rt_bridge links rclcpp
+    and no RDK, and they share a small block of shared memory. colcon builds
+    everything that does not link the RDK -- rt_bridge, the shared-memory
+    tools, the fake server and the tests -- and the three RDK programs have
+    their own plain CMake project under standalone/. See README.md.
+  </description>
+  <maintainer email="taherk@seas.upenn.edu">Taher Kapadia</maintainer>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <exec_depend>aico2_rt_control</exec_depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>trajectory_msgs</depend>
+  <depend>control_msgs</depend>
+  <depend>std_srvs</depend>
+
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_cmake_test</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

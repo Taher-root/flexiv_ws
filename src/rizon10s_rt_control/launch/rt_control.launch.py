@@ -41,7 +41,7 @@ def generate_launch_description():
         ),
 
         Node(
-            package="aico2_rt_control",
+            package="rizon10s_rt_control",
             executable="rt_bridge",
             name="rt_bridge",
             namespace="arm",

@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import rclpy
-from aico2_msgs.msg import ArmStatus
-from aico2_msgs.srv import ExecutePrimitive
+from rizon10s_msgs.msg import ArmStatus
+from rizon10s_msgs.srv import ExecutePrimitive
 from control_msgs.action import FollowJointTrajectory
 from geometry_msgs.msg import PoseStamped, TwistStamped, WrenchStamped
 from rcl_interfaces.msg import SetParametersResult
@@ -24,8 +24,8 @@ from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import SetBool, Trigger
 from trajectory_msgs.msg import JointTrajectory
 
-from aico2_grippers.flexiv_gripper import FlexivGripper
-from aico2_grippers.force_grasp_logic import ForceGraspController, ForceGraspParams
+from rizon10s_grippers.flexiv_gripper import FlexivGripper
+from rizon10s_grippers.force_grasp_logic import ForceGraspController, ForceGraspParams
 from rizon10s_driver.cartesian_stream import integrate_tcp_pose
 from rizon10s_driver.flexiv_session import (
     FlexivSession,
@@ -245,7 +245,7 @@ class ArmDriverNode(LifecycleNode):
         # Own the waist/external axes. False = off (previous behaviour).
         self.declare_parameter("control_waist", False)
         # Timestamping (sec 4.3/4.4). Defaults to false here, unlike
-        # aico2_waist_driver: the arms already have live TF consumers, so
+        # waist_driver: the arms already have live TF consumers, so
         # enabling device timestamps is opt-in per arm rather than a silent
         # change on upgrade. Flip to true once verified against the other,
         # untouched arm as a control (sec 8 step 4).
@@ -1283,7 +1283,7 @@ class ArmDriverNode(LifecycleNode):
                 js.header.stamp = stamp
 
             # q[0:2] are the waist external axes and belong to
-            # aico2_waist_driver — _extract_arm_* starts at _rdk_arm_start_index
+            # waist_driver — _extract_arm_* starts at _rdk_arm_start_index
             # so this driver publishes only its own 7 joints. Two publishers
             # claiming one joint makes TF jitter between them (sec 4.3).
             js.position = self._extract_arm_q(sample.q)
@@ -1293,7 +1293,7 @@ class ArmDriverNode(LifecycleNode):
             if self._waist_joint_names:
                 # Already in sample.q -- the poll thread reads the whole
                 # vector. Publishing them here is what lets the merger and
-                # aico2_waist_driver go away: one message, all the joints,
+                # waist_driver go away: one message, all the joints,
                 # real values, one RDK session.
                 n_w = min(len(self._waist_joint_names), self._rdk_arm_start_index())
                 js.name = list(js.name) + self._waist_joint_names[:n_w]

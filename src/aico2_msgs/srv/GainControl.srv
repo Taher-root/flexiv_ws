@@ -1,5 +1,0 @@
-string controller_name
-bool seize
----
-bool success
-string message
