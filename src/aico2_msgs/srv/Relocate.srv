@@ -1,0 +1,7 @@
+float64 x
+float64 y
+float64 theta
+bool use_automatic
+---
+bool success
+string message

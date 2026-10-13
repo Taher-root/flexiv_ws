@@ -1,0 +1,6 @@
+bool control_seized
+bool blocked
+bool emergency
+bool navigation_active
+float64 battery_percent
+string current_station_id

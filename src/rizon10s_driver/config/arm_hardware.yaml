@@ -1,0 +1,29 @@
+arm_driver:
+  ros__parameters:
+    robot_ip: "192.168.100.1"
+    robot_sn: "Rizon10s-062545"
+    mock_hardware: false
+    auto_enable: true
+    operational_timeout_sec: 30.0
+    publish_rate_hz: 50.0
+    default_max_joint_vel: 1.5
+    default_max_joint_acc: 3.0
+    goal_joint_tolerance: 0.02
+    joint_control_mode: "position"
+    joint_stiffness_ratio: 1.0
+    max_contact_torque: 0.0
+    tcp_frame_id: "flange"
+    teleop_backend: cartesian
+    cartesian_max_linear_vel: 0.3
+    cartesian_max_angular_vel: 1.047
+    log_rdk_send_rate: true
+    log_rdk_send_interval_sec: 1.0
+    gripper_enabled: false
+    joint_names:
+      - joint1
+      - joint2
+      - joint3
+      - joint4
+      - joint5
+      - joint6
+      - joint7

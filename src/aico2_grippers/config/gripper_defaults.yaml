@@ -1,0 +1,9 @@
+# Default gripper params (also declared on each arm driver).
+left_arm_driver:
+  ros__parameters:
+    gripper_enabled: true
+    gripper_name: "Flexiv-GN01"
+    gripper_max_force_fraction: 0.75
+    gripper_open_threshold: 0.08
+    gripper_grasp_threshold: 0.15
+    gripper_force_resend_delta: 3.0

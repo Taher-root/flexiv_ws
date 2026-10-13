@@ -1,0 +1,1585 @@
+# aico2_rt_control
+
+Real-time (1 kHz) joint control for the Rizon4 arms via the Flexiv RDK **C++**
+API.
+
+**RT is confirmed working on these arms** — see the measurements below. Nothing
+here changes `aico2_left_arm_driver`. That driver is Python, NRT, and works — it stays as it
+is, as the fallback and as the comparison.
+
+Both arms carry `RDK-Professional`, the API is public, and the host runs a
+PREEMPT_RT kernel on wired gigabit — so every prerequisite Flexiv state is met
+except one. The last blocker is installing the C++ library, a free download. See [the three prerequisites](#the-three-prerequisites-and-where-each-one-stands).
+
+---
+
+## Start here: first-time setup, in order
+
+Verified end to end on `Rizon4-063352`. Expect 30–60 minutes, most of it waiting
+for Boost to build — steps 1–7 are quick, and steps 6 and 6b need no robot and no
+RDK at all, so they are worth doing first. Everything below the "Background" line is explanation, not
+instructions.
+
+**Read these four traps first.** Each one cost real time to find:
+
+1. **`colcon` does not build the three RDK programs.** This package has two
+   build systems on purpose. `colcon` builds everything that does *not* link
+   the RDK — `rt_bridge`, `traj_publish`, `servo_publish`, `fake_server` and
+   the tests. `standalone/` is a plain CMake project for the three that do:
+   `rt_server`, `rt_hold_probe`, `joint_map_probe`. A binary linking both the
+   RDK and `rclcpp` pulls two incompatible Fast-DDS versions into one address
+   space, and merely *configuring* the RDK from a ROS-sourced shell picks the
+   wrong Fast-DDS silently. **After a `git pull` you must rebuild both.**
+2. **The RDK build must not see ROS 2.** `find_package` consults the
+   *environment* `CMAKE_PREFIX_PATH`, so a shell with ROS sourced links Jazzy's
+   Fast-DDS and the result stack-smashes. `noros.sh` and `install_rdk.sh
+   --standalone` handle this; don't work around them.
+3. **Stop the Python arm driver.** The robot allows one RDK session, so
+   `aico2_left_arm_driver` and `rt_server` are mutually exclusive.
+4. **`rt_server` must be restarted after rebuilding**, because it reads the
+   joint limits and computes the waist pin window once at startup.
+
+### 1. Packages
+
+```bash
+sudo apt install build-essential cmake libspdlog-dev libfmt-dev libeigen3-dev
+```
+
+### 2. Is this host capable? (free, no robot)
+
+```bash
+bash src/aico2_rt_control/scripts/check_rt_host.sh
+```
+
+Flexiv require "a real-time capable Linux PC with a wired connection". Want
+`PREEMPT_RT` and a wired route to the arm. Without `PREEMPT_RT` the loop is
+best-effort; measure it in step 7 before trusting it.
+
+### 3. Is the arm licensed? (read-only, needs the Python wheel)
+
+```bash
+python3 src/aico2_rt_control/scripts/check_rt_license.py Rizon4-063352
+```
+
+`license_type` must include `RDK-Professional`. This takes the one RDK session,
+so stop the Python driver first.
+
+### 4. Install the C++ RDK
+
+```bash
+bash src/aico2_rt_control/scripts/install_rdk.sh --standalone
+```
+
+Pinned to the **v1.9** tag: robot software v3.11 rejects a v1.9.4.1 client. The
+script re-execs itself with ROS removed, uses the right one of two dependency
+scripts, and stops if Fast-DDS resolves to the wrong place. `--force` starts
+over. Boost is the slow part.
+
+Sanity-check the library with Flexiv's own example before trusting it:
+
+```bash
+bash src/aico2_rt_control/scripts/noros.sh
+export LD_LIBRARY_PATH=$HOME/rdk_standalone/lib    # their examples need this
+cd ~/flexiv_rdk_standalone/example
+cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/rdk_standalone && cmake --build build -j
+./build/basics1_display_robot_states Rizon4-063352     # should print states
+```
+
+### 5. Build both halves
+
+```bash
+# Everything that does not link the RDK: the bridge, the shm tools,
+# fake_server and the tests.
+cd ~/flexiv_ws
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select aico2_rt_control
+
+# The three RDK programs -- inside a noros.sh shell
+bash src/aico2_rt_control/scripts/noros.sh
+cd ~/flexiv_ws/src/aico2_rt_control/standalone
+cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/rdk_standalone
+cmake --build build -j
+exit                                   # leave the ROS-free shell
+```
+
+### 6. Run the tests (no robot, no RDK, ~1 s)
+
+```bash
+cd ~/flexiv_ws
+colcon test --packages-select aico2_rt_control
+colcon test-result --verbose
+```
+
+Five suites: the shared-memory protocol, the sampler's maths, the 1 kHz state
+machine, goal validation, and the servo tracker. All five must pass before
+pointing anything at an arm.
+
+On a machine with **no ROS at all**, the same five build and run through their
+own plain CMake project, which also keeps `-Werror` on:
+
+```bash
+cd ~/flexiv_ws/src/aico2_rt_control/test
+cmake -S . -B build && cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+### 6b. Rehearse the whole thing with no robot and no RDK
+
+`fake_server` is `rt_server` with the robot replaced by a model, so the shared
+memory, the bridge, the action server and the servo tracker can all be
+exercised on a laptop. Worth doing before touching an arm, and it is the only
+part of the RT path that needs nothing installed beyond this workspace:
+
+```bash
+ros2 run aico2_rt_control fake_server &
+ros2 run aico2_rt_control rt_bridge --ros-args -r __ns:=/left_arm &
+ros2 run aico2_rt_control traj_publish --list            # reads the shm state
+ros2 run aico2_rt_control servo_publish --list
+```
+
+### 7. Check the robot and the loop
+
+```bash
+bash ~/flexiv_ws/src/aico2_rt_control/scripts/noros.sh
+cd ~/flexiv_ws/src/aico2_rt_control/standalone
+
+./build/joint_map_probe Rizon4-063352    # which indices are the waist
+./build/rt_hold_probe  Rizon4-063352     # 1 kHz timing; the arm must NOT move
+```
+
+`rt_hold_probe` should report `missed >1.5ms   0`. More than ~1% missed means
+the loop is not safe to drive the arm with on this host as configured.
+
+### 8. Move it, without ROS
+
+```bash
+./build/rt_server Rizon4-063352          # leave running; add --control-waist for the torso
+```
+
+In another ROS-free shell:
+
+```bash
+cd ~/flexiv_ws/src/aico2_rt_control/standalone
+./build/traj_publish --list                                  # look
+./build/traj_publish --joint 7 --degrees 3 --yes-move        # move
+```
+
+Nothing moves without `--yes-move`, and travel is capped at 15°.
+
+The same for the servo stream, which is the other way to drive the arm — a
+latest-target stream rather than a plan (see **MoveIt Servo and VR teleop**):
+
+```bash
+./build/servo_publish --list                                   # look
+./build/servo_publish --joint 6 --step 3 --yes-move            # hold 3 deg away
+./build/servo_publish --joint 6 --sine 5 --period 4 --yes-move # sweep, report lag
+```
+
+### 9. Move it through ROS
+
+With `rt_server` still running, in a normal shell:
+
+```bash
+cd ~/flexiv_ws
+source /opt/ros/jazzy/setup.bash && source install/setup.bash
+ros2 run aico2_rt_control rt_bridge --ros-args -r __ns:=/left_arm
+```
+
+In a third:
+
+```bash
+ros2 topic hz /left_arm/joint_states        # ~100 Hz
+ros2 run aico2_rt_control send_goal.py --ros-args -r __ns:=/left_arm -- --list
+ros2 run aico2_rt_control send_goal.py --ros-args -r __ns:=/left_arm -- \
+    --joint Left_joint6 --degrees 3 --yes-move
+```
+
+The `--` is required: `ros2 run` passes `--ros-args ... --` through, and
+argparse would otherwise swallow the script's own flags.
+
+### Compliant instead of stiff
+
+By default `rt_server` uses `RT_JOINT_POSITION`: **stiff position control**. The
+arm holds the commanded trajectory and resists being pushed off it, which is why
+tracking error measures 0.001°.
+
+For compliance, `StreamJointPosition` is also applicable in
+`RT_JOINT_IMPEDANCE` — the same call, a different mode — so it is one flag:
+
+```bash
+./build/rt_server Rizon4-063352 --impedance 0.3     # 30% of nominal stiffness
+```
+
+`--impedance 1.0` is the robot's nominal stiffness; lower yields more. The
+server prints the stiffness vector it set.
+
+Three things to know before relying on it:
+
+- **The waist cannot be made compliant.** `joint_map_probe` reports `K_q_nom` as
+  **infinite** on the external axes: they are not impedance controlled. Their
+  nominal value is passed through untouched and only the arm axes are scaled,
+  which is what `aico2_left_arm_driver` already does. A compliant configuration
+  is compliant in the arm only.
+- **Tracking error grows on purpose.** A compliant joint yields to load, so the
+  0.001° figure belongs to the stiff mode and should not be expected here.
+  Validation and clamping are unchanged; what changes is how closely the robot
+  chooses to follow.
+- **It is untested on hardware.** The mode switch and `SetJointImpedance` call
+  follow the RDK's documented contract and the pattern the Python driver uses,
+  but no one has yet run it on an arm. Start at a high ratio (0.8) with a small
+  move and work down.
+
+The nominal stiffnesses on this arm, for reference: 6000, 6000, 4200, 4200,
+1500, 1500, 1500 Nm/rad on axes 2–8.
+
+### 10. MoveIt
+
+No configuration change. `moveit_controllers.yaml` builds the action name from
+the controller name `left_arm`, which is what the bridge serves in that
+namespace:
+
+```bash
+ros2 launch flexiv_amr_bringup full_system.launch.py \
+    use_moveit:=true use_nav:=false use_slam:=false
+```
+
+### If something fails
+
+[Troubleshooting the build](#troubleshooting-the-build) lists every failure seen
+during this work, keyed to its exact symptom — the version mismatch, the two
+dependency scripts, the Fast-DDS stack smash, `DT_RUNPATH` not resolving
+transitive dependencies, and the rest. A rejected goal reports the joint by
+name, the point, the value and the bound in `error_string`, so read that before
+changing tolerances.
+
+---
+
+## MoveIt Servo and VR teleop
+
+**Built and tested off-hardware; not yet run on the arm.** The servo channel is
+a second, separate path through the same two processes: instead of a whole
+time-parameterised plan, a producer overwrites a single "where I want the arm"
+target as often as it likes, and a jerk-limited tracker chases it at 1 kHz.
+
+| | trajectory | servo stream |
+| --- | --- | --- |
+| Interface | `follow_joint_trajectory` action | `servo_joint_command` topic |
+| Gate | none | `set_teleop_mode` service |
+| Input | a whole plan with timing | one latest target, no timing |
+| Needs | q, dq **and** ddq; starts and ends at rest | q only; mid-motion always |
+| Joints | every joint, or refused | any subset, via a mask |
+| Ends | yes | never |
+| Resampler | quintic Hermite (`traj_sampler.hpp`) | tracker (`servo_tracker.hpp`) |
+| Producer stops | irrelevant | brakes after `--servo-timeout` |
+
+The two are **mutually exclusive**: a trajectory goal is refused while servo
+mode is on, servo mode will not engage while a trajectory is moving, and both
+refusals say so rather than failing quietly.
+
+The topic and service names are deliberately the same as
+`aico2_left_arm_driver`'s, so a MoveIt Servo `command_out_topic` and a teleop
+client that work against the NRT Python driver need **no configuration change**
+to drive the RT path instead. Run one or the other, never both — they contend
+for the single RDK session the robot allows.
+
+### The lag is physics, and the acceleration limit is only half the knob
+
+This is the part worth reading before tuning anything. A tracker following a
+target at speed `v` must carry enough position error to be able to stop, or it
+overshoots when the operator's hand stops. That bounds the speed by
+`sqrt(2 * ddq_max * error)`, and tracking a ramp settles at
+
+```
+lag  =  v / (2 * ddq_max)  +  ddq_max / max_jerk     seconds
+```
+
+Both terms matter and they **pull in opposite directions**. Raising `--max-acc`
+shrinks the first and *grows* the second, so past a point it makes following
+worse. They only improve together if the jerk limit rises too, which is why
+`--servo-max-jerk` defaults to `30 * --max-acc` rather than a constant.
+
+At 1 rad/s, with that default:
+
+| `--max-acc` | from ddq_max | from max_jerk | total |
+| --- | --- | --- | --- |
+| 3 (default) | 167 ms | 33 ms | **200 ms** |
+| 12 | 42 ms | 33 ms | **75 ms** |
+| 24 | 21 ms | 33 ms | **54 ms** |
+
+`rt_server` prints its own predicted lag at startup, so the figure in force is
+never a guess. `test_servo_tracker.cpp` asserts the formula numerically — if
+the tracker and this table ever disagree, the test fails.
+
+Two things this means in practice. First, the RT loop itself contributes ~1 ms;
+essentially all of the lag above is the tracker choosing not to overshoot, and
+the rest of the hand-to-arm delay is upstream (headset WiFi, the WebXR frame,
+Servo's own cycle and smoothing filter). Second, **a first-order lookahead law
+is not an alternative.** It is infeasible at its own crossover for every value
+of the lookahead — the arithmetic is in `servo_tracker.hpp` — and it was tried
+first: on a 0.3 rad step it overshot 0.02 rad and rang for a second.
+
+### What the tracker guarantees
+
+- **Velocity, acceleration and jerk bounded every cycle.** The RDK applies no
+  jerk limit of its own (`docs/open_issues.md` issue 1a), so this is the only
+  place one exists.
+- **A joint limit cannot be commanded through**, by the error term or by a
+  velocity feedforward. The target is clamped into travel and the speed is
+  bounded by what can be braked before the stop.
+- **A glitch is refused, not followed.** A target more than `--servo-max-jump`
+  (0.5 rad) from the current command is ignored and counted — an IK branch flip
+  or a clutch that re-engages without re-seeding its offset both look exactly
+  like this, and would otherwise be chased at full speed.
+- **A dead producer stops the arm.** Past `--servo-timeout` (100 ms) the target
+  is stale and the tracker brakes, jerk-limited, then holds. It resumes the
+  moment targets arrive again, without cycling servo mode.
+- **Joints not named are held exactly**, so a 7-joint arm target cannot drag the
+  2 waist axes with it. Without `--control-waist` the waist bits are masked out
+  regardless.
+- **Leaving servo mode brakes first.** `set_teleop_mode false` does not return
+  until the arm has reported a stop, so a trajectory cannot be started into a
+  moving arm.
+
+### Testing it without ROS: `servo_publish`
+
+The servo twin of `traj_publish`. It enables servo mode and writes targets
+straight into shared memory, so the whole RT half can be proven on the arm with
+neither ROS nor MoveIt Servo running — if the arm follows here, everything left
+is upstream.
+
+```bash
+cd src/aico2_rt_control/standalone/build
+./servo_publish --list                                   # state only, no motion
+./servo_publish --joint 6 --step 3 --yes-move             # hold 3 deg away
+./servo_publish --joint 6 --sine 5 --period 4 --yes-move  # sweep, report lag
+./servo_publish --joint 6 --sine 5 --period 4 --drop 3 --yes-move
+                                                          # stop feeding at 3 s
+                                                          # and watch it brake
+```
+
+`--sine` measures the phase lag from the robot's own encoders at 1 kHz and
+prints it next to the prediction. The measurement includes the measured-state
+publication delay, so it is an upper bound on the tracker's own lag.
+
+Verified so far, two processes over real shared memory against `fake_server`:
+tracking, the staleness brake, the step, the waist refusal, and servo mode
+entering and leaving cleanly. The *lag figure* from that run is not meaningful
+— this was a non-RT container whose 1 kHz loop missed 47 deadlines with a worst
+period of 43 ms. The formula is verified by `test_servo_tracker`, directly
+against the tracker, to within 1%.
+
+### Through ROS (manual)
+
+```bash
+# A: the RT half (ROS-free shell -- see noros.sh)
+./rt_server Rizon4-063352 --max-acc 12 --servo-max-jerk 360
+
+# B: the ROS half
+ros2 run aico2_rt_control rt_bridge --ros-args -r __ns:=/left_arm
+
+# C: arm the stream, then publish to it
+ros2 service call /left_arm/set_teleop_mode std_srvs/srv/SetBool "{data: true}"
+#    ... MoveIt Servo, or any producer, publishes JointTrajectory to
+#    /left_arm/servo_joint_command ...
+ros2 service call /left_arm/set_teleop_mode std_srvs/srv/SetBool "{data: false}"
+```
+
+`rt_bridge` parameters: `servo_joint_names` (the 7 arm joints by default — a
+name that is not one of the server's joints is a startup error, not a silent
+no-op) and `joint_state_rate_hz`, now 200 Hz because `/joint_states` is MoveIt
+Servo's only view of where the arm is and so the slowest link in its feedback
+loop.
+
+### Through ROS (one-command teleop launch)
+
+```bash
+# A: the RT half (ROS-free shell)
+./rt_server Rizon4-063352 --max-acc 12 --servo-max-jerk 360
+
+# B: everything else -- cameras, foxglove, rt_bridge, move_group, MoveIt Servo
+ros2 launch flexiv_amr_bringup teleop.launch.py \
+    cam_left_serial:=_XXXXXXXXXX \
+    cam_right_serial:=_YYYYYYYYYY \
+    cam_wrist_serial:=_ZZZZZZZZZZ
+
+# C: open Foxglove Studio in a browser
+#    https://app.foxglove.dev -> connect to ws://<laptop-ip>:8765
+#    add Image panels for /cam_left/cam_left/color/image_raw, etc.
+
+# D: arm the stream
+ros2 service call /left_arm/set_teleop_mode std_srvs/srv/SetBool "{data: true}"
+
+# E: the VR machine publishes TwistStamped to /servo_node/delta_twist_cmds
+#    MoveIt Servo -> /left_arm/servo_joint_command -> rt_bridge -> shm -> arm
+```
+
+The teleop launch brings up:
+- `robot_state_publisher` (URDF -> TF for Servo and Foxglove)
+- `rt_bridge` under `/left_arm` (shm <-> ROS)
+- 3 RealSense D456 cameras as `/cam_left`, `/cam_right`, `/cam_wrist` (color only)
+- `foxglove_bridge` (WebSocket at port 8765 for browser video streaming)
+- `move_group` (planning scene for collision checking)
+- `servo_node` (TwistStamped -> collision-checked JointTrajectory at 100 Hz)
+
+Use `use_servo:=false` for direct joint streaming without collision checking.
+Use `use_cameras:=false` if the cameras are running in another launch.
+
+Find your D456 serial numbers with `rs-enumerate-devices | grep Serial`.
+
+### What is still needed for end-to-end VR teleop
+
+The arm side (RT + ROS + MoveIt Servo + cameras + streaming) is wired. The
+remaining piece is on the VR machine: a node that publishes `TwistStamped` to
+`/servo_node/delta_twist_cmds` from the headset's hand tracking or controller.
+This hangs off `Teleop.subscribe()` in the `vr-teleop` / `aico2_vr_teleop`
+package on the teleop machine.
+
+Note that the four `*_moveit_servo.yaml` files in the arm driver packages are
+**not** Servo configs — they are driver parameter files with
+`teleop_backend: servo`, and their headers reference `aico2_bringup/` and
+`aico2_vr_teleop/` launch files that do not exist in this repo. Do not treat
+them as a starting point.
+
+The NRT Python driver already has the whole consumer side — a
+`servo_joint_command` subscriber, `set_teleop_mode`, and mode entry in the right
+order — so it is worth bringing up VR teleop against it first to prove the
+headset, IK and clutch half, then moving the consumer to RT. It will be jerkier
+there, for the reason below.
+
+### Why this matters more for teleop than for trajectories
+
+`vr-teleop` today streams into the NRT generator: `AbsoluteCartesianController`
+uses `NRT_CARTESIAN_MOTION_FORCE` with `SendCartesianMotionForce`, and
+`AbsoluteJointServoController` uses `NRT_JOINT_IMPEDANCE` with
+`SendJointPosition`. That is the worst case for the behaviour recorded in
+`docs/open_issues.md` issue 1a: each call replaces the target, and the robot's
+generator chases it with no timing knowledge and no jerk limit. The Python
+driver's own `_compute_servo_dq` says as much — it has to finite-difference
+successive setpoints to synthesise a terminal velocity, because `dq = 0` means
+"stop at every waypoint" and the arm barely moves. Under RT the loop is fixed at
+1 kHz, `q`, `dq` and `ddq` are all supplied every millisecond, and the
+smoothing is ours.
+
+### Two ways to wire it, and which to prefer
+
+| | via MoveIt Servo | direct from the teleop's own IK |
+| --- | --- | --- |
+| Path | VR → Servo → topic → bridge → shm | VR → `pybullet_ik` → shm |
+| Keeps | IK, collision checking, singularity and joint-limit scaling | nothing but the IK |
+| Latency | Servo adds a stage | lowest |
+| Effort | more machinery | a small shm writer |
+
+**Prefer Servo** for anything moving near obstacles or people: collision and
+singularity handling is most of what makes teleop safe, and it is not worth
+reimplementing. The direct path is a reasonable way to first exercise the servo
+channel, since `vr-teleop` already has working IK — and `servo_publish` shows
+how little a writer needs to do.
+
+### One correction to the integration plan
+
+`vr-teleop`'s `VR_TELEOP_INTEGRATION_PLAN.md` says to discard `flexiv_utils.py`,
+`control_flexiv.py` and `flexiv_env.py` because they "would fight the AICO2
+drivers for the RDK connection". That was right for a single-process NRT design.
+With the two-process split it no longer holds: only `rt_server` touches the RDK,
+so that teleop code can be reused as a shared-memory *writer* without contending
+for anything. Reusing only the VR and web half is now a choice rather than a
+requirement.
+
+Also worth noting: `AbsoluteJointServoController` already selects
+`NRT_JOINT_IMPEDANCE`, so the teleop path already wanted compliance — which is
+what `--impedance` provides here.
+
+---
+
+# Background
+
+Everything below records how this was arrived at and why the design is as it
+is. None of it is needed to run the system.
+
+## The RT path works on hardware, end to end
+
+Run on `qc-ubuntu` against `Rizon4-063352`, 2026-10-06. `rt_server` holding at
+1 kHz, `traj_publish` publishing a 3-degree single-joint move into shared
+memory, no ROS anywhere:
+
+```
+joint 6: -3.00 -> 0.00 deg over 3.0 s, 24 points. Validated.
+published slot 0, seq 1
+  state 1  t 0.00 s  q[6] -3.00 deg      <- adopted, running
+  state 2  t 3.00 s  q[6]  0.00 deg      <- finished, holding the last point
+
+final state 2
+commanded 0.003 deg, measured 0.004 deg, error 0.001 deg
+clamped during execution: no
+loop: cycles 30931, missed 0, max period 1.023 ms
+```
+
+and from the server, across the whole session:
+
+```
+cycles 54378  missed 0  max 1.023 ms   state 0 -> 1 -> 2
+```
+
+**Tracking error 0.001 degrees — about 17 microradians — with zero missed
+deadlines over 54 seconds.** Every part of the design is exercised here: the
+trajectory was stored in a slot by another process, published with one atomic
+store, adopted on the next 1 kHz cycle, resampled by quintic Hermite at every
+millisecond, clamped, and streamed through `StreamJointPosition`. The state
+machine walked idle to running to finished, and nothing clamped, which means the
+validated trajectory asked for nothing the limits forbid.
+
+| question | answer |
+|---|---|
+| Is RT available on these arms? | **Yes.** `SwitchMode(RT_JOINT_POSITION)` succeeds. |
+| Does `StreamJointPosition` take all 9 elements? | **Yes**, waist axes included. |
+| Can this host hold 1 kHz? | **Yes.** Zero misses over 54k cycles, worst case 1.023 ms. |
+| Does the two-process handoff work? | **Yes.** Cross-process, lock-free, no allocation after startup. |
+| Does the arm track the plan? | **Yes.** 0.001 degrees. |
+
+### And through ROS, via MoveIt's own action interface
+
+`rt_bridge` running as `/left_arm`, goals sent with `send_goal.py`:
+
+```
+Left_joint6: 86.59 -> 89.59 deg over 3.0 s   accepted   error_code 0 (SUCCESS)
+Left_joint4: 100.43 -> 115.43 deg over 3.0 s accepted   error_code 0 (SUCCESS)
+Left_joint4: 115.43 -> 100.43 deg over 1.0 s accepted   error_code 0 (SUCCESS)
+```
+
+Each subsequent `--list` showed the arm at the previous target, so the moves
+landed where they were asked to, including 15 degrees in one second. That is a
+`FollowJointTrajectory` goal — the same interface MoveIt uses, with no
+configuration change — driving a 1 kHz RT loop through shared memory.
+
+The RT server logged **388 439 cycles with zero missed deadlines** across one of
+these sessions: six and a half minutes of continuous control, worst period
+1.033 ms.
+
+**Earlier NRT comparison.** The same arm on the NRT path needed its send rate
+tuned empirically and still showed jerk, because the robot's own generator
+re-planned toward every setpoint with no jerk limit — `docs/open_issues.md`
+issue 1a. The rate U-curve does not exist here: there is no generator between
+the plan and the joints.
+
+### The joint map, settled
+
+`joint_map_probe` on `Rizon4-063352` — read-only, nothing commanded:
+
+| index | limits (deg) | `tau_max` | `K_q_nom` | temp | what |
+|---|---|---|---|---|---|
+| **0** | −87.45 … 87.45 | 400 Nm | **inf** | 0 °C | **waist yaw, `AGV_Joint1`** |
+| **1** | **+2.50** … 87.45 | 1000 Nm | **inf** | 0 °C | **waist pitch, `AGV_Joint2`** |
+| 2 | −160 … 160 | 123 Nm | 6000 | 32 °C | arm |
+| 3 | −130 … 130 | 123 Nm | 6000 | 34 °C | arm |
+| 4 | −170 … 170 | 64 Nm | 4200 | 38 °C | arm |
+| 5 | −107 … 154 | 64 Nm | 4200 | 36 °C | arm |
+| 6 | −170 … 170 | 39 Nm | 1500 | 35 °C | arm |
+| 7 | −80 … 260 | 39 Nm | 1500 | 34 °C | arm |
+| 8 | −170 … 170 | 39 Nm | 1500 | 34 °C | arm |
+
+**The external axes are indices 0 and 1**, so `DoF_e` does precede `DoF_m`.
+Five independent fields agree: index 1's `+2.50°` lower limit matches the
+measured waist envelope exactly and no arm joint has a positive lower limit;
+`tau_max` is 400 and 1000 Nm against 39–123 for the arm, which is what lifting
+a torso takes; `K_q_nom` is **infinite** on both; `dq_max` is 60 °/s against
+120–280; and neither reports a temperature.
+
+My earlier reading of "plausible waist values at 7 and 8" was simply wrong —
+index 7 is the wrist joint, whose −80…260° range comfortably contains the
+86.6° that looked like a waist angle.
+
+**`K_q_nom` being infinite on the external axes matters beyond the joint map:**
+the waist is not impedance-controlled, so `RT_JOINT_IMPEDANCE` cannot soften it
+and `SetJointImpedance` has nothing meaningful to set there. A compliant
+configuration is therefore compliant in the arm only.
+
+---
+
+## What stands between here and MoveIt driving the RT loop
+
+RT itself is no longer a question. What remains is one genuine blocker, one
+small unknown, and a body of work with no unknowns in it.
+
+### The blocker: RT and `rclcpp` cannot currently share a process
+
+A MoveIt controller is a ROS node — `FollowJointTrajectory` action server,
+`/joint_states`, lifecycle — so it links `rclcpp`, and `rclcpp` brings ROS 2's
+Fast-DDS. Both RDK archives also need an eprosima, dynamically:
+
+| archive | expects | status here |
+|---|---|---|
+| `ros2-jazzy` | ROS 2 Jazzy's Fast-DDS / Fast-CDR | **stack-smashes** against the 2.14.6 / 2.2.7 Jazzy ships |
+| plain | Flexiv's vendored 2.6.10 / 1.0.28 | **works** — this is what the probe uses |
+
+The `ros2-jazzy` variant exists precisely so the RDK can share ROS 2's copies,
+which is what a single process needs. With it broken, the only working archive
+expects a different eprosima version than `rclcpp` loads. Two incompatible
+eprosima versions in one address space, both defining the same symbols, is not
+made safe by their sonames differing — it is the same class of fault as the
+stack smash, and worth no time until one of the following resolves it.
+
+**Three ways out, in order of preference:**
+
+1. **A fixed `ros2-jazzy` archive from Flexiv**, built against the Fast-DDS that
+   Jazzy currently ships. We have a clean reproducer to ask with.
+2. **Robot software supporting RDK v1.9.4+**, where the library is one
+   self-contained `.so` with its internal symbols hidden and the question cannot
+   arise. The robot runs v3.11 and rejects a v1.9.4.1 client, so this needs
+   Flexiv too — but it is the better end state and makes every build problem in
+   this file disappear.
+3. **Two processes.** The RT loop links the plain RDK and no ROS; a separate ROS
+   node owns the action server and hands trajectories over shared memory or a
+   socket. Flexiv suggested this shape themselves. It needs no cooperation from
+   anyone and has no unknowns — the handoff described below is already
+   non-RT-producer to RT-consumer, so it becomes cross-process rather than
+   cross-thread. The cost is a process boundary on the path a goal travels, and
+   that it must be built even though options 1 and 2 would make it unnecessary.
+
+Options 1 and 2 are both requests to Flexiv, so asking costs one email and
+nothing is lost by starting option 3 meanwhile.
+
+### The small unknown: which indices are the waist
+
+Settle it by moving one waist axis through the Python driver and watching which
+index changes. The sampler's joint mapping depends on it, and the evidence from
+`basics1` is genuinely ambiguous — see the measurement section above.
+
+### The work, which has no unknowns left
+
+Unchanged from the design below: the lock-free trajectory handoff, the quintic
+resampler, the action server, and goal-acceptance validation for Flexiv's two
+stated RT constraints (start at the current position with zero velocity;
+continuous stream). What *has* changed is that none of it is speculative any
+more — the loop holds, the mode works, the vector length is confirmed.
+
+### And one measurement that could still change the answer
+
+The 1 kHz result was on an idle host. Repeat it with Nav2, RTAB-Map and both
+cameras running. If misses appear there, the fix is to pin the RT process to a
+core the stack does not use, and that is worth knowing before any of the above
+is built.
+
+---
+
+## Is Flexiv's example enough to write an RT controller through MoveIt?
+
+### What the examples give you
+
+Support linked the RT *joint torque* example. The one that matters for
+trajectory execution is **`intermediate1_realtime_joint_position_control.cpp`**,
+because it streams positions rather than torques:
+
+```cpp
+robot.SwitchMode(rdk::Mode::RT_JOINT_POSITION);
+...
+robot.StreamJointPosition(target_pos, target_vel, target_acc);   // 1 ms task
+```
+
+Three things come for free, and they are the hard parts:
+
+- **The RT loop itself.** `rdk::Scheduler::AddTask(fn, name, 1, max_priority())`
+  plus `Start()`. You do not write timing code, `clock_nanosleep`, or thread
+  priority handling.
+- **No internal motion generator.** `StreamJointPosition` takes no `max_vel` /
+  `max_acc` and does not re-plan. The controller tracks what you send. Every
+  problem chased in `docs/open_issues.md` issues 1 and 1a — the trapezoid's
+  unbounded jerk, the call-rate U-curve, the controller decelerating toward each
+  setpoint — is structurally absent, because there is no setpoint-to-setpoint
+  planning to interfere with.
+- **The enable / fault / operational pattern**, identical to the Python driver.
+
+The torque example also warns that its own impedance controller is "for demo
+purpose only and has no performance guarantee", pointing at
+`intermediate2_realtime_joint_impedance_control.cpp` for the robot's built-in
+one. Worth reading both before choosing between `RT_JOINT_POSITION` (stiff) and
+`RT_JOINT_IMPEDANCE` (compliant); the compliance work in
+`docs/rdk_version_and_compliance.md` suggests impedance is the more useful mode
+here.
+
+### Problems in the torque example as shipped
+
+`intermediate3_realtime_joint_torque_control.cpp` is worth reading and is not
+worth copying. Four things are wrong with it on this robot:
+
+1. **It reads past the end of its gain arrays.** `kImpedanceKp` and
+   `kImpedanceKd` have seven entries, and the control loop runs
+   `for (size_t i = 0; i < target_torque.size(); ++i)` where `target_torque` was
+   sized `robot.info().DoF`. On a plain Rizon4 — the `Rizon4s-123456` in the
+   example's own help text — DoF is 7 and it happens to work. On the AICO2 DoF
+   is **9**: two external waist axes plus seven arm joints. Iterations 7 and 8
+   index both gain arrays out of bounds, so the torque commanded to the waist
+   axes is computed from whatever is in adjacent memory. This is worth reporting
+   upstream; it affects any Rizon with external axes, not just this one.
+
+2. **It replaces the robot's controller with a hand-written PD law** and says so:
+   the comment calls it "for demo purpose only" with "no performance guarantee"
+   and points at `intermediate2_realtime_joint_impedance_control.cpp` for the
+   built-in one. For trajectory execution there is no reason to prefer the demo.
+
+3. **The periodic task is not RT-safe.** It constructs two
+   `std::vector<double>` per cycle, calls `robot.states()` twice per joint
+   inside the loop rather than once per cycle, and can `throw` from inside the
+   1 ms task. Allocation and exceptions in a 1 kHz loop are exactly what a
+   missed deadline is made of.
+
+4. **Smaller things.** `static unsigned int loop_counter` is function-local
+   state that breaks if two arms ever run in one process; `ExecutePlan("PLAN-Home")`
+   needs a plan of that name authored on the robot; and the "trajectory" is a
+   hardcoded sine with no external input, so none of the handoff problem is
+   demonstrated.
+
+### What MoveIt actually hands a controller
+
+This decides which RT mode is the right target, so it is worth being precise.
+A `trajectory_msgs/JointTrajectoryPoint` has five fields:
+
+`positions`, `velocities`, `accelerations`, `effort`, `time_from_start`.
+
+MoveIt's planning pipeline fills the first three and the timestamp.
+`effort` is left empty — OMPL plans in configuration space and the time
+parameterization adapters produce a kinematic profile, not a dynamic one.
+Nothing in `aico2_moveit_config` changes that.
+
+Two consequences:
+
+- **A torque controller cannot be driven from MoveIt output directly.** There
+  are no torques in the message to forward. What you *can* do is write a
+  control law that turns the kinematic triple into torque — a PD term on
+  position and velocity error plus an inverse-dynamics feedforward on
+  `accelerations`. That is computed-torque control, it is a real option, and it
+  is precisely the thing `intermediate3` sketches badly: the gains are
+  hardcoded constants with no feedforward term at all. Doing it properly needs
+  the robot's dynamics (the RDK's `Model` class, per its dynamics example) and
+  gain tuning on hardware.
+- **`RT_JOINT_POSITION` is a field-for-field match.**
+  `StreamJointPosition(pos, vel, acc)` takes the same three vectors the
+  trajectory point carries, so the controller body is a lookup into the
+  trajectory at the current time and one call. `RT_JOINT_IMPEDANCE` takes
+  positions too and adds compliance using Flexiv's own tuned controller — the
+  thing the torque demo warns it is not.
+
+So: torque is reachable but means authoring and tuning a controller that the
+robot already contains a better version of. Impedance or position streaming is
+the route that uses what MoveIt produces as-is.
+
+
+### What you still have to write
+
+1. **ROS 2 integration.** The examples are standalone `main()` functions. A
+   MoveIt controller needs a `FollowJointTrajectory` action server,
+   `/joint_states`, and lifecycle management — all of which exist in Python
+   today and would have to be written again in C++.
+
+   Flexiv suggest a lighter alternative worth keeping in mind: keep planning in
+   Python and hand the trajectory to a small C++ program that only streams it,
+   over a file, shared memory or a socket. That avoids rewriting the action
+   server and the state publishing, at the cost of a process boundary on the
+   path a goal travels. It is a reasonable first integration if the probe looks
+   good but the full C++ node is not worth it yet — and the sampler design
+   below is the same either way, since the handoff it describes is already
+   between a non-RT producer and the RT task.
+
+2. **Real-time safety, which the examples do not demonstrate.** The periodic
+   task in `intermediate1` constructs three `std::vector<double>` per cycle.
+   That is fine in a demo and wrong in a control loop: `malloc` can block.
+   Nothing in a 1 kHz task may allocate, take a lock a non-RT thread holds, log,
+   or throw. `src/rt_hold_probe.cpp` is written to that standard and the
+   difference from the example is visible.
+
+3. **Trajectory handoff.** MoveIt delivers a whole trajectory on a ROS executor
+   thread; the 1 kHz task has to sample it without blocking on that thread. That
+   needs a lock-free handoff — double buffer with an atomic swap, or an SPSC
+   queue. This is the real design work and the examples say nothing about it.
+
+4. **The external axes — answered, from the header.** `StreamJointPosition`
+   "throw[s] `std::invalid_argument` if size of any input vector does not match
+   robot DoF", so it takes the full 9 exactly as `SendJointPosition` does. The
+   split comes from `robot.info()`, which the Python driver already reads: `DoF`
+   9, `DoF_m` 7 for the arm, `DoF_e` 2 for the external waist axes, external
+   first.
+
+   `LockExternalAxes` is answered too: applicable control mode `IDLE`, taking
+   effect "during primitive execution, **direct joint control**, and direct
+   Cartesian control modes" (`robot.hpp:272`). Direct joint control covers the
+   RT joint modes as much as the NRT ones, so the existing order — call it while
+   IDLE, before `SwitchMode` — carries over unchanged. Nothing to ask support
+   about on either count.
+
+
+5. **The host — measured, and it passes.** Flexiv's three RT prerequisites are
+   C++, an RDK Professional licence, and "a real-time capable Linux PC (see the
+   RDK manual's real-time kernel setup) with a wired connection to the robot".
+   All three are satisfied. Measured on `qc-ubuntu` (2026-10-06) with
+   `scripts/check_rt_host.sh`:
+
+   | | Result |
+   |---|---|
+   | Kernel | `6.6.110 #1 SMP PREEMPT_RT`, `/sys/kernel/realtime` = 1, `CONFIG_PREEMPT_RT=y` |
+   | Cores | 18, `rcu_nocbs=0-17` already on the kernel command line |
+   | Governor | `performance` |
+   | Link to both arms | `eth0`, wired, 1000 Mb/s |
+   | Ping, 20 packets | 0.194 / 0.200 / 0.238 ms, mdev **0.009 ms** |
+   | `isolcpus` | not set — the one remaining gap |
+   | RT throttle | `sched_rt_runtime_us` 950000 |
+
+   This is a better starting point than expected. A PREEMPT_RT kernel with
+   `rcu_nocbs` across all cores and a performance governor is a deliberately
+   RT-tuned configuration, not a default, and a 0.009 ms ping deviation over
+   wired gigabit means the network is not going to be the jitter source.
+
+   **Note this is not the Jetson.** 18 cores, x86_64, no `nvpmodel`. Earlier
+   notes in this package assumed the arms would be driven from the Jetson
+   alongside Nav2, RTAB-Map and the cameras; on this host that assumption needs
+   re-checking, and if the RT loop and the perception stack live on different
+   machines the contention risk largely goes away. Worth settling before
+   interpreting `rt_hold_probe` under load.
+
+   What is left is to measure, not to argue from the kernel name. Two things
+   stay open until `rt_hold_probe` runs: whether the loop holds while the rest
+   of the stack is running, and whether `isolcpus` or a `taskset` pin is needed.
+   With PREEMPT_RT and a performance governor it may well not be, which is
+   exactly why it is worth measuring before editing the boot configuration.
+
+### The three prerequisites, and where each one stands
+
+Checked against the public v1.9 headers (`flexivrobotics/flexiv_rdk`, tag
+`v1.9`), against both arms, and against the host. Nothing here needs asking
+Flexiv, and only one item is outstanding.
+
+| | State | Evidence |
+|---|---|---|
+| The RT API | **Public, exists** | `robot.hpp:501` declares `StreamJointPosition(positions, velocities, accelerations)`, applicable modes `RT_JOINT_IMPEDANCE, RT_JOINT_POSITION`. `mode.hpp` lists `RT_JOINT_TORQUE`, `RT_JOINT_IMPEDANCE`, `RT_JOINT_POSITION`, `RT_CARTESIAN_MOTION_FORCE`. Nothing hidden or gated. |
+| A licence permitting RT | **Already held, both arms** | `license_type` reads `RDK-Professional+TDK-Standard` on Rizon4-063352 and Rizon4R-062077, and the RDK logs `Validated license: RDK-Professional` on connect. Robot software v3.11, RDK v1.9. |
+| The C++ library | **Not installed — the only remaining blocker** | A free download, and the one thing left to do. See [Installing the C++ RDK](#installing-the-c-rdk). |
+| A real-time capable host | **Met** | `qc-ubuntu` runs `6.6.110 PREEMPT_RT` with `rcu_nocbs=0-17` and a performance governor, wired gigabit to both arms at 0.2 ms with 0.009 ms deviation. Point 5 of [what you still have to write](#what-you-still-have-to-write) has the measurements. |
+
+So the gate that looked like a licence request is not one. `SwitchMode` throws
+`std::invalid_argument` when a mode is "invalid or unlicensed"
+(`robot.hpp:205`), and `Robot`'s constructor throws if the robot "lacks a valid
+RDK license" (`robot.hpp:41`) — neither applies here.
+
+To re-check at any time, per arm (the licence is per robot):
+
+```bash
+python3 src/aico2_rt_control/scripts/check_rt_license.py Rizon4-063352
+python3 src/aico2_rt_control/scripts/check_rt_license.py Rizon4R-062077
+```
+
+Read-only — it never enables the robot or switches mode. It does take the one
+RDK session, so stop the Python driver first.
+
+
+### Why the NRT path behaves as it does
+
+Worth recording, because it is the documented mechanism behind
+`docs/open_issues.md` issue 1a. `SendJointPosition`'s own warning:
+
+> Calling this function a second time while the motion from the previous call is
+> still ongoing will trigger an online re-planning of the joint trajectory, such
+> that the previous command is aborted and the new command starts to execute.
+
+Flexiv's engineering team put it more precisely (2026-10-05): the call does not
+create a trajectory segment at all. **Each call replaces the current target**,
+and a 1 kHz generator on the robot chases the most recent one as fast as
+`max_vel` / `max_acc` allow, with no knowledge of when the next command is due
+and **no jerk limit** — so acceleration switches abruptly between `+max_acc`, 0
+and `-max_acc`. See `docs/open_issues.md` issue 1a for the full account.
+Also note the NRT meaning of `velocities`: "Each joint will maintain this amount
+of velocity when it reaches the target position" — a terminal condition for the
+generator's plan, not feedforward. In RT the same argument *is* feedforward, and
+`StreamJointPosition` carries no `max_vel` / `max_acc` because there is no plan
+to bound. That difference is the whole reason for this package.
+
+
+### Why RT is the target here
+
+The decision is RT. The reason is not raw rate, it is ownership of the
+interpolant.
+
+In NRT the driver streams `SendJointPosition(q, dq, max_vel, max_acc)` and the
+robot's internal motion generator re-plans toward each setpoint under those
+caps. The motion that comes out is therefore a property of a generator that is
+not ours, driven at a rate that was found empirically. That is the whole of
+`docs/open_issues.md` issue 1a: 2 Hz is badly jerky because the generator
+decelerates toward each setpoint, 50 Hz is smoothest, 190 Hz degrades again
+because the robot is being pre-empted. Nothing in that curve is controllable
+from here, and no value of the send rate makes it ours.
+
+`StreamJointPosition(pos, vel, acc)` in `RT_JOINT_POSITION` takes no caps and
+does no planning. The controller tracks what it is given. So the interpolation
+becomes ours, it is deterministic — the same trajectory produces the same joint
+path every run — and the velocity and acceleration from MoveIt go to the
+controller as feedforward instead of as hints to a generator. The rate U-curve
+stops existing, because there is no setpoint-to-setpoint planning left to
+interfere with.
+
+The cost is that nothing covers for a missed deadline. That is what
+`rt_hold_probe` measures, and it is the one thing worth knowing before the arm
+is driven this way.
+
+### How a trajectory travels, end to end
+
+```
+ MoveIt            ~22 points: q, dq, ddq, time_from_start      (already
+   |                                                             jerk-limited
+   |  FollowJointTrajectory goal                                 by Ruckig)
+   v
+ aico2_rt_bridge   ROS process, links rclcpp, no RDK
+   |                 validate -> reorder joints by name -> copy into a free
+   |                 slot -> atomically publish the slot index
+   v
+ shared memory     3 preallocated slots, 1.6 MB each
+   |                 slot = {id, n_points, n_joints, Point[4096]}
+   |                 Point = {t, q[16], dq[16], ddq[16]} = 392 bytes
+   v
+ aico2_rt_server   RDK process, no ROS. 1 kHz scheduler.
+   |                 every 1 ms: t = now - t_adopt
+   |                             quintic Hermite between bracketing waypoints
+   |                             clamp to limits
+   |                             StreamJointPosition(q, dq, ddq)
+   v
+ robot             tracks the setpoints. No internal motion generator.
+```
+
+**Stored** once, as plain data. The bridge writes a whole trajectory into one
+slot and then publishes its index with a single atomic store. Nothing is
+allocated after startup on either side: the slots are part of the mapping, so
+the handoff is a memory copy plus an integer store. Three slots and an atomic
+index mean the writer always has one that is neither published nor being read,
+so neither side ever waits for the other.
+
+**"Smoothed" is the wrong word for what the sampler does, and the distinction
+matters.** It does not filter anything. It reconstructs a continuous curve that
+passes *exactly* through MoveIt's waypoints with MoveIt's own velocities and
+accelerations at each one — verified to 1e-9 rad at the knots. The smoothness
+comes from MoveIt, where TOTG plus Ruckig already produced a jerk-limited
+profile; the sampler's job is to not damage it. Quintic Hermite is chosen
+because it is C², so interpolation introduces no acceleration steps of its own.
+A cubic would match position and velocity and then step the acceleration at
+every waypoint — reintroducing exactly the discontinuity Ruckig was added
+upstream to remove.
+
+So: a bad plan still executes badly. What changes versus NRT is that nothing
+*between* the plan and the joints adds jerk of its own. In NRT the robot's
+generator re-planned toward each setpoint with no jerk limit and no knowledge of
+when the next command was due, which is what produced the rate U-curve in
+`docs/open_issues.md` issue 1a.
+
+**Sent** at exactly 1 kHz by `rdk::Scheduler`, measured on this host at
+0.999999 ms mean with zero missed deadlines. Execution time is taken from the
+trajectory's own `time_from_start`, so a plan MoveIt timed at 3.4 s takes 3.4 s
+— that is what "your exact timing" means and what no NRT path could offer.
+
+**Mid-motion pre-emption** works the same way: the bridge writes the new
+trajectory to a different slot and publishes it, and the RT task adopts it on
+its next cycle, resetting `t_adopt`. For the result to be continuous the new
+trajectory has to start where the robot currently is, which is one of the two
+constraints Flexiv state and which the bridge enforces at goal acceptance.
+
+### Design: trajectory buffer plus a 1 kHz sampler
+
+MoveIt delivers a whole trajectory, sparsely — 22 points for a typical move.
+The 1 kHz task needs 1000 setpoints a second. So the trajectory is buffered once
+and sampled continuously; that resampling is the controller.
+
+**Buffering.** Preallocate the buffers at startup and never allocate again:
+
+```cpp
+struct Waypoint {
+    double t;                      // time_from_start, seconds
+    double q[kMaxDof], dq[kMaxDof], ddq[kMaxDof];
+};
+struct TrajBuffer { Waypoint pts[kMaxPoints]; std::size_t n; };
+
+TrajBuffer                     slots[2];
+std::atomic<TrajBuffer*>       active{nullptr};   // nullptr = hold position
+std::atomic<std::uint64_t>     consumed{0};       // bumped by the RT task
+```
+
+`kMaxPoints` 4096 and `kMaxDof` 9 is about 1.8 MB for both slots, which is
+nothing, and makes an over-long trajectory a rejected goal rather than a
+`malloc` in the control loop.
+
+**Handoff.** One writer (the ROS executor thread), one reader (the RT task).
+The writer fills the inactive slot, then `active.store(ptr, release)`; the
+reader does `active.load(acquire)` once per cycle. Two slots are only safe if
+the writer never overwrites a slot the reader could still be holding, so the RT
+task bumps `consumed` after each swap it observes, and the writer waits for that
+acknowledgement before reusing the old slot. **The writer blocks, never the
+reader** — a few milliseconds on the ROS thread is free, and a new goal arrives
+every few seconds against a loop running every millisecond.
+
+**Sampling.** Per cycle, with `t` from `steady_clock` since the trajectory
+started:
+
+- Advance a cached segment index forward to the span with
+  `pts[i].t <= t < pts[i+1].t`. `t` is monotonic, so this is O(1) amortized and
+  needs no search.
+- Evaluate a **quintic Hermite** on that segment from `(q, dq, ddq)` at both
+  ends. It reproduces MoveIt's values exactly at the knots and is C² inside, so
+  acceleration is continuous across waypoint boundaries. That matters: the
+  discontinuous acceleration at a trapezoid's corners is precisely what made
+  execution jerky before Ruckig, and a cubic interpolant here would reintroduce
+  it at every knot.
+- Past the last waypoint, hold its `q` with `dq = ddq = 0` and set an atomic
+  done flag for the ROS thread to finish the action on.
+- With `active == nullptr`, hold the `q` captured at mode entry — what
+  `rt_hold_probe` already does.
+
+**What must not be in the task:** allocation, locks a non-RT thread can hold,
+logging, `throw`. Statistics accumulate in plain members the RT thread alone
+writes, read after `Stop()`.
+
+**What must be on the ROS thread instead:** the joint name-to-index map. MoveIt
+sends URDF joint names; the RDK vector is external axes first
+(`DoF_e` 2, then `DoF_m` 7). Resolve that when the goal arrives.
+
+**Limit clamping is now mandatory.** In NRT the generator's `max_vel` /
+`max_acc` were a backstop between a bad buffer and the joints. In RT there is
+nothing there. Validate the trajectory against the URDF limits when the goal is
+accepted, and check `robot.fault()` every cycle.
+
+### Two constraints Flexiv state explicitly for RT
+
+From their guidance of 2026-10-05, and both are goal-acceptance checks rather
+than things the RT task can fix:
+
+1. **The trajectory must start at the robot's current position with zero
+   velocity.** MoveIt plans from its own idea of the start state, which comes
+   from `/joint_states` and so is a sample up to one publish period old. The
+   first point will therefore not match `states().q` exactly. Decide this at
+   goal acceptance: reject if the gap exceeds a tolerance, and otherwise close
+   it with a short generated lead-in — not by streaming the mismatch, because
+   nothing smooths it. Likewise a non-zero initial velocity in the plan is a
+   reject, not something to feed forward.
+2. **The command stream must be continuous, because the robot does not smooth
+   RT commands.** Three practical consequences. A new goal arriving mid-motion
+   cannot simply swap the buffer — the swap has to happen at a point where
+   position *and* velocity are continuous, or be preceded by a braking ramp.
+   Finishing a trajectory means holding its last point, not dropping to
+   whatever the next source says. And a cycle that fails to produce a setpoint
+   is not a no-op: it is a discontinuity, which is the whole reason the host
+   timing has to be measured first.
+
+### Recommended order
+
+1. Run `scripts/check_rt_host.sh`. Costs nothing, needs no RDK, and answers
+   whether the host meets Flexiv's stated requirement before any time goes into
+   the install.
+2. Install the C++ RDK (below) and run `rt_hold_probe`, twice: stack stopped,
+   then with Nav2 and the cameras running. That is the measurement that decides
+   this, and it is one small program.
+3. Then the sampler and the action server, per the design above.
+4. Keep the Python NRT driver working alongside it. It is the fallback if the
+   host timing turns out not to hold, and the comparison that says whether RT
+   actually improved the motion.
+
+
+---
+
+## Running it
+
+Three processes, and the Python arm driver must be stopped for all of it: both
+it and `rt_server` want the single RDK session the robot allows.
+
+```bash
+#  A: the RT half. Needs a ROS-free shell -- see noros.sh above.
+bash src/aico2_rt_control/scripts/noros.sh
+cd src/aico2_rt_control/standalone
+cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/rdk_standalone && cmake --build build -j
+./build/rt_server Rizon4-063352            # add --control-waist to drive the torso
+
+#  B: the ROS half, in the namespace aico2_moveit_config already expects
+source /opt/ros/jazzy/setup.bash && source install/setup.bash
+ros2 run aico2_rt_control rt_bridge --ros-args -r __ns:=/left_arm
+
+#  C: check, then move
+ros2 topic hz /left_arm/joint_states       # ~100 Hz
+ros2 action list | grep follow             # /left_arm/follow_joint_trajectory
+
+ros2 run aico2_rt_control send_goal.py --ros-args -r __ns:=/left_arm   # --list
+ros2 run aico2_rt_control send_goal.py --ros-args -r __ns:=/left_arm \
+    -p use_sim_time:=false -- --joint Left_joint6 --degrees 3 --yes-move
+```
+
+Then MoveIt, with no configuration change — `moveit_controllers.yaml` builds the
+action name from the controller name `left_arm`, which is exactly what the
+bridge serves in that namespace:
+
+```bash
+ros2 launch flexiv_amr_bringup full_system.launch.py \
+    use_moveit:=true use_nav:=false use_slam:=false
+```
+
+### Two ways in, and why both exist
+
+`traj_publish` writes a slot directly and needs no ROS; `send_goal.py` sends a
+`FollowJointTrajectory` goal through the bridge. Keeping both is deliberate:
+when a move misbehaves, running the same motion through each says immediately
+whether the problem is in the RT path or in ROS. The first one is how the
+hardware result above was measured.
+
+Neither will move anything without `--yes-move`, and both cap travel.
+
+### What a goal has to look like
+
+Not arbitrary. The bridge refuses anything that would be unsafe or
+silently wrong to execute, so a hand-written goal usually gets rejected until it
+satisfies all of:
+
+- **every joint the server commands**, in any order — a partial goal would leave
+  the rest of the vector wherever the previous trajectory left it
+- **positions, velocities and accelerations** on every point; a goal missing the
+  latter two is refused rather than zero-padded, because zeros would validate as
+  "starts at rest" and then be interpolated as though the plan really had no
+  velocity
+- **starting within 0.05 rad of the measured position**, and at rest
+- **ending at rest**, since holding the final point is only continuous if it
+  stopped there
+- **inside the limits** `rt_server` published, which are the robot's own
+- **no waist motion** unless `rt_server` was started with `--control-waist`
+
+MoveIt satisfies all of this naturally. That is the point: the constraints are
+Flexiv's, and a planner that produces a jerk-limited profile meets them without
+being asked.
+
+---
+
+## Installing the C++ RDK
+
+This is the only thing standing between here and RT. Both arms are licensed
+(see above) and the API is public; the library is a free download.
+
+**The `flexivrdk` Python wheel does not satisfy this.** Verified on the robot:
+the wheel's bindings register no RT modes and no `Stream*` methods. That is
+upstream's design, not a stale install — every file in the RDK's `example_py/`
+is named `non_realtime_*` and every RT example is C++.
+
+```bash
+git clone -b v1.9 https://github.com/flexivrobotics/flexiv_rdk.git
+```
+
+**Use the `v1.9` tag on this robot.** Not the newest 1.x, and not `main`.
+Measured on hardware (2026-10-06):
+
+| client | result against robot software v3.11 |
+|---|---|
+| `flexivrdk` Python wheel **v1.9** | connects, reads state, drives the arms — in production use here |
+| C++ **v1.9.4.1** (the `v1.x` branch head) | connects, then `Version of this client is incompatible with robot [Rizon4-063352]` |
+
+So the RDK client version is checked against the robot's software version, and
+1.9.4.1 is too new for v3.11. `v1.9` matches the wheel that already works, which
+makes it the safe choice. Nothing in either repo documents this matrix — it has
+to be found by trying.
+
+The cost of staying on v1.9 is a harder build, because the shared-library
+rework landed in **v1.9.4**:
+
+| versions | library | consequences |
+|---|---|---|
+| `v1.9` – `v1.9.3` | static archive, in plain and `ros2-jazzy` variants | needs `-DRDK_SUPPORT_ROS2_JAZZY=ON`, the ROS 2 dependency script, and spdlog + fmt linked by the consumer |
+| `v1.9.4` onwards | one self-contained `.so`, internal symbols hidden | Eigen is the only dependency; no flag, one dependency script |
+
+`main` is `v2.1`/`v2.2`, which is Enlight, and its `StreamJointPosition` takes
+`const std::map<JointGroup, RtJointPositionCmd>&` rather than three vectors — so
+it is wrong regardless of the version check.
+
+The API this package uses is identical across all of them:
+`StreamJointPosition(positions, velocities, accelerations)`, `RT_JOINT_POSITION`
+and `RT_JOINT_IMPEDANCE` in `mode.hpp`, and `license_type` / `DoF_m` / `DoF_e`
+in `RobotInfo`. So moving between versions is a build concern, not a code one.
+
+### Building v1.9
+
+```bash
+sudo apt install build-essential cmake libspdlog-dev libfmt-dev
+bash src/aico2_rt_control/scripts/install_rdk.sh
+```
+
+The script does the whole sequence and refuses to continue when something is
+wrong, which is worth more than it sounds: the two things that must be right are
+silent when they are not. It sources ROS 2 before the dependency script, uses
+`build_and_install_dependencies_not_in_ros2.sh`, configures with
+`-DRDK_SUPPORT_ROS2_JAZZY=ON`, then **checks which Fast-DDS and Fast-CDR CMake
+actually selected** and stops if they resolved under the prefix rather than
+under ROS 2. It also refuses to reuse a prefix that already contains its own
+Fast-DDS, which is the state the wrong dependency script leaves behind and which
+reconfiguring does not undo. `--force` removes the prefix and the clone and
+starts over.
+
+It is also one command, which matters: pasting the sequence line by line lets
+`apt` consume the lines that follow it, so the clone and the build silently
+never run.
+
+The equivalent by hand, if preferred:
+
+```bash
+git clone -b v1.9 https://github.com/flexivrobotics/flexiv_rdk.git
+source /opt/ros/jazzy/setup.bash
+
+cd flexiv_rdk/thirdparty
+bash build_and_install_dependencies_not_in_ros2.sh ~/rdk_install
+
+cd .. && mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install -DRDK_SUPPORT_ROS2_JAZZY=ON
+cmake --build . --target install --config Release
+```
+
+Two dependency scripts exist in `thirdparty/`, and the wrong one gives several
+hundred undefined `eprosima::fastcdr::*` symbols rather than any clear message:
+
+| script | installs | for |
+|---|---|---|
+| `build_and_install_dependencies.sh` | Eigen, spdlog, tinyxml2, yaml-cpp, foonathan_memory, **Fast-CDR v1.0.28**, **Fast-DDS v2.6.10**, Boost, SpaceVecAlg, RBDyn | the plain archive |
+| `build_and_install_dependencies_not_in_ros2.sh` | **Boost, SpaceVecAlg, RBDyn only** | the `ros2-jazzy` archive — ROS 2 supplies the rest |
+
+`-DRDK_SUPPORT_ROS2_JAZZY=ON` is not optional. It selects
+`libflexiv_rdk.aarch64-linux-gnu.ros2-jazzy.a` instead of
+`libflexiv_rdk.aarch64-linux-gnu.a`. The two differ in **which eprosima
+version they were compiled against**, not in static versus dynamic linking:
+neither archive contains Fast-CDR (the first link failure showed undefined
+`eprosima::fastcdr::*` symbols coming out of `libflexiv_rdk.a` itself), and both
+resolve it dynamically. The plain archive expects Flexiv's vendored Fast-DDS
+2.6.10 / Fast-CDR 1.0.28; the `ros2-jazzy` one expects ROS 2 Jazzy's. So mixing
+them up is an ABI mismatch, which is what the stack smash was.
+`CMakeLists.txt:50` defaults the flag `OFF` and falls through to the plain
+archive silently.
+
+`libspdlog-dev` and `libfmt-dev` are needed because the static archive
+references spdlog and fmt without carrying them. Ubuntu 24.04 ships spdlog
+1.12.0 and fmt 9.1.0, and `fmt::v9` is exactly the namespace the archive's
+undefined symbols name. This package's `CMakeLists.txt` finds both with
+`find_package(... QUIET)` and links them when present, so the same workspace
+builds against either RDK layout.
+
+**Check the configure output before building:**
+
+```
+-- Found fastrtps v2.14.x: /opt/ros/jazzy/share/fastrtps/cmake     correct
+-- Found fastcdr  v2.x:    /opt/ros/jazzy/lib/cmake/fastcdr        correct
+
+-- Found fastrtps v2.6.10: /root/rdk_install/share/fastrtps/cmake  wrong script
+-- Found fastcdr  v1.0.28: /root/rdk_install/lib/cmake/fastcdr     wrong script
+```
+
+### If the robot software is ever updated
+
+`v1.9.4`+ is a much easier build — one `.so`, Eigen only, no ROS 2 flag, no
+version to mismatch. It is the right target once the robot software supports it.
+Worth asking Flexiv which RDK versions match robot software v3.11 and whether an
+update is advisable, since neither is documented.
+
+Then build this package, pointing CMake at the prefix:
+
+```bash
+cd ~/flexiv_ws
+colcon build --packages-select aico2_rt_control \
+    --cmake-args -DCMAKE_PREFIX_PATH=$HOME/rdk_install
+```
+
+Until `find_package(flexiv_rdk)` succeeds this package builds nothing and emits
+a warning rather than failing, so it cannot break a workspace build. The warning
+in a `colcon build` log is the expected state before this is done, not an error.
+
+The RDK is a shared library in its own prefix, which is not on the default
+loader path. `CMakeLists.txt` sets `CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE` so
+that path is baked into the binary and nothing extra is needed at runtime:
+
+```bash
+ros2 run aico2_rt_control rt_hold_probe Rizon4-063352
+```
+
+**Do not set `LD_LIBRARY_PATH` to the prefix.** Assigning it rather than
+appending drops ROS 2's own `lib` directory, and `ros2` then fails with
+`ImportError: librcl_action.so: cannot open shared object file`. If you ever do
+need it, append: `LD_LIBRARY_PATH=$HOME/rdk_install/lib:$LD_LIBRARY_PATH`.
+
+---
+
+## Troubleshooting the build
+
+**`Version of this client is incompatible with robot [Rizon4-...]`**, after
+connecting successfully.
+
+The RDK client is newer than the robot's software. These arms run v3.11, which
+accepts `v1.9` and rejects `v1.9.4.1`. Rebuild from the `v1.9` tag — see
+[Installing the C++ RDK](#installing-the-c-rdk). The prefix must be rebuilt, not
+just reconfigured.
+
+**Hundreds of `undefined reference to eprosima::fastcdr::Cdr::...`** such as
+`CdrSizeCalculator`, `CdrVersion`, `Cdr::set_encoding_flag`,
+`PortBasedTransportDescriptor`, coming from `libflexiv_rdk.a`.
+
+Those exist only in Fast-CDR 2.x / Fast-DDS 2.14.x, which is what the
+`ros2-jazzy` archive expects. `build_and_install_dependencies.sh` installs
+Fast-CDR 1.0.28 and Fast-DDS 2.6.10 into the prefix, where they shadow ROS 2's
+copies. Use `build_and_install_dependencies_not_in_ros2.sh` with ROS 2 sourced,
+and rebuild the prefix from scratch:
+
+```bash
+rm -rf ~/rdk_install ~/flexiv_rdk
+git clone -b v1.9 https://github.com/flexivrobotics/flexiv_rdk.git
+source /opt/ros/jazzy/setup.bash
+cd flexiv_rdk/thirdparty
+bash build_and_install_dependencies_not_in_ros2.sh ~/rdk_install
+cd .. && mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=~/rdk_install -DRDK_SUPPORT_ROS2_JAZZY=ON
+cmake --build . --target install --config Release
+```
+
+**`undefined reference to spdlog::details::log_msg::log_msg` or `fmt::v9::*`
+coming from `libflexiv_rdk.a`.**
+
+The v1.9 static archive references spdlog and fmt without carrying them.
+`sudo apt install libspdlog-dev libfmt-dev` and reconfigure; this package links
+both when `find_package` finds them.
+
+**`undefined reference to fmt::v9::...` in `rt_hold_probe.cpp.o` itself** (not
+in the RDK library).
+
+Something in this package included `<spdlog/spdlog.h>`. Flexiv's examples log
+with spdlog, but the RDK headers need only Eigen, and from v1.9.4.1 the library
+hides its internal symbols — so including spdlog pulls in Ubuntu's build of it,
+which links fmt externally, and leaves the translation unit needing `fmt`. The
+fix taken here was to drop spdlog and use `iostream`; linking `fmt` would also
+work but adds a dependency for nothing.
+
+**`ImportError: librcl_action.so: cannot open shared object file`** when running
+`ros2`.
+
+`LD_LIBRARY_PATH` was *assigned* instead of appended, so ROS 2's `lib`
+directory fell off it. Nothing is wrong with the install. The RPATH makes the
+variable unnecessary — just drop it.
+
+**`No executable found` from `ros2 run`, and the build logged
+`flexiv_rdk (C++) not found -- skipping RT targets`.**
+
+The RDK is not installed on *this* machine, for *this* user. The warning is the
+package working as designed: `find_package(flexiv_rdk QUIET)` missed, so the
+target was never created and nothing was installed for `ros2 run` to find.
+
+**The prefix is per host and per user.** Installing it as `root` on one machine
+does nothing for another user or another box — `$HOME/rdk_install` resolves
+differently, and `/root/rdk_install` is not readable as a normal user anyway.
+Each machine that needs to run RT needs its own install.
+
+The warning prints the hostname, `CMAKE_PREFIX_PATH` and `HOME` it searched, so
+compare those against where the install actually went.
+
+**Also note CMake caches the result.** Once the prefix exists, a plain rebuild
+may not re-run configure — it will finish in a fraction of a second and still
+build nothing. Force it:
+
+```bash
+colcon build --packages-select aico2_rt_control \
+    --cmake-force-configure --cmake-args -DCMAKE_PREFIX_PATH=$HOME/rdk_install
+```
+
+or `rm -rf build/aico2_rt_control install/aico2_rt_control` first.
+
+**`*** stack smashing detected ***: terminated`** shortly after the RDK banner.
+
+**Confirmed on hardware (2026-10-06) to be the library, not this workspace.**
+Flexiv's own `basics1_display_robot_states`, built from their unmodified
+`example/CMakeLists.txt` against the same prefix, aborts identically:
+
+```
+[info] | | | | | |  Flexiv RDK v1.9  | | | | | |
+*** stack smashing detected ***: terminated
+Aborted (core dumped)
+```
+
+The combination is the v1.9 **`ros2-jazzy`** prebuilt archive linked against the
+Fast-DDS and Fast-CDR that ROS 2 Jazzy currently ships. From the example's own
+link line:
+
+```
+/root/rdk_install/lib/libflexiv_rdk.a
+/opt/ros/jazzy/lib/libfastrtps.so.2.14.6
+/opt/ros/jazzy/lib/libfastcdr.so.2.2.7
+```
+
+Nothing states which versions that archive was built against, and a struct
+layout change in a patch release would present exactly this way: it links
+cleanly, then overruns a stack buffer inside the `Robot` constructor. Worth
+reporting — it is a two-command reproducer using only Flexiv's own example and
+stock Jazzy.
+
+Note the apparent crash point is not the real one. `abort()` discards buffered
+stdout, so the last line shown is simply the last one that flushed. Run the
+binary directly rather than through `ros2 run`, and under `stdbuf -o0 -e0`, to
+see how far it really gets.
+
+**The way round it:** the plain (non-ROS 2) archive with Flexiv's own vendored
+dependency versions, in a separate prefix, built with ROS 2 *not* sourced:
+
+```bash
+bash src/aico2_rt_control/scripts/install_rdk.sh --standalone
+
+# Everything after this must run with ROS 2 out of the environment:
+bash src/aico2_rt_control/scripts/noros.sh
+
+# ...and inside that shell, check Flexiv's own example before anything of ours
+cd ~/flexiv_rdk_standalone/example
+cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/rdk_standalone
+cmake --build build -j
+./build/basics1_display_robot_states Rizon4-063352
+
+# Flexiv's examples need this: see the note below
+export LD_LIBRARY_PATH=$HOME/rdk_standalone/lib
+./build/basics1_display_robot_states Rizon4-063352
+
+# if that prints robot states, the archive works; then
+cd ~/flexiv_ws/src/aico2_rt_control/standalone
+cmake -S . -B build -DCMAKE_PREFIX_PATH=$HOME/rdk_standalone
+cmake --build build -j
+./build/rt_hold_probe Rizon4-063352
+```
+
+**Flexiv's examples need `LD_LIBRARY_PATH` set to the prefix's `lib`**, and
+`rt_hold_probe` does not. The reason is `DT_RUNPATH` versus `DT_RPATH`. The RDK
+links Fast-RTPS, which itself needs foonathan_memory; both are in the prefix.
+Modern linkers emit `DT_RUNPATH`, and `ld.so` applies an object's `RUNPATH`
+only to that object's *own* direct dependencies — so the executable's `RUNPATH`
+finds `libfastrtps.so` but not the `libfoonathan_memory.so` that libfastrtps
+requires, and startup fails with `cannot open shared object file`. `DT_RPATH`
+*is* inherited down the chain. `standalone/CMakeLists.txt` therefore links with
+`-Wl,--disable-new-dtags`; Flexiv's `example/CMakeLists.txt` does not, so set
+the variable for theirs.
+
+This does not contradict the warning elsewhere about `LD_LIBRARY_PATH`. That
+warning is about *assigning* it in a shell that has ROS 2 sourced, which drops
+ROS's own `lib` directory and breaks `ros2`. Here ROS 2 is deliberately absent,
+so setting it is correct and affects nothing else.
+
+`noros.sh` is the single definition of "ROS-free" here — it unsets
+`CMAKE_PREFIX_PATH`, `AMENT_PREFIX_PATH`, `LD_LIBRARY_PATH`, `PYTHONPATH`,
+`ROS_DISTRO` and the rest, and `install_rdk.sh --standalone` re-execs through it
+rather than keeping its own copy of the list. Run it with no arguments for an
+interactive shell, or with a command to scrub just that one. The *configure*
+step is what matters: once a binary is linked against the prefix's Fast-DDS it
+carries an RPATH and the sonames differ (2.6 vs 2.14), so running it later from
+a normal shell is fine.
+
+`--standalone` re-execs itself with the ROS 2 variables removed
+(`CMAKE_PREFIX_PATH`, `AMENT_PREFIX_PATH`, `LD_LIBRARY_PATH` and the rest) and
+configures with `-DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=OFF`. That is not
+belt-and-braces: `find_package` consults the *environment* `CMAKE_PREFIX_PATH`
+as well as the cache variable, so a shell with ROS 2 sourced silently links
+Jazzy's Fast-DDS again — the exact thing this variant exists to avoid — and
+scrubbing by hand is unreliable when a dotfile sources ROS. The script checks
+afterwards that Fast-DDS and Fast-CDR resolved *inside* the prefix and stops if
+they did not.
+
+The plain archive links Flexiv's own Fast-RTPS and Fast-CDR, which only matters
+for a binary that also links `rclcpp` — and `rt_hold_probe` does not; it is RDK plus
+`iostream`. So the measurement this package exists to take can be made now,
+while the ROS 2 integration waits on either the archive being fixed or the robot
+software supporting v1.9.4+, where one self-contained `.so` makes the collision
+impossible.
+
+**Confirmed resolved (2026-10-06).** Against the standalone prefix,
+`basics1_display_robot_states` prints robot states normally and `rt_hold_probe`
+runs a clean 1 kHz loop. Same archive version, same host, same robot — only the
+Fast-DDS and Fast-CDR versions differ. So the `ros2-jazzy` archive paired with
+Jazzy's 2.14.6 / 2.2.7 is the fault, and Flexiv's own vendored 2.6.10 / 1.0.28
+works. That is the bug report: it reproduces with their example and clears with
+their own dependency versions.
+
+**`ModuleNotFoundError: No module named 'ament_package'`** while the dependency
+script builds `foonathan_memory_vendor`.
+
+A dependency tree first configured with ROS 2 sourced is being reused after the
+environment was scrubbed. Flexiv's script clones into `thirdparty/cloned/` and
+builds in place, so each dependency keeps a `CMakeCache.txt` that remembers the
+paths it was configured with; `foonathan_memory_vendor` is an ament package, so
+it still finds `/opt/ros/jazzy/share/ament_cmake_core` and then fails because
+`PYTHONPATH` no longer reaches `ament_package`.
+
+`install_rdk.sh` now records which variant built the tree and clears
+`thirdparty/cloned/` when it changes, so this resolves itself on the next run.
+To clear it by hand:
+
+```bash
+rm -rf ~/flexiv_rdk_standalone/thirdparty/cloned
+```
+
+If it recurs with a scrubbed environment and no stale clones, check the CMake
+user package registry (`~/.cmake/packages/`), which `find_package` also
+consults and which can point at ROS packages.
+
+**Goals are refused, or a rebuild seems to have no effect.**
+
+Two build systems, and `colcon` covers only one of them:
+
+```bash
+cd ~/flexiv_ws && git pull
+
+# ROS half
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select aico2_rt_control
+
+# RT half -- colcon does NOT build this
+bash src/aico2_rt_control/scripts/noros.sh
+cd src/aico2_rt_control/standalone && cmake --build build -j
+```
+
+Then **restart `rt_server`**, which reads the joint limits and computes the
+waist pin window once at startup. It prints that window on the first line after
+the mode switch, so a stale binary is visible rather than inferred:
+
+```
+waist NOT commanded: axes 0..1 pinned within +/-1.0e-03 rad (0.0573 deg) ...
+```
+
+A server built before the window was widened pins within 1e-6 rad, which is
+narrower than the arm's own tracking error, so it refuses every goal with
+"outside joint limits" on a waist axis.
+
+**`ignoring unknown package 'aico2_rt_control' in --packages-select`.**
+`colcon` was run from somewhere other than the workspace root, so it saw no
+`src/`. `cd ~/flexiv_ws` first.
+
+**`ros2: command not found`.** ROS 2 is not sourced in that shell:
+`source /opt/ros/jazzy/setup.bash && source install/setup.bash`.
+
+---
+
+## rt_hold_probe
+
+Holds every joint where it is for a few seconds and reports what the 1 kHz loop
+actually achieved. The arm should not travel.
+
+```bash
+ros2 run aico2_rt_control rt_hold_probe Rizon4-063352
+ros2 run aico2_rt_control rt_hold_probe Rizon4-063352 --seconds 20
+```
+
+**Stop the Python arm driver first.** The RDK allows one session per robot, so
+`full_system.launch.py` or `arms.launch.py` must not be running. E-stop
+released, motion bar in Auto (Remote), as always.
+
+Output:
+
+```
+cycles          4998
+expected        5000
+mean period     1.0004 ms  (nominal 1.000)
+min period      0.9120 ms
+max period      1.3400 ms
+missed >1.5ms   0
+```
+
+How to read it:
+
+| Result | Meaning |
+|---|---|
+| `SwitchMode` throws `std::invalid_argument` | the mode is invalid **or unlicensed** (`robot.hpp:205`). Check `license_type` with `scripts/check_rt_license.py`; if RT is not licensed, that is the request to make to Flexiv |
+| misses 0, max near 1 ms | the host can hold the loop; RT is worth pursuing |
+| misses over 1% of cycles | not safe to drive the arm with as configured. Pin the loop to a core the stack does not use (`taskset`, or `isolcpus` at boot), move the perception stack off this host, or stay on NRT |
+| fault during the loop | note what the robot reports; the probe only holds position, so a fault means the stream itself was rejected |
+
+Run it twice: once with the rest of the stack stopped, once with Nav2 and the
+cameras running. The difference between those two numbers is the thing that
+decides whether RT is viable here, and no amount of reading the examples
+answers it.

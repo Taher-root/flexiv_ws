@@ -1,0 +1,8 @@
+# Ask safety supervisor for MANIPULATING or NAVIGATING permission.
+uint8 MANIPULATING=1
+uint8 NAVIGATING=2
+
+uint8 requested_mode
+---
+bool granted
+string message

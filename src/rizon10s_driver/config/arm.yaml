@@ -1,0 +1,15 @@
+arm_driver:
+  ros__parameters:
+    robot_ip: "192.168.1.100"
+    robot_sn: ""
+    mock_hardware: true
+    publish_rate_hz: 50.0
+    mock_idle_joint_positions: [0.0, -0.69813, 0.0, 1.570796, 0.0, 0.69813, 0.0]
+    joint_names:
+      - joint1
+      - joint2
+      - joint3
+      - joint4
+      - joint5
+      - joint6
+      - joint7

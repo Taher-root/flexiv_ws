@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>aico2_rt_control</name>
+  <version>0.0.1</version>
+  <description>
+    Real-time (1 kHz) joint control for the AICO2 Rizon4 arms via the Flexiv
+    RDK C++ API. Separate from aico2_left_arm_driver on purpose: that driver is
+    Python and NRT, it works, and nothing here changes it.
+
+    Two processes, because one cannot hold both: rt_server links the RDK and no
+    ROS, rt_bridge links rclcpp and no RDK, and they share a small block of
+    shared memory. colcon builds everything that does not link the RDK --
+    rt_bridge, the shared-memory tools, the fake server and the tests -- and the
+    three RDK programs have their own plain CMake project under standalone/.
+    See README.md.
+
+    Verified on hardware: 1 kHz with zero missed deadlines and 0.001 degrees of
+    tracking error.
+  </description>
+  <maintainer email="taherk@seas.upenn.edu">Taher Kapadia</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>trajectory_msgs</depend>
+  <depend>control_msgs</depend>
+  <depend>std_srvs</depend>
+
+  <test_depend>ament_cmake_test</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

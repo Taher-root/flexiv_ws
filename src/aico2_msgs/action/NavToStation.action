@@ -1,0 +1,10 @@
+string source_station_id
+string target_station_id
+float64 max_linear_speed
+float64 max_angular_speed
+---
+bool success
+string message
+---
+string status
+float64 progress
