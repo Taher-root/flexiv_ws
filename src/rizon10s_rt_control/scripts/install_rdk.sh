@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Install the Flexiv RDK C++ library at the version these arms accept.
 #
-# Pinned to the v1.9 tag: robot software v3.11 rejects a v1.9.4.1 client with
-# "Version of this client is incompatible with robot", while the v1.9 Python
-# wheel drives these arms in production. See README.md for the measurements.
+# Pinned to v1.9.3: the Rizon 10s robot software accepts v1.9.3 but rejects
+# both v1.9 and v1.9.4.1 with "Version of this client is incompatible".
 #
 # Exists as a script because the steps are order-sensitive in two ways that are
 # silent when wrong -- ROS 2 must be sourced before the dependency script, and
@@ -47,7 +46,7 @@ fi
 # Resolve defaults only after parsing, so --standalone can pick different ones.
 # The two variants must not share a prefix: one needs Fast-DDS inside it and the
 # other needs Fast-DDS absent from it.
-RDK_TAG="${RDK_TAG:-v1.9}"
+RDK_TAG="${RDK_TAG:-v1.9.3}"
 ROS_SETUP="${ROS_SETUP:-/opt/ros/jazzy/setup.bash}"
 JOBS="${JOBS:-$(nproc)}"
 if [[ $STANDALONE -eq 1 ]]; then
@@ -239,18 +238,18 @@ cat <<TXT
 Next. These MUST run without ROS 2 in the environment, or CMake links Jazzy's
 Fast-DDS again and the binary stack-smashes. Get a ROS-free shell first:
 
-  bash ~/flexiv_ws/src/rizon10s_rt_control/scripts/noros.sh
+  bash ~/rizon-10s/src/rizon10s_rt_control/scripts/noros.sh
 
 then, inside it:
-  cd ~/flexiv_ws/src/rizon10s_rt_control/standalone
+  cd ~/rizon-10s/src/rizon10s_rt_control/standalone
   cmake -S . -B build -DCMAKE_PREFIX_PATH=$PREFIX
   cmake --build build -j
-  ./build/rt_hold_probe Rizon4-063352
+  ./build/rt_hold_probe Rizon10s-062545
 
 Sanity-check the library first with Flexiv's own example, which is the cleanest
 test of whether this archive works at all:
   cd $SRC/example && cmake -S . -B build -DCMAKE_PREFIX_PATH=$PREFIX
-  cmake --build build -j && ./build/basics1_display_robot_states Rizon4-063352
+  cmake --build build -j && ./build/basics1_display_robot_states Rizon10s-062545
 
 Stop the Python arm driver first -- one RDK session per robot. E-stop released,
 motion bar in Auto (Remote). The arm should not move.
@@ -259,11 +258,11 @@ else
 cat <<TXT
 
 Next:
-  cd ~/flexiv_ws
+  cd ~/rizon-10s
   colcon build --packages-select rizon10s_rt_control \\
       --cmake-args -DCMAKE_PREFIX_PATH=$PREFIX
   source install/setup.bash
-  ros2 run rizon10s_rt_control rt_hold_probe Rizon4-063352
+  ros2 run rizon10s_rt_control rt_hold_probe Rizon10s-062545
 
 Stop the Python arm driver first -- one RDK session per robot. E-stop released,
 motion bar in Auto (Remote). The arm should not move.

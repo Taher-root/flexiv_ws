@@ -45,20 +45,18 @@ void Check(bool ok, const char* what)
     }
 }
 
-constexpr std::uint32_t kDof = 9;
+constexpr std::uint32_t kDof = 7;
 
-/** The real names, waist first, as joint_map_probe confirmed. */
 std::vector<std::string> RdkNames()
 {
-    return {"AGV_Joint1", "AGV_Joint2", "Left_joint1", "Left_joint2", "Left_joint3",
-        "Left_joint4", "Left_joint5", "Left_joint6", "Left_joint7"};
+    return {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"};
 }
 
 IngestConfig MakeConfig(bool allow_waist = false)
 {
     IngestConfig c;
     c.dof = kDof;
-    c.n_external = 2;
+    c.n_external = 0;
     c.allow_waist_motion = allow_waist;
     for (std::uint32_t j = 0; j < kMaxDof; ++j) {
         c.limits.q_min[j] = -3.0;
@@ -81,7 +79,7 @@ std::vector<Point> GoodTraj(const double* q_meas, double delta, int n = 20, doub
         Point& p = pts[static_cast<std::size_t>(i)];
         p.t = T * u;
         for (std::uint32_t j = 0; j < kMaxDof; ++j) {
-            const bool moves = (j >= 2 && j < kDof);  // arm only
+            const bool moves = (j < kDof);
             p.q[j] = q_meas[j] + (moves ? delta * e : 0.0);
             p.dq[j] = moves ? delta * de : 0.0;
             p.ddq[j] = moves ? delta * dde : 0.0;
@@ -96,18 +94,17 @@ void TestJointMapReordersAndCatchesBadNames()
     const auto rdk = RdkNames();
     std::vector<int> map;
 
-    // MoveIt's order: arm first, waist last. The map must invert that.
-    std::vector<std::string> goal = {"Left_joint1", "Left_joint2", "Left_joint3", "Left_joint4",
-        "Left_joint5", "Left_joint6", "Left_joint7", "AGV_Joint1", "AGV_Joint2"};
-    Expect(BuildJointMap(goal, rdk, map), RejectReason::kNone, "a full goal in another order");
-    Check(map.size() == 9, "map has one entry per goal joint");
-    Check(map[0] == 2 && map[6] == 8, "arm joints map to indices 2..8");
-    Check(map[7] == 0 && map[8] == 1, "waist joints map to indices 0 and 1");
+    // A goal in reverse order. The map must invert that.
+    std::vector<std::string> goal = {"joint7", "joint6", "joint5", "joint4",
+        "joint3", "joint2", "joint1"};
+    Expect(BuildJointMap(goal, rdk, map), RejectReason::kNone, "a full goal in reverse order");
+    Check(map.size() == 7, "map has one entry per goal joint");
+    Check(map[0] == 6 && map[6] == 0, "joints map to reversed indices");
 
     goal.push_back("Nonexistent_joint");
     Expect(BuildJointMap(goal, rdk, map), RejectReason::kUnknownJoint, "an unknown joint name");
 
-    std::vector<std::string> partial = {"Left_joint1", "Left_joint2"};
+    std::vector<std::string> partial = {"joint1", "joint2"};
     Expect(BuildJointMap(partial, rdk, map), RejectReason::kMissingJoint,
         "a goal covering only some joints");
 }
@@ -115,7 +112,7 @@ void TestJointMapReordersAndCatchesBadNames()
 void TestAcceptsAValidTrajectory()
 {
     std::printf("a valid trajectory is accepted\n");
-    double q[kMaxDof] = {0.0, 0.1, 0.2, -0.3, 0.4, 0.5, -0.1, 0.2, 0.3};
+    double q[kMaxDof] = {0.2, -0.3, 0.4, 0.5, -0.1, 0.2, 0.3};
     const auto pts = GoodTraj(q, 0.4);
     Expect(ValidateTrajectory(pts.data(), static_cast<std::uint32_t>(pts.size()), q, MakeConfig()),
         RejectReason::kNone, "arm-only motion from rest to rest");
@@ -263,7 +260,7 @@ void TestValidatedTrajectoryExecutesCleanly()
     auto shm = std::make_unique<Shm>();
     shm->published_slot.store(kNoSlot);
     shm->reading_slot.store(kNoSlot);
-    double q[kMaxDof] = {0.0, 0.1, 0.2, -0.3, 0.4, 0.5, -0.1, 0.2, 0.3};
+    double q[kMaxDof] = {0.2, -0.3, 0.4, 0.5, -0.1, 0.2, 0.3};
     const auto cfg = MakeConfig();
     const auto pts = GoodTraj(q, 0.4);
     Expect(ValidateTrajectory(pts.data(), static_cast<std::uint32_t>(pts.size()), q, cfg),

@@ -12,12 +12,12 @@
  * or exercised away from a ROS installation.
  *
  * It serves `follow_joint_trajectory` in its own namespace, so running it as
- * `/left_arm` makes it a drop-in for rizon10s_driver with no change to
+ * `/arm` makes it a drop-in for rizon10s_driver with no change to
  * rizon10s_moveit_config. The two are mutually exclusive: both the Python driver
  * and rt_server want the single RDK session the robot allows, so exactly one of
  * them runs at a time.
  *
- *   ros2 run rizon10s_rt_control rt_bridge --ros-args -r __ns:=/left_arm
+ *   ros2 run rizon10s_rt_control rt_bridge --ros-args -r __ns:=/arm
  *
  * It serves two channels, which the RT loop treats as mutually exclusive:
  *
@@ -67,23 +67,12 @@ public:
     RtBridge() : rclcpp::Node("rt_bridge")
     {
         shm_name_ = declare_parameter<std::string>("shm_name", rizon10s_rt::kDefaultShmName);
-        // Joint names in ROBOT VECTOR ORDER: external axes first, confirmed by
-        // joint_map_probe. A goal may list them in any order; this is the order
-        // the RDK expects them streamed in.
         joint_names_ = declare_parameter<std::vector<std::string>>("joint_names",
-            {"AGV_Joint1", "AGV_Joint2", "Left_joint1", "Left_joint2", "Left_joint3",
-                "Left_joint4", "Left_joint5", "Left_joint6", "Left_joint7"});
-        // 200 Hz rather than 100: /joint_states is MoveIt Servo's only view of
-        // where the arm is, so under a servo stream this rate is the slowest
-        // link in the feedback loop. It costs nine doubles per message.
+            {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"});
         const double rate = declare_parameter<double>("joint_state_rate_hz", 200.0);
-        // Which joints a servo stream may command. The arm only by default:
-        // MoveIt Servo runs on a planning group, and the waist is pinned
-        // unless rt_server was started with --control-waist.
         servo_joint_names_ = declare_parameter<std::vector<std::string>>(
-            "servo_joint_names", {"Left_joint1", "Left_joint2", "Left_joint3",
-                                     "Left_joint4", "Left_joint5", "Left_joint6",
-                                     "Left_joint7"});
+            "servo_joint_names", {"joint1", "joint2", "joint3", "joint4",
+                                     "joint5", "joint6", "joint7"});
         start_tolerance_ = declare_parameter<double>("start_tolerance", 0.05);
         rest_tolerance_ = declare_parameter<double>("rest_tolerance", 0.01);
 

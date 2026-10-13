@@ -13,14 +13,14 @@ both at each end, which is the shape MoveIt itself produces after Ruckig.
 
 Nothing moves without --yes-move, and travel is capped.
 
-    ros2 run rizon10s_rt_control send_goal.py --ros-args -r __ns:=/left_arm -- --list
-    ros2 run rizon10s_rt_control send_goal.py --ros-args -r __ns:=/left_arm -- \
-        --joint Left_joint6 --degrees 3 --yes-move
+    ros2 run rizon10s_rt_control send_goal.py --ros-args -r __ns:=/arm -- --list
+    ros2 run rizon10s_rt_control send_goal.py --ros-args -r __ns:=/arm -- \
+        --joint joint6 --degrees 3 --yes-move
 
 Or, without ros2 run, which needs no `--` at all:
 
-    python3 send_goal.py --joint Left_joint6 --degrees 3 --yes-move \
-        --ros-args -r __ns:=/left_arm
+    python3 send_goal.py --joint joint6 --degrees 3 --yes-move \
+        --ros-args -r __ns:=/arm
 """
 
 import argparse
