@@ -12,7 +12,7 @@ Usage:
 
     # Real hardware:
     ros2 launch rizon10s_rt_control rt_control.launch.py \
-        robot_sn:=Rizon10s-XXXXXX mock:=false
+        robot_sn:=Rizon10s-062545 mock:=false
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
@@ -28,7 +28,7 @@ def generate_launch_description():
     arm_joints = [f"joint{i}" for i in range(1, 8)]
 
     return LaunchDescription([
-        DeclareLaunchArgument("robot_sn", default_value="Rizon10s-XXXXXX",
+        DeclareLaunchArgument("robot_sn", default_value="Rizon10s-062545",
                               description="Flexiv robot serial number"),
         DeclareLaunchArgument("mock", default_value="true",
                               description="Skip rt_server (mock mode)"),
