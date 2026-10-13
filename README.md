@@ -1,4 +1,4 @@
-# Rizon 10s VR Teleop Workspace
+# Rizon 10s Workspace
 
 Standalone ROS 2 workspace for the Flexiv Rizon 10s arm with RT control and MoveIt.
 
