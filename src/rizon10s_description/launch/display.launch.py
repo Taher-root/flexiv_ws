@@ -23,9 +23,9 @@ def generate_launch_description():
     use_gui = LaunchConfiguration("use_gui")
 
     xacro_file = PathJoinSubstitution(
-        [FindPackageShare("rizon10s_description"), "urdf", "rizon10s.urdf.xacro"]
+        [FindPackageShare("flexiv_description"), "urdf", "flexiv.urdf.xacro"]
     )
-    robot_description = Command(["xacro ", xacro_file])
+    robot_description = Command(["xacro ", xacro_file, " robot_type:=Rizon10s"])
 
     rviz_config = os.path.join(
         get_package_share_directory("rizon10s_description"),

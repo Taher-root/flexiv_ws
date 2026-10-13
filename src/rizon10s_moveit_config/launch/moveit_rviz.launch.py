@@ -16,14 +16,15 @@ _PKG = "rizon10s_moveit_config"
 
 def generate_launch_description():
     xacro_file = os.path.join(
-        get_package_share_directory("rizon10s_description"),
+        get_package_share_directory("flexiv_description"),
         "urdf",
-        "rizon10s.urdf.xacro",
+        "flexiv.urdf.xacro",
     )
+    xacro_mappings = {"robot_type": "Rizon10s"}
 
     moveit_config = (
         MoveItConfigsBuilder("Rizon10s", package_name=_PKG)
-        .robot_description(file_path=xacro_file)
+        .robot_description(file_path=xacro_file, mappings=xacro_mappings)
         .robot_description_semantic(file_path="config/rizon10s.srdf")
         .robot_description_kinematics(file_path="config/kinematics.yaml")
         .joint_limits(file_path="config/joint_limits.yaml")

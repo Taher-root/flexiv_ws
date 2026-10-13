@@ -1,5 +1,7 @@
 <?xml version="1.0"?>
+<!-- Marker file: launch files use flexiv_description's urdf/flexiv.urdf.xacro
+     directly with robot_type:=Rizon10s. This file is kept so the package still
+     installs a urdf/ directory, but it is not processed by xacro. -->
 <robot name="Rizon10s" xmlns:xacro="http://wiki.ros.org/xacro">
-  <xacro:include filename="$(find flexiv_description)/urdf/flexiv.urdf.xacro" />
-  <xacro:flexiv_robot robot_type="Rizon10s" />
+  <!-- See flexiv_description/urdf/flexiv.urdf.xacro -->
 </robot>
