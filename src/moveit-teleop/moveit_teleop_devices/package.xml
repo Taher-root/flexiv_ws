@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>moveit_teleop_devices</name>
+  <version>0.1.0</version>
+  <description>
+    Teleoperation input device drivers. Every driver here normalizes some
+    physical device into moveit_teleop_msgs and nothing more.
+
+    This package depends on moveit_teleop_msgs ONLY. It must never gain a
+    dependency on moveit_teleop_core, MoveIt, or a robot description: that
+    one-way dependency is what makes the device layer a real seam rather than
+    a decoration.
+  </description>
+  <maintainer email="aadith.j@gmail.com">Aadith</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>moveit_teleop_msgs</depend>
+  <depend>ament_index_python</depend>
+  <!-- WebXR bridge: serves the headset page over HTTPS and takes
+       controller frames back over a WebSocket. -->
+  <exec_depend>python3-aiohttp</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

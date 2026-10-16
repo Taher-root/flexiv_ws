@@ -1,0 +1,10 @@
+<library path="moveit_teleop_rviz">
+  <class name="moveit_teleop_rviz/ReplayPanel"
+         type="moveit_teleop_rviz::ReplayPanel"
+         base_class_type="rviz_common::Panel">
+    <description>
+      Review a recorded teleoperation episode: pick one, play it back, scrub
+      through it, and see how much of it was actually engaged.
+    </description>
+  </class>
+</library>

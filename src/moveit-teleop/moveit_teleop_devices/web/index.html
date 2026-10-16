@@ -1,0 +1,272 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>XR Teleop</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font:16px/1.5 system-ui,sans-serif; background:#111; color:#eee;
+         padding:24px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:#999; font-size:14px; margin-bottom:20px; }
+  button { font-size:20px; padding:16px 28px; border:0; border-radius:10px;
+           background:#2d7; color:#062; font-weight:600; cursor:pointer; }
+  button[disabled] { background:#444; color:#888; }
+  #status { margin-top:16px; padding:12px; border-radius:8px; background:#1c1c1c;
+            font-family:ui-monospace,monospace; font-size:13px; white-space:pre-wrap; }
+  .ok { color:#5d5; } .bad { color:#f66; } .warn { color:#fc4; }
+  table { border-collapse:collapse; margin-top:16px; font-size:14px; width:100%; }
+  td,th { text-align:left; padding:4px 10px 4px 0; border-bottom:1px solid #262626; }
+  th { color:#999; font-weight:500; }
+</style>
+
+<h1>XR Teleop</h1>
+<div class="sub">Put the headset on and press Enter VR. Keep this tab focused.</div>
+
+<button id="go">Enter VR</button>
+<div id="status">idle</div>
+
+<table>
+  <tr><th>Control</th><th>Action</th></tr>
+  <tr><td>Middle-finger trigger (grip)</td><td>Clutch &mdash; hold to move the arm</td></tr>
+  <tr><td>Index trigger</td><td>Gripper (analog, 0&ndash;1)</td></tr>
+  <tr><td>A / X</td><td>Toggle recording</td></tr>
+  <tr><td>B / Y</td><td>Discard last episode</td></tr>
+  <tr><td>Thumbstick click</td><td>Return the arm to its ready pose</td></tr>
+</table>
+
+<script>
+// Quest controllers report through the WebXR "xr-standard" gamepad mapping.
+// These indices are fixed by that profile.
+const BTN_TRIGGER = 0;   // index finger
+const BTN_SQUEEZE = 1;   // middle finger / grip
+const BTN_STICK   = 3;
+const BTN_A       = 4;   // A on right, X on left
+const BTN_B       = 5;   // B on right, Y on left
+
+const statusEl = document.getElementById('status');
+const goEl = document.getElementById('go');
+let ws = null, sent = 0, lastReport = 0, wsState = 'closed';
+
+function show(msg, cls) {
+  statusEl.innerHTML = `<span class="${cls || ''}">${msg}</span>`;
+}
+
+function connect() {
+  // Same host that served this page, so there is only ever one address to get
+  // right; wss because a secure page cannot open an insecure socket.
+  ws = new WebSocket(`wss://${location.host}/ws`);
+  ws.onopen = () => { wsState = 'open'; show('socket connected', 'ok'); };
+  ws.onclose = () => {
+    wsState = 'closed';
+    show('socket closed, retrying', 'warn');
+    // Reconnect: a dropped socket must not end the session. The robot side
+    // halts on its own via the watchdog, so reconnecting is always safe.
+    setTimeout(connect, 1000);
+  };
+  ws.onerror = () => { show('socket error', 'bad'); };
+  ws.onmessage = (ev) => {
+    // The only traffic that flows DOWN to the headset.
+    let m;
+    try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (m && m.type === 'haptic') setContact(m);
+  };
+}
+
+// ---- contact feedback -----------------------------------------------------
+// Driving a tool along a surface you cannot feel is the hard part of this: the
+// arm is sliding on a virtual wall and your hand is somewhere below it, with
+// nothing to tell you so.
+//
+// The message is a LEVEL, not a pulse, so this holds the effect for as long as
+// contact lasts. WebXR haptic pulses are capped at a few seconds, so a
+// continuous rumble has to be re-armed on a timer -- but the timer is driven
+// by state we already have, so a dropped message stops the buzz rather than
+// leaving it running.
+let xrSession = null;
+let contact = { active: false, intensity: 0 };
+let hapticTimer = null;
+let audioCtx = null;
+let beepOsc = null;
+
+function actuators() {
+  const out = [];
+  if (!xrSession) return out;
+  for (const src of xrSession.inputSources) {
+    const gp = src.gamepad;
+    if (!gp) continue;
+    // hapticActuators is the WebXR gamepad extension; Quest controllers
+    // expose exactly one. Absent on hand tracking and on some browsers, so
+    // never assume it is there.
+    const list = gp.hapticActuators || [];
+    if (list.length) out.push(list[0]);
+  }
+  return out;
+}
+
+function pulse() {
+  if (!contact.active) return;
+  for (const a of actuators()) {
+    // Re-armed every 200 ms while contact lasts. Asking for slightly longer
+    // than the interval avoids an audible gap between pulses.
+    try { a.pulse(contact.intensity, 250); } catch (e) { /* no haptics */ }
+  }
+}
+
+function beep(on) {
+  // A tone as well as a buzz: hand tracking and some browsers have no haptics
+  // at all, and a headset speaker always works.
+  try {
+    if (on) {
+      if (!audioCtx) audioCtx = new (window.AudioContext ||
+                                     window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      if (beepOsc) return;
+      beepOsc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0.05;          // audible, not startling
+      beepOsc.frequency.value = 440;
+      beepOsc.connect(gain).connect(audioCtx.destination);
+      beepOsc.start();
+    } else if (beepOsc) {
+      beepOsc.stop();
+      beepOsc.disconnect();
+      beepOsc = null;
+    }
+  } catch (e) { /* audio unavailable */ }
+}
+
+function setContact(m) {
+  const wasActive = contact.active;
+  contact = { active: !!m.active, intensity: Math.max(0, Math.min(1, m.intensity || 0)) };
+  if (contact.active && !wasActive) {
+    pulse();
+    hapticTimer = setInterval(pulse, 200);
+    beep(true);
+  } else if (!contact.active && wasActive) {
+    clearInterval(hapticTimer);
+    hapticTimer = null;
+    beep(false);
+  }
+}
+
+function readController(src, frame, refSpace) {
+  if (!src.gripSpace || !src.gamepad) return null;
+  const pose = frame.getPose(src.gripSpace, refSpace);
+  const gp = src.gamepad;
+  const btn = i => (gp.buttons[i] ? gp.buttons[i].pressed : false);
+  const val = i => (gp.buttons[i] ? gp.buttons[i].value : 0);
+  return {
+    // A null pose means tracking is lost. Reported honestly rather than
+    // held at the last value: the robot side must be able to tell "I don't
+    // know where the hand is" from "the hand is still".
+    valid: !!pose,
+    p: pose ? [pose.transform.position.x, pose.transform.position.y,
+               pose.transform.position.z] : [0, 0, 0],
+    q: pose ? [pose.transform.orientation.x, pose.transform.orientation.y,
+               pose.transform.orientation.z, pose.transform.orientation.w]
+            : [0, 0, 0, 1],
+    trigger: val(BTN_TRIGGER),
+    squeeze: val(BTN_SQUEEZE),
+    squeezed: btn(BTN_SQUEEZE),
+    a: btn(BTN_A),
+    b: btn(BTN_B),
+    stick: btn(BTN_STICK),
+  };
+}
+
+async function start() {
+  if (!navigator.xr) { show('WebXR unavailable. Use the Quest browser over HTTPS.', 'bad'); return; }
+
+  // Passthrough (immersive-ar) is the right mode for driving a real arm: the
+  // operator needs to see the actual robot in front of them, not an empty
+  // rendered room. Fall back to immersive-vr on headsets without passthrough.
+  let mode = 'immersive-ar';
+  if (!(await navigator.xr.isSessionSupported('immersive-ar'))) {
+    mode = 'immersive-vr';
+    if (!(await navigator.xr.isSessionSupported('immersive-vr'))) {
+      show('no immersive session supported here', 'bad');
+      return;
+    }
+  }
+
+  goEl.disabled = true;
+  connect();
+
+  // An immersive session MUST have a baseLayer or the compositor presents
+  // nothing: the headset shows black and no usable frames are produced. This
+  // is required even when the app draws no content of its own, as here.
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl2', { xrCompatible: true, alpha: true })
+          || canvas.getContext('webgl',  { xrCompatible: true, alpha: true });
+  if (!gl) { show('could not create a WebGL context', 'bad'); goEl.disabled = false; return; }
+
+  const session = await navigator.xr.requestSession(mode, {
+    optionalFeatures: ['local-floor'],
+  });
+  // Module-scoped as well: haptic feedback arrives on the socket, which
+  // is outside this function and needs the session's input sources.
+  xrSession = session;
+  await gl.makeXRCompatible();
+  session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+
+  // local-floor puts the origin on the floor with Y up, which is a stable,
+  // reproducible datum. 'local' drifts with wherever the headset woke up.
+  let refSpace, spaceName = 'local-floor';
+  try { refSpace = await session.requestReferenceSpace('local-floor'); }
+  catch (e) { spaceName = 'local'; refSpace = await session.requestReferenceSpace('local'); }
+
+  session.addEventListener('end', () => {
+    xrSession = null;
+    setContact({ active: false });   // never leave the controller buzzing
+    goEl.disabled = false;
+    show('session ended', 'warn');
+    if (ws) { ws.onclose = null; ws.close(); }
+  });
+
+  session.requestAnimationFrame(function onFrame(t, frame) {
+    session.requestAnimationFrame(onFrame);
+
+    // Clear to fully transparent so passthrough shows through. Skipping this
+    // leaves whatever was last in the buffer, which reads as a frozen image.
+    const layer = session.renderState.baseLayer;
+    if (layer) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    }
+
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    const controllers = {};
+    for (const src of frame.session.inputSources) {
+      if (src.handedness !== 'left' && src.handedness !== 'right') continue;
+      const c = readController(src, frame, refSpace);
+      if (c) controllers[src.handedness] = c;
+    }
+    if (!Object.keys(controllers).length) {
+      if (t - lastReport > 1000) {
+        lastReport = t;
+        show(`${mode} running, but NO controllers reported.\n` +
+             'Wake them with a button press.', 'warn');
+      }
+      return;
+    }
+
+    // t is the XRFrame timestamp: monotonic in the HEADSET's clock. The robot
+    // side uses it only to detect a frozen source, never to compute latency
+    // against ROS time -- the two clocks are unrelated.
+    ws.send(JSON.stringify({ t, controllers }));
+    sent++;
+
+    if (t - lastReport > 500) {
+      lastReport = t;
+      const lines = Object.entries(controllers).map(([h, c]) =>
+        `${h}: clutch=${c.squeeze.toFixed(2)} grip=${c.trigger.toFixed(2)} ` +
+        `${c.valid ? 'tracked' : 'LOST'}`);
+      show(`${mode} / ${spaceName}\nframes sent: ${sent}\n${lines.join('\n')}`, 'ok');
+    }
+  });
+}
+
+goEl.addEventListener('click', () => start().catch(e => show(String(e), 'bad')));
+</script>

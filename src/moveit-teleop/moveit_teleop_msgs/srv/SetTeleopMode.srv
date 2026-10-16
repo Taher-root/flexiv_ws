@@ -1,0 +1,8 @@
+# Request a mode transition on the mode manager.
+#
+# The manager may refuse: transitions are guarded (you cannot enter TELEOP with
+# an unhealthy watchdog, for instance), so success is not a formality.
+uint8 mode
+---
+bool success
+string message

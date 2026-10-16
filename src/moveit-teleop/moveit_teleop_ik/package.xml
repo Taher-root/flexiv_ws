@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>moveit_teleop_ik</name>
+  <version>0.1.0</version>
+  <description>
+    Full inverse kinematics for teleoperation, as an alternative to moveit_servo.
+
+    Servo does differential IK: it inverts the Jacobian locally and HALTS when a
+    joint reaches its bound. This package solves a constrained optimisation
+    every frame instead, with joint limits as constraints, so the solver
+    redistributes motion across the whole arm rather than stopping. That is the
+    difference between an arm that jams at a limit and one that reconfigures.
+
+    Robot-agnostic: the kinematic chain, joint limits and nominal posture are
+    all read from robot_description and robot_description_semantic at runtime.
+  </description>
+  <maintainer email="aadith.j@gmail.com">Aadith</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>trajectory_msgs</depend>
+  <depend>moveit_teleop_msgs</depend>
+  <depend>moveit_teleop_core</depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <!-- casadi provides the NLP and bundles IPOPT. Not packaged for ROS or apt.
+       Install it with pip, user-level, allowing an externally managed env. -->
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <exec_depend>tf2_ros</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

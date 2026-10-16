@@ -1,0 +1,44 @@
+moveit_teleop:
+  move_group: right_arm
+  ready_state: ready
+  nominal_state: ready
+  device:
+    pattern: circle
+    period: 6.0
+    radius: 0.08
+  retargeting:
+    rotation_scale: 0.5
+    translation_ref: device
+    rotation_ref: device
+    smoothing_alpha: 1.0
+    max_translation_step: 0.05
+    max_target_lead_angle: 0.5
+    max_command_step: 0.03
+    per_solver:
+      ik:
+        translation_scale: 1.0
+        max_target_lead: 0.20
+        external_motion_threshold: 0.35
+  ik:
+    solve_rate: 90.0
+    weight_position: 50.0
+    weight_orientation: 10.0
+    weight_regularization: 0.02
+    weight_smoothness: 0.1
+    rate_limit_scale: 0.5
+    max_joint_jump: 0.35
+    jump_retry_smoothness: 50.0
+    collision_policy: stop
+  gripper:
+    enabled: true
+  controllers:
+    arm: right_arm
+  safety:
+    input_timeout: 0.15
+    home_via_moveit: true
+    hardware_gate:
+      service: /right_arm/control_enable
+      enabled: false
+      open_for_planning: false
+  dataset:
+    robot_type: flexiv_aico2

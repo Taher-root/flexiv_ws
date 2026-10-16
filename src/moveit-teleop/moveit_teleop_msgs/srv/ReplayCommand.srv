@@ -1,0 +1,20 @@
+# Every player interaction. One service rather than several keeps the panel's
+# error handling in one place and makes the whole surface visible here.
+
+uint8 LOAD=0        # open `episode` (or episodes[0] when empty)
+uint8 PLAY=1
+uint8 PAUSE=2
+uint8 SEEK=3        # jump to absolute frame `index`
+uint8 STEP=4        # move by `index` frames, negative to go back; pauses
+uint8 SET_SPEED=5
+uint8 SET_LOOP=6
+uint8 REFRESH=7     # rescan the episodes directory
+
+uint8 command
+string episode
+int32 index
+float32 speed
+bool loop
+---
+bool ok
+string message

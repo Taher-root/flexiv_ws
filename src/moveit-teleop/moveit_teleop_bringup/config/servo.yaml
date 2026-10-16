@@ -1,0 +1,136 @@
+# moveit_servo configuration for teleoperation.
+#
+# Loaded under the "moveit_servo" parameter prefix (generate_parameter_library's
+# ParamListener expects it there) -- see servo.launch.py.
+#
+# Note what is NOT here: no link names, no joint names, no frames. moveit_servo
+# 2.12 takes the planning frame from the RobotModel and the EE frame from the
+# move group's tip link in the SRDF, so move_group_name below is the only
+# robot-specific key in the file. Verified against
+# /opt/ros/jazzy/share/moveit_servo/config/servo_parameters.yaml -- there are no
+# planning_frame or ee_frame parameters in this version.
+
+move_group_name: arm
+
+## Topics.
+# joint_topic is a PARAMETER, not a remap, and it is NOT /joint_states: the
+# vendored demo.launch.py remaps ros2_control_node's joint_states to
+# control_topic (default control/joint_states), so /joint_states never exists.
+# Pointing servo at the default here yields a node that starts cleanly and then
+# never moves, which is a slow thing to debug.
+joint_topic: control/joint_states
+# Goes to joint_limit_guard, which clamps to the model's position limits
+# and then forwards to the controller. Servo halts a joint that has
+# reached its bound but cannot recover one pushed past it, so nothing
+# may place a joint outside its range in the first place.
+command_out_topic: servo/joint_trajectory_raw
+pose_command_in_topic: ~/pose_target_cmds
+cartesian_command_in_topic: ~/delta_twist_cmds
+joint_command_in_topic: ~/delta_joint_cmds
+status_topic: ~/status
+
+## Output format.
+# JointTrajectory goes to the JointTrajectoryController's TOPIC interface,
+# while move_group drives the same controller's ACTION interface. That is what
+# lets teleop and plan-and-execute share one controller with no switching --
+# but the two preempt each other, so the mode manager must never run both.
+command_out_type: trajectory_msgs/JointTrajectory
+publish_joint_positions: true
+publish_joint_velocities: false
+publish_joint_accelerations: false
+
+## Rates and staleness.
+publish_period: 0.01          # 100 Hz
+max_expected_latency: 0.1
+# Servo discards commands older than this. Note that discarding is not halting:
+# in POSE mode servo keeps driving toward its last accepted target, so this
+# complements but does not replace the mode manager's explicit pause_servo.
+incoming_command_timeout: 0.1
+
+## Command scaling.
+# In pose mode these are MAX VELOCITIES (m/s and rad/s), not unitless gains.
+command_in_type: speed_units
+scale:
+  linear: 0.2
+  rotational: 0.8
+  joint: 0.5
+
+## Pose tracking tolerances.
+pose_tracking:
+  linear_tolerance: 0.001
+  angular_tolerance: 0.01
+
+## Planning scene.
+# move_group is the primary monitor, so servo must not also advertise
+# get_planning_scene. Being a secondary monitor is also what makes collision
+# objects applied to move_group (the safety zones) visible to servo.
+is_primary_planning_scene_monitor: false
+check_octomap_collisions: false
+
+## Singularity and limit handling.
+#
+# These are Jacobian CONDITION NUMBERS, and MoveIt's defaults (17 decelerate /
+# 30 hard stop) are Panda values that are actively wrong for this arm. Measured
+# numerically from this URDF over 4000 random interior joint configurations:
+#
+#     median condition number      38.5
+#     75th percentile              79.1
+#     90th percentile             228.8
+#     home pose (all zeros)     28198
+#     ready_pose                   10.1
+#
+# So the default hard stop of 30 sits BELOW the median: servo would emergency
+# stop across roughly 60% of the reachable workspace. That presents as a servo
+# node that is up, reporting status, publishing commands at full rate, and
+# never moving the arm -- which is exactly how it presented.
+#
+# 60/150 leaves normal operation clear while still catching genuine
+# singularities by a wide margin (home is 28198, three orders of magnitude
+# above the hard stop). Verified moving: 3.9 mm mean / 17.2 mm max tracking
+# error following a circle, with no discontinuity above 1.73 mm.
+# Raised from MoveIt's Panda-derived 17/30, which sat below this arm's median
+# condition number of 38.5 and halted across ~60% of the workspace. But 60/150
+# proved too far the other way: near-singular configurations amplify the
+# pseudo-inverse, so a 4 cm Cartesian target produced joint swings over 100 deg
+# and jammed the wrist against its limit. That got worse once tcp_offset moved
+# the control point 14 cm further out and lengthened the lever arm.
+#
+# 40/80 straddles the measured distribution: above the median so normal poses
+# are free, below the tail where the Jacobian blows up.
+lower_singularity_threshold: 40.0
+hard_stop_singularity_threshold: 80.0
+leaving_singularity_threshold_multiplier: 2.0
+# 0.12 rad is ~7 deg of unusable travel at BOTH ends of every joint. On this
+# arm that is a lot: joint5's whole range is +/-1.22 rad, so the default threw
+# away 11% of it and servo stopped well short of poses that are reachable.
+joint_limit_margins: [0.05]
+
+# THE big one for how teleoperation feels.
+#
+# Default is true: when any ONE joint reaches its bound, servo halts EVERY
+# joint. The arm stops dead even though the remaining five could still make
+# progress toward the target -- which presents exactly as "it hits a joint
+# limit and then the whole arm refuses to move".
+#
+# False halts only the offending joint and lets the rest keep tracking, so the
+# arm slides along the constraint instead of freezing against it. This is the
+# behaviour a full IK solver gives implicitly by treating limits as
+# constraints rather than as stop conditions.
+halt_all_joints_in_cartesian_mode: true
+halt_all_joints_in_joint_mode: true
+
+## Collision behaviour.
+# This will feel sticky near obstacles and operators will complain. Expect it,
+# read ~/status to see where it fires, and gather logs before deciding whether
+# it is worth replacing servo's velocity scaling.
+check_collisions: true
+collision_check_rate: 10.0
+self_collision_proximity_threshold: 0.01
+scene_collision_proximity_threshold: 0.02
+
+## Smoothing.
+# AccelerationLimitedPlugin additionally requires update_period and
+# planning_group_name as TOP-LEVEL node parameters (not under moveit_servo);
+# servo.launch.py supplies them.
+use_smoothing: true
+smoothing_filter_plugin_name: "online_signal_smoothing::AccelerationLimitedPlugin"

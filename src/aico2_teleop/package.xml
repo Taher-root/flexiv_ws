@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>aico2_teleop</name>
+  <version>0.1.0</version>
+  <description>AICO2 dual-arm IK-based VR teleoperation using the moveit-teleop framework.</description>
+  <maintainer email="taherk@seas.upenn.edu">Taher</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>aico2_moveit_config</exec_depend>
+  <exec_depend>aico2_left_arm_driver</exec_depend>
+  <exec_depend>aico2_right_arm_driver</exec_depend>
+  <exec_depend>flexiv_amr_bringup</exec_depend>
+  <exec_depend>flexiv_amr_description</exec_depend>
+  <exec_depend>moveit_teleop_bringup</exec_depend>
+  <exec_depend>moveit_teleop_core</exec_depend>
+  <exec_depend>moveit_teleop_devices</exec_depend>
+  <exec_depend>moveit_teleop_ik</exec_depend>
+  <exec_depend>moveit_teleop_msgs</exec_depend>
+  <exec_depend>moveit_teleop_record</exec_depend>
+  <exec_depend>moveit_teleop_replay</exec_depend>
+  <exec_depend>moveit_ros_move_group</exec_depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

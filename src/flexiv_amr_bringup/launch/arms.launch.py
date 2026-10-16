@@ -12,12 +12,14 @@ Usage:
   ros2 launch flexiv_amr_bringup arms.launch.py \
       joint_control_mode:=impedance joint_stiffness_ratio:=0.15 \
       max_contact_torque:=10.0
+  ros2 launch flexiv_amr_bringup arms.launch.py teleop_backend:=servo
 """
 
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     EmitEvent,
+    OpaqueFunction,
     RegisterEventHandler,
     TimerAction,
 )
@@ -103,7 +105,7 @@ def _lifecycle_startup(driver, connect_delay_sec: float = 0.0):
     ]
 
 
-def generate_launch_description():
+def _build_nodes(context):
     left_pkg = FindPackageShare("aico2_left_arm_driver")
     right_pkg = FindPackageShare("aico2_right_arm_driver")
     waist_pkg = FindPackageShare("aico2_waist_driver")
@@ -112,26 +114,17 @@ def generate_launch_description():
     enable_waist_driver = LaunchConfiguration("enable_waist_driver")
     joint_control_mode = ParameterValue(
         LaunchConfiguration("joint_control_mode"), value_type=str)
-    # Without value_type a LaunchConfiguration arrives as a string and the
-    # driver's double parameter rejects it as a type mismatch.
     joint_stiffness_ratio = ParameterValue(
         LaunchConfiguration("joint_stiffness_ratio"), value_type=float)
     max_contact_torque = ParameterValue(
         LaunchConfiguration("max_contact_torque"), value_type=float)
-    # Left driver only: the external axes are shared, so two commanders would
-    # fight over them.
     control_waist = ParameterValue(
         LaunchConfiguration("control_waist"), value_type=bool)
 
-    # Each driver publishes its own joints to /<ns>/joint_states and
-    # joint_state_merger stitches them into the full-robot /joint_states.
-    #
-    # There was a direct_joint_states argument here that remapped straight to
-    # /joint_states and skipped the merger, on the belief that
-    # robot_state_publisher merges partial JointState messages by name. It does
-    # not: robot_state_publisher.cpp declares its joint map as a local rebuilt
-    # per message, so a partial update blanks every joint it omits. The flag
-    # could only ever break TF, so it is gone rather than documented.
+    # Override teleop_backend on both arm drivers when explicitly set.
+    teleop_backend = LaunchConfiguration("teleop_backend").perform(context)
+    backend_override = {"teleop_backend": teleop_backend} if teleop_backend else {}
+
     joint_states_remap = [("joint_states", "joint_states")]
 
     left_driver = LifecycleNode(
@@ -149,16 +142,11 @@ def generate_launch_description():
                 "mock_hardware": mock_hardware,
                 "joint_names": LEFT_JOINTS,
                 "tcp_frame_id": "Left_flange",
-                # Overridable here because joint_control_mode is only read in
-                # on_configure: changing it later needs a relaunch, so it has
-                # to be settable without editing the YAML.
-                # joint_stiffness_ratio is also a live parameter:
-                #   ros2 param set /left_arm/left_arm_driver \
-                #       joint_stiffness_ratio 0.3
                 "joint_control_mode": joint_control_mode,
                 "joint_stiffness_ratio": joint_stiffness_ratio,
                 "max_contact_torque": max_contact_torque,
                 "control_waist": control_waist,
+                **backend_override,
             },
         ],
     )
@@ -181,16 +169,11 @@ def generate_launch_description():
                 "joint_control_mode": joint_control_mode,
                 "joint_stiffness_ratio": joint_stiffness_ratio,
                 "max_contact_torque": max_contact_torque,
+                **backend_override,
             },
         ],
     )
 
-    # Waist axes (AGV_Joint1/2): reads q[0:2] off the left arm's RDK stream via
-    # its own session, independent of the arm drivers (see
-    # docs/joint_state_architecture.md sec 3/4.2). Off by default: while
-    # joint_state_merger is still publishing those two joints as 0.0, enabling
-    # this races last-writer-wins on them (sec 8 step 3 — intentional during
-    # verification, not the steady state).
     waist_driver = LifecycleNode(
         package="aico2_waist_driver",
         executable="waist_driver",
@@ -204,6 +187,30 @@ def generate_launch_description():
         ],
     )
 
+    return [
+        left_driver,
+        right_driver,
+        waist_driver,
+        *_lifecycle_startup(left_driver),
+        *_lifecycle_startup(right_driver, connect_delay_sec=1.5),
+        *_lifecycle_startup(waist_driver, connect_delay_sec=3.0),
+        Node(
+            package="flexiv_amr_driver",
+            executable="joint_state_merger",
+            name="joint_state_merger",
+            output="screen",
+            parameters=[
+                {
+                    "left_arm_topic": "/left_arm/joint_states",
+                    "right_arm_topic": "/right_arm/joint_states",
+                    "rate_hz": 50.0,
+                }
+            ],
+        ),
+    ]
+
+
+def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -265,28 +272,14 @@ def generate_launch_description():
                             "Retunable live: ros2 param set "
                             "/left_arm/left_arm_driver max_contact_torque 10.0",
             ),
-            left_driver,
-            right_driver,
-            waist_driver,
-            # Staggered so the blocking RDK connects in each CONFIGURE do not
-            # overlap; each ACTIVATE then follows its own successful configure.
-            *_lifecycle_startup(left_driver),
-            *_lifecycle_startup(right_driver, connect_delay_sec=1.5),
-            # Waist reads the left arm's controller — no hard ordering
-            # dependency, it just goes last.
-            *_lifecycle_startup(waist_driver, connect_delay_sec=3.0),
-            Node(
-                package="flexiv_amr_driver",
-                executable="joint_state_merger",
-                name="joint_state_merger",
-                output="screen",
-                parameters=[
-                    {
-                        "left_arm_topic": "/left_arm/joint_states",
-                        "right_arm_topic": "/right_arm/joint_states",
-                        "rate_hz": 50.0,
-                    }
-                ],
+            DeclareLaunchArgument(
+                "teleop_backend",
+                default_value="",
+                description="Override teleop_backend for both arm drivers. "
+                            "Empty uses each driver's config file value. "
+                            "'servo' for IK-based VR teleop, 'cartesian' for "
+                            "twist-based control.",
             ),
+            OpaqueFunction(function=_build_nodes),
         ]
     )

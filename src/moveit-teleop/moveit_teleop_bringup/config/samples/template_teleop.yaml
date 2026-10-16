@@ -1,0 +1,222 @@
+# TEMPLATE -- copy to <your_arm>_moveit_config/config/teleop.yaml and edit.
+#
+#     ros2 launch moveit_teleop_bringup teleop.launch.py \
+#         robot_config_package:=<your_arm>_moveit_config
+#
+# Make sure the package's CMakeLists installs the config directory:
+#     install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
+#
+# Only SIX values below have no sensible default for a new arm. They are marked
+# REQUIRED. Everything else can be deleted and the stack will still come up on
+# the fallbacks -- then tune from measurements, not from taste.
+#
+# Exporting training datasets additionally REQUIRES the three files.preview_*
+# entries, and gripper.group when the arm has a gripper.
+#
+# Anything you can read off the robot model does NOT belong here. Joint names,
+# joint limits, the tip link, the planning frame, the controller name and the
+# gripper's open/closed values are all fetched at runtime from the running
+# move_group. If you find yourself typing a link name, stop: it is a bug.
+#
+# A key this resolver does not know is an ERROR at launch, not a silent skip.
+
+moveit_teleop:
+  # REQUIRED. The SRDF planning group for the arm. Everything -- base link, tip
+  # link, joint order, controller -- is resolved from this one name.
+  move_group: arm
+
+  # REQUIRED. An SRDF <group_state> the arm moves to before teleop engages.
+  #
+  # If your SRDF has none, add one. Do not use all-zeros without checking it:
+  # on many arms zero is singular, on the Piper it also sits exactly on two
+  # joint limits, and the solver then has no good configuration to start from.
+  ready_state: ready_pose
+
+  # REQUIRED. The posture the IK is regularised toward. Usually the same named
+  # state; 'midrange' uses each joint's mid-range instead.
+  #
+  # The node computes this posture's Jacobian condition number at startup and
+  # WARNS above 500. Read that line on your first launch -- it is the cheapest
+  # check you will get that your nominal posture is not a singularity. For
+  # scale: FR3 ready_pose 8.2, Piper ready_pose 121.8, Piper mid-range 34111.
+  nominal_state: ready_pose
+
+  # --- companion files -------------------------------------------------
+  # Relative to THIS FILE (absolute also works), so the package is movable.
+  files:
+    # Obstacles and virtual walls. See template_scene.yaml. Omit for none.
+    scene: teleop_scene.yaml
+
+    # RViz view. Omit to fall back to the stack's own, whose TF whitelist
+    # names the Piper's tcp_link -- so for a new arm, copy that file and
+    # change exactly two things: `Fixed Frame` to your URDF root link, and
+    # `Filter (whitelist)` to '<your tip link>|teleop_target'.
+    # rviz: teleop.rviz
+
+    # REQUIRED to export datasets; optional for teleop alone.
+    #
+    # The robot model, as xacro (or plain URDF/SRDF) plus the xacro arguments
+    # your robot bringup uses. Two things read them: the replay panel's ghost
+    # arm, and `moveit_teleop_record convert`, which runs offline and derives
+    # the dataset's joint layout and units from them. They must describe the
+    # SAME robot your bringup built, tool offset included.
+    preview_urdf: my_arm.urdf.xacro
+    preview_srdf: my_arm.srdf.xacro
+    preview_xacro_args: ''
+
+  # Scripted-device settings; ignored when device:=xr. Used by device:=fake,
+  # which is how you test everything downstream without a headset or a robot.
+  device:
+    pattern: circle
+    period: 6.0
+    radius: 0.1
+
+  retargeting:
+    # REQUIRED-ish: the one number you will certainly change.
+    #
+    # Wrist rotation has roughly the same range as the tool's, so 1:1 is
+    # twitchy -- a small unintended roll of your hand is a large tool roll.
+    # Start at 0.5 and raise it if the tool feels unresponsive in rotation.
+    rotation_scale: 0.5
+
+    # 'device' = measured relative to the OPERATOR's heading at clutch engage,
+    # so "forward" means "away from me" however you are facing. 'base' = the
+    # room, correct only for a tripod-mounted device. 'tool' = body-frame,
+    # which needs a controller-to-tool alignment constant to feel right.
+    translation_ref: device
+    rotation_ref: device
+
+    # EMA weight on each new device sample; 1.0 disables it. Lower it if hand
+    # tremor reaches the arm. 0.3 costs roughly 30 ms of phase at 72 Hz.
+    smoothing_alpha: 1.0
+
+    # Safety net on the DEVICE stream: a single update moving the target
+    # further than this is a teleport or a decoded garbage pose, and is
+    # refused. Applied to the SCALED delta, so it limits ROBOT motion.
+    max_translation_step: 0.05
+    max_target_lead_angle: 0.5
+
+    # How far a WALL may move the command beyond what the hand drove, in one
+    # update, before the mapping is re-zeroed and the arm holds instead.
+    max_command_step: 0.03
+
+    per_solver:
+      ik:
+        # REQUIRED-ish. Device metres -> robot metres. Above 1:1 is safe on
+        # the IK path: an unreachable target yields the closest FEASIBLE pose,
+        # so overshooting parks the tool at the workspace boundary rather than
+        # running away. Raise until the reach feels right.
+        translation_scale: 1.5
+        # The leash: how far the target may lead the actual end effector.
+        # Loose here, because full IK has no runaway failure to guard.
+        max_target_lead: 0.30
+        # MUST exceed max_target_lead, or ordinary tracking lag reads as a
+        # teleport and the retargeter re-anchors continuously. Enforced.
+        external_motion_threshold: 0.50
+      servo:
+        # The DEPRECATED differential-IK path. Tight, because a runaway target
+        # there is dangerous. You should not need this section.
+        translation_scale: 0.5
+        max_target_lead: 0.05
+        external_motion_threshold: 0.15
+
+  ik:
+    # Lower it if the node reports solve_time_p99 approaching the frame period
+    # (1/solve_rate). Watch /ik_node/status.
+    solve_rate: 90.0
+
+    weight_position: 50.0
+    # Raise for tighter tool orientation, lower to stop the wrist swinging
+    # around on simple translations. 10 gives ~0.09 deg of steady-state
+    # residual, 1 gives ~0.8 deg, 0.5 roughly halves wrist travel per cm.
+    weight_orientation: 10.0
+
+    # The sole source of steady-state tracking error. Set by DOF, not taste:
+    #   6-DOF: 0.005. A pose fully determines q, so this can only pull you off
+    #          the target. 0.02 costs 2.3 mm; 0.005 costs 0.6 mm.
+    #   7-DOF: 0.02. A real nullspace exists, so the posture term shapes the
+    #          elbow for free.
+    weight_regularization: 0.005
+    weight_smoothness: 0.1
+
+    # REQUIRED. Fraction of each joint's MoveIt maximum velocity teleop may
+    # use. This is your main safety ceiling, so set it deliberately.
+    #
+    # Start at 0.2 on an arm you have never driven. Raise it until the IK
+    # node stops reporting rate_limited during normal motion, then stop --
+    # going past the point where the solver's own demand is satisfied buys
+    # nothing and only widens what a fault can command.
+    rate_limit_scale: 0.3
+
+    # Refuse a solution further than this (rad) from the PREVIOUS SOLUTION: an
+    # IK branch flip is valid kinematics and unacceptable motion. On a refused
+    # jump the solve is retried once, pulled this many times harder toward the
+    # last accepted solution; 0 disables the retry and the arm holds instead.
+    max_joint_jump: 0.35
+    jump_retry_smoothness: 50.0
+
+    # 'stop' = full speed to contact, refuse to enter. 'none' = no checking.
+    collision_policy: stop
+
+  gripper:
+    # false if your arm has no gripper group; the node then does not start.
+    enabled: false
+
+    # The SRDF group. Its open/closed joint values are NOT configured here --
+    # they come from that group's states matching *open* and *close*.
+    group: gripper
+
+  controllers:
+    # REQUIRED. Which ros2_control controller receives the arm trajectory.
+    # This is genuinely not recorded in any MoveIt artifact.
+    arm: arm_controller
+
+  safety:
+    # Deadman. If operator input goes stale for longer than this, the mode
+    # manager halts and actively pauses the solver. Note that merely ceasing
+    # to publish is NOT a halt: the solver keeps driving toward its last
+    # target, which is why this exists.
+    input_timeout: 0.1
+
+    # Homing -- the one motion the operator is NOT driving -- is planned
+    # through move_group, so its path is collision-checked against the scene
+    # and time-parameterised against joint_limits.yaml. If move_group cannot
+    # plan one (most often because the arm's start posture is already touching
+    # modelled geometry), it falls back to a direct interpolated move, loudly,
+    # which is what this stack did before it could plan at all.
+    #
+    # The fallback needs nothing robot-specific: it publishes the same
+    # JointTrajectory to the same controller topic that the solver streams, so
+    # any arm that can be teleoperated can be homed this way. Set false only
+    # for an arm whose MoveIt stack cannot execute trajectories.
+    home_via_moveit: true
+
+    # A service the mode manager calls with true/false as teleop engages and
+    # disengages, so the hardware has a real deadman. Leave disabled unless
+    # your driver advertises one.
+    hardware_gate:
+      service: /control_enable
+      enabled: false
+      # Whether that gate must ALSO be open while move_group executes a
+      # planned trajectory (homing, a waypoint return). true for a gate that
+      # ENABLES MOTION, which a planned trajectory needs as much as a streamed
+      # command does. false for a gate that SELECTS A STREAMING MODE, because a
+      # driver offering one typically refuses to run its trajectory action at
+      # the same time -- it would reject the very goal move_group just sent.
+      open_for_planning: true
+
+  # --- dataset export (optional section) ---------------------------------
+  # Read by `ros2 run moveit_teleop_record convert`; the teleop launch ignores
+  # it. The joint layout is NOT configured anywhere: arm joints come from
+  # move_group, gripper joints from gripper.group, units from the URDF.
+  dataset:
+    robot_type: my_arm            # LeRobot robot_type; omit for the URDF name
+    image_size: 640x360           # WxH or native
+    vcodec: h264                  # plays anywhere; libsvtav1 is ~2/3 the size
+    state_stream: joint_states    # recording.yaml stream names
+    action_stream: joint_commands
+    trim: teleop                  # or none
+    gr00t:
+      action_horizon: 16
+      arm_action: relative        # relative | absolute
+      gripper_action: absolute

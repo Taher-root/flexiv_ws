@@ -1,0 +1,101 @@
+# REFERENCE COPY -- not read by anything.
+# The live file is agx_arm_moveit/config/teleop_scene.yaml.
+
+# AgileX Piper -- geometry teleoperation must not drive the arm into.
+#
+# Named by files.scene in teleop.yaml, next to this file.
+#
+# One file, two mechanisms, because they are two views of the same obstacle:
+#
+#   collision   geometry MoveIt's checker sees. Stops motion rather than
+#               redirecting it, and protects the whole ARM, not just the tool.
+#   wall        a linear constraint inside the IK solve. Exact, no lag, and
+#               the tool SLIDES along the surface instead of halting.
+#
+# A box's wall is DERIVED from that box's bounds. That matters: with the wall
+# height and the box height configured as independent numbers they drift apart
+# silently, and the symptom is a tool that stops in mid-air well above the
+# table with nothing visibly wrong.
+
+planning_scene:
+  # Used by any entry that does not name its own frame.
+  default_frame: world
+
+  boxes:
+    # The table the arm is bolted to.
+    #
+    # Anchored to base_link rather than to the planning frame: geometry
+    # declared against the robot stays put when the robot is re-mounted or
+    # placed on a different stand, where geometry in world silently does not.
+    - name: table
+      frame: base_link
+      # [xmin, xmax, ymin, ymax, zmin, zmax]
+      #
+      # zmax is 5 mm BELOW the mounting plane. The base occupies the space
+      # immediately above z=0, so a table whose top reaches it intersects the
+      # robot -- and then every state is in collision and the arm never moves.
+      #
+      # UNVERIFIED: this number was chosen to clear the base, NOT measured
+      # against the real table. A hardware episode recorded the tool bottoming
+      # out at z = -0.047 in this frame, 42 mm BELOW this surface. Measure the
+      # real mounting height and fix this before trusting the collision box.
+      bounds: [-0.4, 0.4, -0.4, 0.4, -0.025, -0.005]
+      collision: true
+
+      # The tool stays on the +z side of the box's upper z face, i.e. above the
+      # table top, and slides along it.
+      wall: +z
+
+      # How far ABOVE that face the wall sits, and it is load-bearing.
+      #
+      # Two different things have to fit inside this number:
+      #
+      # 1. GRIPPER GEOMETRY. The wall constrains the TOOL POINT (tcp_link); the
+      #    collision object stops the whole gripper, whose fingers reach past
+      #    that point. Measured on this arm: tool z = +0.017 is clear, tool
+      #    z = -0.015 is already in contact via gripper_link1/2. So ~0.03.
+      #
+      # 2. TRACKING ERROR. The wall is enforced on the COMMAND, and the arm
+      #    trails the command. Measured over a 20 s hardware episode:
+      #    median 46 mm, p95 115 mm, max 200 mm, with ~140 ms of phase lag.
+      #    At the old 0.03 the commanded tool never once violated the wall
+      #    (0 of 1695 samples) and the REAL tool went 72 mm past it, eight
+      #    times, and hit the table.
+      #
+      # 0.12 covers the p95. It costs you 12 cm of usable height above the
+      # table, which is the honest price of an open-loop wall.
+      #
+      # The proper fix is to close the loop: launch the robot bringup with
+      # follow:=true so TF, move_group and the retargeter's anchor track the
+      # real arm instead of the command. Then this can come back down toward
+      # the gripper-geometry number.
+      wall_clearance: 0.12
+
+      # LIMITATION, deliberate: this wall is INFINITE. It holds the tool above
+      # table height everywhere, including past the edge of the table, so you
+      # cannot reach around the table to a lower workspace.
+      #
+      # The bounded version exists (wall_bounded: true, footprint taken from
+      # `bounds` and widened by wall_margin) and is off because it is worse.
+      # A wall that switches off is a non-convex region approximated by a
+      # switch, and a vanishing constraint moves the solver's optimum
+      # discontinuously: sweeping the target across this table's edge steps the
+      # tool 218 mm in ONE solve, against ~5 mm either side of it.
+      #
+      # The infinite wall is not smooth either -- it steps 170 mm where the
+      # constraint first BINDS as the tool descends. The difference is how
+      # often: binding happens once on arrival at the surface, while a
+      # footprint edge is crossed every time you reach past the table.
+      wall_bounded: false
+      wall_margin: 0.0
+
+  # Walls with no matching geometry: nothing for the arm to collide with, just
+  # a limit on where the TOOL may go. Bounded the same way -- give `extent` and
+  # the wall exists only over that rectangle. Only axis-aligned normals may
+  # carry one: for a tilted plane the two perpendicular axes would be a guess.
+  planes: []
+    # - name: keep_forward
+    #   frame: base_link
+    #   normal: [1.0, 0.0, 0.0]   # n . p >= offset
+    #   offset: 0.15
+    #   extent: [-0.3, 0.3, 0.0, 0.8]   # y and z here; omit for unbounded

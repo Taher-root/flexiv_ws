@@ -1,0 +1,157 @@
+# REFERENCE COPY -- not read by anything.
+# The live file is franka_teleop_bringup/config/teleop.yaml.
+
+# Franka FR3 -- teleoperation config.
+#
+#     ros2 launch franka_teleop_bringup demo.launch.py
+#     ros2 launch moveit_teleop_bringup teleop.launch.py \
+#         robot_config_package:=franka_teleop_bringup
+#
+# This arm exists in the tree to keep the genericity claim honest: a 7-DOF arm
+# from a different vendor, driven by the same eight teleop packages with NO
+# code changed. Everything that differs from the Piper is in this file and in
+# the four files it names.
+#
+# Note what is NOT here, and is read from the robot model at runtime: the
+# 7-joint chain, the tip link, the joint limits, the controller name, and the
+# gripper's open/closed joint values.
+
+moveit_teleop:
+  move_group: fr3_arm
+  ready_state: ready_pose
+  nominal_state: ready_pose
+
+  files:
+    scene: scene.yaml
+    # This arm's view: the TF whitelist names fr3_hand_tcp, and the fixed
+    # frame is this robot's root rather than the Piper's 'world'.
+    rviz: teleop.rviz
+    # franka_description's own SRDF names no arm group state, so the SRDF here
+    # is this package's wrapper, which adds ready_pose.
+    preview_urdf: fr3.urdf.xacro
+    preview_srdf: fr3.srdf.xacro
+    preview_xacro_args: ''
+
+  device:
+    pattern: circle
+    period: 6.0
+    radius: 0.1
+
+  retargeting:
+    # Lower than the Piper's 0.8: the FR3 wrist has more range than the Piper's
+    # and a 1:1 mapping is correspondingly twitchier.
+    rotation_scale: 0.5
+    translation_ref: device
+    rotation_ref: device
+    smoothing_alpha: 1.0
+    max_translation_step: 0.05
+    max_target_lead_angle: 0.5
+    max_command_step: 0.03
+    per_solver:
+      servo:
+        translation_scale: 0.5
+        max_target_lead: 0.05
+        external_motion_threshold: 0.15
+      ik:
+        translation_scale: 1.5
+        max_target_lead: 0.30
+        external_motion_threshold: 0.50
+
+  ik:
+    solve_rate: 90.0
+    weight_position: 50.0
+    weight_orientation: 10.0
+
+    # Four times the Piper's 0.005, and that is the DOF difference rather than
+    # a preference. A 7-DOF arm has a genuine nullspace: the posture term
+    # shapes the elbow without moving the tool, so it is nearly free. On the
+    # 6-DOF Piper the same term can only pull the solution off the target.
+    weight_regularization: 0.02
+    weight_smoothness: 0.1
+
+    # 1.0 here, against 0.5 on the Piper, because the FR3's URDF velocity
+    # limits are already conservative (joint-dependent, 2.62 rad/s at the
+    # wrist) where the Piper's are a flat 5.0 rad/s for every joint.
+    #
+    # Use the URDF's numbers verbatim. An earlier joint_limits.yaml here
+    # carried plausible-looking invented values that understated joint6 by
+    # 2.8x (1.5 against the URDF's 4.18 rad/s) and produced 77 mm of vertical
+    # wander on a path that should have been flat.
+    rate_limit_scale: 1.0
+    max_joint_jump: 0.35
+    jump_retry_smoothness: 50.0
+    collision_policy: stop
+
+  gripper:
+    enabled: true
+
+    # The gripper node needs no more help than this: it finds the SRDF states
+    # matching *open* and *close* (Franka names them exactly that) and derives
+    # the controller from move_group.
+    group: fr3_hand
+
+  controllers:
+    arm: fr3_arm_controller
+
+  safety:
+    input_timeout: 0.1
+
+    # Homing -- the one motion the operator is NOT driving -- is planned
+    # through move_group, so its path is collision-checked against the scene
+    # and time-parameterised against joint_limits.yaml. If move_group cannot
+    # plan one (most often because the arm's start posture is already touching
+    # modelled geometry), it falls back to a direct interpolated move, loudly,
+    # which is what this stack did before it could plan at all.
+    #
+    # The fallback needs nothing robot-specific: it publishes the same
+    # JointTrajectory to the same controller topic that the solver streams, so
+    # any arm that can be teleoperated can be homed this way. Set false only
+    # for an arm whose MoveIt stack cannot execute trajectories.
+    home_via_moveit: true
+    hardware_gate:
+      # No CAN gate on this arm; the FCI has its own interlock.
+      service: /control_enable
+      enabled: false
+      # Whether that gate must ALSO be open while move_group executes a
+      # planned trajectory (homing, a waypoint return). true for a gate that
+      # ENABLES MOTION, which a planned trajectory needs as much as a streamed
+      # command does. false for a gate that SELECTS A STREAMING MODE, because a
+      # driver offering one typically refuses to run its trajectory action at
+      # the same time -- it would reject the very goal move_group just sent.
+      open_for_planning: true
+
+  # --- dataset export ----------------------------------------------------
+  # Read by `ros2 run moveit_teleop_record convert`, never by the teleop launch
+  # (which ignores this section; the exporter validates it and refuses a key it
+  # does not know). Every key here is optional.
+  #
+  # REQUIRED for export, and already above: move_group, gripper.group (when
+  # gripper.enabled), files.preview_urdf, files.preview_srdf and
+  # files.preview_xacro_args. An export runs offline -- there is no move_group to
+  # ask -- so the robot model has to come from files.
+  #
+  # NOT here, and never needed: which joints are the arm and the gripper, their
+  # order, or their units. The exporter derives all three from the SRDF groups
+  # and URDF joint types, so they cannot drift from the robot model.
+  dataset:
+    # LeRobot's info.json robot_type. Omit to use the URDF robot name ('fr3').
+    robot_type: franka_fr3
+    # Camera frames in the dataset: WxH or native. GR00T and pi0.5 both resize to
+    # 224 internally, so native only costs decode time at training.
+    image_size: 640x360
+    # h264 plays in any video player. libsvtav1 (AV1) matches GR00T's own demo
+    # data and is about 2/3 the size, but VLC 3.0 would not play it. Both GR00T
+    # and openpi decode either.
+    vcodec: h264
+    # Recording stream names (recording.yaml) that become state and action.
+    state_stream: joint_states
+    action_stream: joint_commands
+    # teleop: first engage -> last disengage, dropping idle and homing. none: all.
+    trim: teleop
+    gr00t:
+      # Steps predicted per sample, at the camera's fps. 16 at 15 fps is 1.07 s.
+      action_horizon: 16
+      # relative = delta from the current state; absolute = target. GR00T's
+      # SO-100 reference config: relative arm, absolute gripper.
+      arm_action: relative
+      gripper_action: absolute

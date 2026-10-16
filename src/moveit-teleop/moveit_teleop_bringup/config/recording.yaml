@@ -1,0 +1,146 @@
+# What to record, and what each stream MEANS.
+#
+# The recorder does not interpret any of this beyond "subscribe and write" --
+# it records raw messages at their native rates with their original timestamps.
+# The roles below are metadata carried into the bag's sidecar so that the
+# OFFLINE exporter knows how to assemble a training sample without anyone
+# re-describing the robot.
+#
+# Why sync happens at export and not here: recording raw is lossless and cheap.
+# You can re-export the same bags at a different rate, with a different
+# interpolation rule, or with a different set of streams, as many times as you
+# like. You cannot un-sync a bag that was resampled on the way in -- and the
+# right rate is rarely obvious until you have looked at the data.
+#
+# Adding a camera or a sensor is an entry here. No code changes.
+
+recording:
+  # Written under this directory, one subdirectory per episode.
+  output_dir: ~/Downloads/sample_teleop_episodes
+  storage_id: mcap
+
+  # An episode during which the watchdog fired is a demonstration in which the
+  # operator lost control. Keeping those quietly poisons a training set.
+  discard_on_halt: true
+
+  streams:
+    # --- observation: what the policy sees ------------------------------
+    # The robot's MEASURED joint state, arm and gripper together.
+    #
+    # ${joint_states_topic} is whatever the teleop session treats as state:
+    # /feedback/joint_states on the Piper hardware (encoder readings, with
+    # real velocity and effort), /control/joint_states on mock hardware.
+    #
+    # This used to be hardcoded to /control/joint_states, which on hardware is
+    # the COMMAND bus -- the driver subscribes to it -- so every recorded
+    # "observation" was actually what the arm was told to do, and the
+    # measured state was not recorded at all.
+    #
+    # Listed FIRST on purpose: on mock hardware it resolves to the same topic
+    # as joint_commands below, and the first declaration of a topic wins.
+    - topic: ${joint_states_topic}
+      role: observation
+      name: joint_states
+      # Which fields to pull out at export time. Omit to keep the whole message.
+      fields: [position, velocity]
+      required: true
+
+    - topic: /feedback/tcp_pose
+      role: observation
+      name: ee_pose
+      required: false        # only present when the real driver is running
+
+    - topic: /feedback/gripper_status
+      role: observation
+      name: gripper_state
+      required: false
+
+    # --- action: what the policy should output --------------------------
+    # The commanded EE pose is the action, not the measured one: imitation
+    # learning needs the operator's INTENT, and the measured pose already
+    # includes the controller's response to it.
+    # ${target_topic} is /servo_node/pose_target_cmds on the servo path and
+    # /ik_node/pose_target_cmds on the full-IK path. Hardcoding either one
+    # made this required stream absent on the other, and the recorder
+    # correctly refused every episode.
+    - topic: ${target_topic}
+      role: action
+      name: ee_target
+      required: true
+
+    # /fake_device/input or /xr_device/input, per the device in use.
+    # The commanded JOINT positions: the solver's output after smoothing and
+    # rate limiting, as interpolated by the trajectory controller at 200 Hz.
+    # Same space as joint_states, which is what most LeRobot policies expect
+    # as their action. On mock hardware this topic IS joint_states and is
+    # recorded once, under that name.
+    - topic: /control/joint_states
+      role: action
+      name: joint_commands
+      fields: [position]
+      required: false
+
+    - topic: ${input_topic}
+      role: action
+      name: teleop_input
+      fields: [gripper, clutch]
+      required: true
+
+    # --- context: not fed to the policy, but needed to audit an episode ---
+    - topic: /mode_manager/status
+      role: context
+      name: teleop_status
+      required: true
+
+    # Whichever solver is running publishes this; the name stays
+    # 'solver_status' so an exported dataset does not change shape
+    # depending on which one it was.
+    - topic: ${solver_status_topic}
+      role: context
+      name: solver_status
+      required: false
+
+  # --- cameras ----------------------------------------------------------
+  # Image topics are recorded as they arrive; the exporter turns them into
+  # per-frame images or video.
+  cameras:
+    # Orbbec Gemini 335L on the gripper. RGB only, 1280x720 at 15 fps, started
+    # with the `camera` command on the kit.
+    #
+    # The COMPRESSED topic, deliberately. Raw rgb8 at this size is 2.76 MB a
+    # frame -- 41 MB/s, 2.5 GB a minute -- where JPEG is ~100 KB a frame,
+    # ~90 MB a minute. The LeRobot export re-encodes to video anyway, which is
+    # lossy, so raw would buy disk usage and nothing else.
+    #
+    # Optional, so a session without the camera (simulation, the fake device)
+    # still records. A camera episode that loses the camera is caught at
+    # EXPORT instead: a dataset is refused rather than built from a mix of
+    # episodes with and without images.
+    - topic: /gripper_camera/color/image_raw/compressed
+      role: camera
+      name: gripper_camera
+      required: false
+
+  # --- extra sensors ----------------------------------------------------
+  sensors: []
+  # Example:
+  #   - topic: /ft_sensor/wrench
+  #     role: sensor
+  #     name: wrist_ft
+  #     required: false
+
+  # --- export defaults --------------------------------------------------
+  # Consumed by the offline exporter, not by the recorder.
+  export:
+    # Resample everything onto this timeline. 30 Hz is the usual imitation
+    # learning rate; the bags hold 100-200 Hz, so this can be raised later
+    # without re-recording.
+    rate_hz: 30.0
+    # How far a source message may be from a frame's timestamp before that
+    # frame is dropped as unsupported by real data. At 30 Hz the frame period
+    # is 33 ms, so 50 ms tolerates one missed sample and no more.
+    max_staleness: 0.05
+    # zero_order_hold: repeat the last value (correct for commands and
+    #   anything discrete -- a clutch was either held or it was not).
+    # linear: interpolate (only valid for continuous quantities).
+    default_interpolation: zero_order_hold

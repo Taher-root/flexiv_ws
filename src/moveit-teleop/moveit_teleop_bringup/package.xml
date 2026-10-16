@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>moveit_teleop_bringup</name>
+  <version>0.1.0</version>
+  <description>
+    Launch files and configuration for MoveIt teleoperation.
+
+    This is the only package that is allowed to know about a specific robot,
+    and it knows about it only through config/*.yaml. If integrating a new arm
+    requires changing anything outside this package, something robot-specific
+    has leaked into the core.
+  </description>
+  <maintainer email="aadith.j@gmail.com">Aadith</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>moveit_teleop_msgs</exec_depend>
+  <exec_depend>moveit_teleop_devices</exec_depend>
+
+  <exec_depend>moveit_teleop_replay</exec_depend>
+  <exec_depend>moveit_teleop_rviz</exec_depend>
+
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

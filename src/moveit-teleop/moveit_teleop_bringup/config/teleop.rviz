@@ -1,0 +1,375 @@
+# Teleop visualisation.
+#
+# WARNING: RViz REWRITES this file when it saves, and its serialiser drops
+# every comment below. If you edit it by hand, do it with RViz closed, and
+# expect a later save to flatten it again. Anything that must not be lost
+# belongs in teleop.launch.py, not here.
+#
+# Three deliberate choices survive re-serialisation and are worth restating:
+#
+#   Fixed Frame: world      The URDF root, which is also MoveIt's planning
+#                           frame. Pose targets are stamped in it; viewing
+#                           them in another frame makes an offset look like a
+#                           retargeting bug.
+#
+#   TF whitelist            Only tcp_link and teleop_target. With all frames
+#                           enabled the arm is a thicket of axes and the gap
+#                           between commanded and actual is invisible.
+#
+#   PlanningScene           The collision geometry move_group actually checks
+#                           against. On even when nothing is configured: an
+#                           empty scene is positive evidence the checker sees
+#                           no obstacle, which is otherwise indistinguishable
+#                           from an obstacle that failed to publish -- and
+#                           that looks like working collision avoidance right
+#                           up until the arm goes through the table.
+Panels:
+- Class: rviz_common/Displays
+  Help Height: 138
+  Name: Displays
+  Property Tree Widget:
+    Expanded:
+    - /TF1
+    - /TF1/Frames1
+    Splitter Ratio: 0.5
+  Tree Height: 1365
+- Class: moveit_teleop_rviz/ReplayPanel
+  Name: Episode Replay
+Visualization Manager:
+  Class: ''
+  Displays:
+  - Alpha: 0.5
+    Cell Size: 0.10000000149011612
+    Class: rviz_default_plugins/Grid
+    Color: 160; 160; 164
+    Enabled: true
+    Line Style:
+      Line Width: 0.029999999329447746
+      Value: Lines
+    Name: Grid
+    Normal Cell Count: 0
+    Offset:
+      X: 0
+      Y: 0
+      Z: 0
+    Plane: XY
+    Plane Cell Count: 20
+    Reference Frame: <Fixed Frame>
+    Value: true
+  - Alpha: 0.800000011920929
+    Class: rviz_default_plugins/RobotModel
+    Collision Enabled: false
+    Description File: ''
+    Description Source: Topic
+    Description Topic:
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /robot_description
+    Enabled: true
+    Links:
+      All Links Enabled: true
+      Expand Joint Details: false
+      Expand Link Details: false
+      Expand Tree: false
+      Link Tree Style: Links in Alphabetic Order
+      base_link:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      flange_link:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      gripper_base:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      gripper_link:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+      gripper_link1:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      gripper_link2:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      link1:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      link2:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      link3:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      link4:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      link5:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      link6:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      tcp_link:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+      world:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+    Mass Properties:
+      Inertia: false
+      Mass: false
+    Name: RobotModel
+    TF Prefix: ''
+    Update Interval: 0
+    Value: true
+    Visual Enabled: true
+  - Class: rviz_default_plugins/TF
+    Enabled: true
+    Filter (blacklist): ''
+    Filter (whitelist): tcp_link|teleop_target
+    Frame Timeout: 15
+    Frames:
+      All Enabled: false
+      tcp_link:
+        Value: true
+      teleop_target:
+        Value: true
+    Marker Scale: 0.2
+    Name: TF
+    Show Arrows: false
+    Show Axes: true
+    Show Names: true
+    Tree:
+      world:
+        base_link:
+          link1:
+            link2:
+              link3:
+                link4:
+                  link5:
+                    link6:
+                      flange_link:
+                        gripper_base:
+                          gripper_link: {}
+                          gripper_link1: {}
+                          gripper_link2: {}
+                      tcp_link: {}
+        teleop_target: {}
+    Update Interval: 0
+    Value: true
+  - Class: moveit_rviz_plugin/PlanningScene
+    Enabled: true
+    Move Group Namespace: ''
+    Name: PlanningScene
+    Planning Scene Topic: /monitored_planning_scene
+    Robot Description: robot_description
+    Scene Geometry:
+      Scene Alpha: 1.0
+      Scene Color: 50; 230; 50
+      Show Scene Geometry: true
+      Voxel Coloring: Z-Axis
+      Voxel Rendering: Occupied Voxels
+    Scene Robot:
+      Attached Body Color: 150; 50; 150
+      Robot Alpha: 0.5
+      Show Robot Collision: false
+      Show Robot Visual: false
+    Value: true
+  - Attached Body Color: 150; 50; 150
+    Class: moveit_rviz_plugin/RobotState
+    Collision Enabled: false
+    Enabled: true
+    Links:
+      All Links Enabled: true
+      Expand Joint Details: false
+      Expand Link Details: false
+      Expand Tree: false
+      Link Tree Style: Links in Alphabetic Order
+      base_link:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      flange_link:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      gripper_base:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      gripper_link:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+      gripper_link1:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      gripper_link2:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      link1:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      link2:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      link3:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      link4:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      link5:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      link6:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+        Value: true
+      tcp_link:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+      world:
+        Alpha: 1
+        Show Axes: false
+        Show Trail: false
+    Name: EpisodePreview
+    Robot Alpha: 0.6499999761581421
+    Robot Description: replay_robot_description
+    Robot State Topic: /episode_player/robot_state
+    Show All Links: true
+    Show Highlights: true
+    Value: true
+    Visual Enabled: true
+  - Alpha: 1
+    Axes Length: 0.10000000149011612
+    Axes Radius: 0.00800000037997961
+    Class: rviz_default_plugins/Pose
+    Color: 255; 25; 0
+    Enabled: true
+    Head Length: 0.30000001192092896
+    Head Radius: 0.10000000149011612
+    Name: EpisodeTarget
+    Shaft Length: 1
+    Shaft Radius: 0.05000000074505806
+    Shape: Axes
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      Filter size: 10
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /replay/target_pose
+    Value: true
+  - Alpha: 1
+    Axes Length: 0.15000000596046448
+    Axes Radius: 0.009999999776482582
+    Class: rviz_default_plugins/Pose
+    Color: 255; 25; 0
+    Enabled: true
+    Head Length: 0.30000001192092896
+    Head Radius: 0.10000000149011612
+    Name: TeleopTarget
+    Shaft Length: 1
+    Shaft Radius: 0.05000000074505806
+    Shape: Axes
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      Filter size: 10
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /retarget_node/target_pose
+    Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: world
+    Frame Rate: 30
+  Name: root
+  Tools:
+  - Class: rviz_default_plugins/MoveCamera
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 1.2000000476837158
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.05999999865889549
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
+      Focal Point:
+        X: 0.20000000298023224
+        Y: 0
+        Z: 0.20000000298023224
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05000000074505806
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.009999999776482582
+      Pitch: 0.4649997651576996
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz_default_plugins)
+      Yaw: 1.0499998331069946
+    Saved: null
+Window Geometry:
+  Displays:
+    collapsed: false
+  Episode Replay:
+    collapsed: false
+  Height: 3092
+  Hide Left Dock: false
+  Hide Right Dock: false
+  QMainWindow State: 000000ff00000000fd00000001000000000000028a00000b74fc0200000002fb000000100044006900730070006c0061007900730100000070000006510000018600fffffffb0000001c0045007000690073006f006400650020005200650070006c0061007901000006cd000005170000014500ffffff00000f4d00000b7400000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  Width: 4579
+  X: 1802
+  Y: 67

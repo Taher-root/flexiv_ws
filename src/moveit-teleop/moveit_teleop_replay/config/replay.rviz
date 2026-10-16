@@ -1,0 +1,132 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /EpisodePreview1
+      Splitter Ratio: 0.5
+    Tree Height: 420
+  - Class: moveit_teleop_rviz/ReplayPanel
+    Name: Episode Replay
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 0.25
+      Class: rviz_default_plugins/Grid
+      Color: 160; 160; 164
+      Enabled: true
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Name: Grid
+      Normal Cell Count: 0
+      Plane: XY
+      Plane Cell Count: 12
+      Reference Frame: <Fixed Frame>
+      Value: true
+    # The replay robot, drawn the way MoveIt draws a planned path: one flat
+    # colour, semi-transparent, unmistakably a PREVIEW. Rendering it in the
+    # robot's own materials would put a second photo-real arm on screen and
+    # leave no way to tell at a glance which one is the real hardware.
+    #
+    # The display name has no spaces on purpose: this display derives a ROS
+    # node name from it, and a space there fails the WHOLE config load with
+    # 'Invalid node name' -- every display, not just this one.
+    #
+    # Colour comes from highlight_links in the DisplayRobotState the player
+    # publishes, not from a property here -- this display has no global colour
+    # override. Change it with preview_color on episode_player.
+    - Alpha: 1
+      Class: moveit_rviz_plugin/RobotState
+      Enabled: true
+      Name: EpisodePreview
+      Robot Alpha: 0.65
+      Robot Description: replay_robot_description
+      Robot State Topic: /episode_player/robot_state
+      Show All Links: true
+      Show Robot Collision: false
+      Show Robot Visual: true
+      Value: true
+    # The same robot as ordinary geometry. Off by default: it duplicates the
+    # preview above. Enable it (and disable the preview) if you would rather
+    # see the recording in the robot's real materials.
+    - Alpha: 0.6
+      Class: rviz_default_plugins/RobotModel
+      Collision Enabled: false
+      Description File: ""
+      Description Source: Topic
+      Description Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /replay_robot_description
+      Enabled: false
+      Name: RobotModelSolid
+      # Must match tf_prefix in replay.launch.py. Without it the display looks
+      # up unprefixed frames, finds the LIVE robot's, and the replay silently
+      # renders the live arm's pose instead of the recording.
+      TF Prefix: replay
+      Value: false
+      Visual Enabled: true
+    - Class: rviz_default_plugins/TF
+      Enabled: false
+      Frame Timeout: 15
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: false
+      Value: false
+    - Alpha: 1
+      Axes Length: 0.1
+      Axes Radius: 0.01
+      Class: rviz_default_plugins/Pose
+      Color: 255; 25; 0
+      Enabled: true
+      Head Length: 0.03
+      Head Radius: 0.02
+      Name: Commanded target
+      Shaft Length: 0.06
+      Shaft Radius: 0.008
+      Shape: Axes
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /replay/target_pose
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: world
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 1.6
+      Focal Point:
+        X: 0.2
+        Y: 0
+        Z: 0.3
+      Name: Current View
+      Pitch: 0.42
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz)
+      Yaw: 0.9
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Episode Replay:
+    collapsed: false
+  Height: 900
+  Width: 1500

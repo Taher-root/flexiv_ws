@@ -1,0 +1,83 @@
+# TEMPLATE -- the planning scene teleoperation avoids.
+#
+# Copy next to your teleop.yaml and name it there as files.scene.
+# Omit files.scene entirely if your arm works in free space.
+#
+# One file, two mechanisms, because they are two views of the same obstacle:
+#
+#   collision   geometry MoveIt's checker sees. Stops motion rather than
+#               redirecting it, and protects the whole ARM, not just the tool.
+#               Reacts within a frame or two (a 20 Hz service round-trip), so
+#               it is a backstop, not the primary defence.
+#   wall        a linear half-space constraint (n . p >= d) inside the IK
+#               solve. Exact, no lag, and the tool SLIDES along the surface
+#               instead of halting -- that behaviour falls out of returning
+#               the closest feasible pose; no code implements it.
+#
+# Declare both from ONE box and the wall is DERIVED from that box's bounds.
+# Configure them as two independent numbers and they drift apart silently; the
+# symptom is a tool that stops in mid-air above a table with nothing wrong.
+
+planning_scene:
+  # Used by any entry that does not name its own frame.
+  default_frame: world
+
+  boxes:
+    - name: table
+      # Anchor obstacles to a ROBOT LINK, not the planning frame: geometry
+      # declared against base_link stays put when the robot is re-mounted.
+      frame: base_link
+
+      # [xmin, xmax, ymin, ymax, zmin, zmax], metres, in `frame`.
+      #
+      # MEASURE THIS. A table top that reaches the robot's own base intersects
+      # it, every state is then in collision, and the arm never moves at all.
+      # Leave a few mm of gap below the mounting plane.
+      bounds: [-0.4, 0.4, -0.4, 0.4, -0.025, -0.005]
+
+      collision: true
+
+      # Which face becomes a wall, as (axis, sign): '+z' keeps the tool ABOVE
+      # the box's upper z face. One of +x -x +y -y +z -z, or '' for no wall.
+      wall: +z
+
+      # How far off that face the wall sits. Two things must fit inside it:
+      #
+      # 1. TOOL GEOMETRY. The wall constrains the tool POINT; the collision
+      #    object stops the whole gripper, whose fingers reach past it. Jog
+      #    the arm down and note the tool z at which the checker first
+      #    objects -- that difference is your floor.
+      #
+      # 2. TRACKING ERROR. The wall is enforced on the COMMAND, and the arm
+      #    trails it. Record an episode, compare your driver's measured tool
+      #    pose against FK of the command stream, and take the p95. On the
+      #    Piper that was 115 mm against a 30 mm clearance, and the arm went
+      #    through the table.
+      #
+      # If your stack can close the loop on real feedback -- MoveIt and TF
+      # subscribed to encoder state rather than to the command echo -- do that
+      # instead and this can be just the tool-geometry number.
+      wall_clearance: 0.12
+
+      # Leave false. A bounded wall is a non-convex region approximated by a
+      # switch, and a vanishing constraint moves the solver's optimum
+      # discontinuously -- measured at 218 mm in a single solve when the
+      # target crosses the footprint edge. The price of `false` is that the
+      # wall is infinite: you cannot reach around the table to a lower
+      # workspace.
+      wall_bounded: false
+      wall_margin: 0.0
+
+  # Walls with no matching geometry: nothing for the arm to collide with, just
+  # a limit on where the TOOL may go. Useful for keeping the gripper out of a
+  # region without inventing an obstacle for the whole arm.
+  planes: []
+    # - name: keep_forward
+    #   frame: base_link
+    #   normal: [1.0, 0.0, 0.0]   # enforces n . p >= offset on the tool point
+    #   offset: 0.15
+    #   # Optional footprint: [a_min, a_max, b_min, b_max] along the two axes
+    #   # perpendicular to the normal (y and z here). Omit for unbounded.
+    #   # Only axis-aligned normals may carry one -- for a tilted plane the
+    #   # two perpendicular axes would be a guess, and that is refused.
+    #   extent: [-0.3, 0.3, 0.0, 0.8]

@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>moveit_teleop_record</name>
+  <version>0.1.0</version>
+  <description>
+    Episode recording for imitation-learning data collection.
+
+    Split out from moveit_teleop_core so that rosbag2 (and later pyarrow and
+    the LeRobot toolchain) are not forced on someone who only wants to jog an
+    arm. Conversion to a training format is an OFFLINE script, deliberately
+    not part of the runtime: keeping the training schema out of the teleop
+    stack is what stops it leaking in.
+  </description>
+  <maintainer email="aadith.j@gmail.com">Aadith</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>rosbag2_py</depend>
+  <depend>rosidl_runtime_py</depend>
+  <depend>moveit_teleop_msgs</depend>
+
+  <exec_depend>rosbag2_storage_mcap</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
