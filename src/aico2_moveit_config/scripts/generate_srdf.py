@@ -185,6 +185,15 @@ def emit(joints, robot_name, out=sys.stdout):
                 w(f'    <joint name="{jname}" value="{value:.4f}"/>\n')
             w('  </group_state>\n')
     w('\n')
+    waist_home = [0.0, 0.0] + HOME
+    waist_ready = [0.0, 0.0] + READY
+    waist_joints = ["AGV_Joint1", "AGV_Joint2"] + arm_joints["Left"]
+    for state_name, values in (("home", waist_home), ("ready", waist_ready)):
+        w(f'  <group_state name="{state_name}" group="left_arm_waist">\n')
+        for jname, value in zip(waist_joints, values):
+            w(f'    <joint name="{jname}" value="{value:.4f}"/>\n')
+        w('  </group_state>\n')
+    w('\n')
     w('  <!-- AGV_Joint1/2 were <passive_joint> here, which tells MoveIt they\n')
     w('       cannot be commanded. They can now: the left arm driver owns them\n')
     w('       with control_waist:=true and accepts them in a\n')

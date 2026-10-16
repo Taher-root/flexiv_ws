@@ -76,6 +76,29 @@
     <joint name="Right_joint7" value="0.0000"/>
   </group_state>
 
+  <group_state name="home" group="left_arm_waist">
+    <joint name="AGV_Joint1" value="0.0000"/>
+    <joint name="AGV_Joint2" value="0.0000"/>
+    <joint name="Left_joint1" value="0.0000"/>
+    <joint name="Left_joint2" value="-0.7145"/>
+    <joint name="Left_joint3" value="0.0000"/>
+    <joint name="Left_joint4" value="1.6559"/>
+    <joint name="Left_joint5" value="0.0000"/>
+    <joint name="Left_joint6" value="0.0000"/>
+    <joint name="Left_joint7" value="0.0000"/>
+  </group_state>
+  <group_state name="ready" group="left_arm_waist">
+    <joint name="AGV_Joint1" value="0.0000"/>
+    <joint name="AGV_Joint2" value="0.0000"/>
+    <joint name="Left_joint1" value="0.0000"/>
+    <joint name="Left_joint2" value="-0.7145"/>
+    <joint name="Left_joint3" value="0.0000"/>
+    <joint name="Left_joint4" value="1.6559"/>
+    <joint name="Left_joint5" value="0.0000"/>
+    <joint name="Left_joint6" value="1.5708"/>
+    <joint name="Left_joint7" value="0.0000"/>
+  </group_state>
+
   <!-- AGV_Joint1/2 were <passive_joint> here, which tells MoveIt they
        cannot be commanded. They can now: the left arm driver owns them
        with control_waist:=true and accepts them in a

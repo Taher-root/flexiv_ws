@@ -62,18 +62,19 @@ class TrajectoryAdapter(Node):
             raise ValueError('Adapter timeouts and speed must be positive')
 
         joint_names = list(self.get_parameter('joint_names').value)
-        if len(joint_names) != 7:
-            raise ValueError(f'Expected 7 joint names, got {len(joint_names)}: {joint_names}')
+        if not joint_names:
+            raise ValueError('joint_names must not be empty')
+        self.n_joints = len(joint_names)
         self.joint_set = set(joint_names)
 
         root = ET.fromstring(self.get_parameter('robot_description').value)
         self.limits = {}
         for joint in root.findall('joint'):
-            if joint.get('type') == 'revolute' and joint.get('name') in self.joint_set:
+            if joint.get('type') in ('revolute', 'prismatic') and joint.get('name') in self.joint_set:
                 limit = joint.find('limit')
                 self.limits[joint.get('name')] = (
                     float(limit.get('lower')), float(limit.get('upper')))
-        if len(self.limits) != 7:
+        if len(self.limits) != self.n_joints:
             missing = self.joint_set - set(self.limits)
             raise ValueError(f'Missing URDF limits for joints: {missing}')
 
@@ -146,9 +147,10 @@ class TrajectoryAdapter(Node):
             return
         names = list(msg.joint_names)
         point = msg.points[-1]
-        if (len(names) != 7 or set(names) != self.joint_set
-                or len(point.positions) != 7
-                or (point.velocities and (len(point.velocities) != 7
+        n = self.n_joints
+        if (len(names) != n or set(names) != self.joint_set
+                or len(point.positions) != n
+                or (point.velocities and (len(point.velocities) != n
                     or any(not math.isfinite(v) for v in point.velocities)))
                 or any(not math.isfinite(q) or not self.limits[j][0] <= q <= self.limits[j][1]
                        for j, q in zip(names, point.positions))):
