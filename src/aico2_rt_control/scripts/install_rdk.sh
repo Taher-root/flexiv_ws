@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Install the Flexiv RDK C++ library at the version these arms accept.
 #
-# Pinned to the v1.9 tag: robot software v3.11 rejects a v1.9.4.1 client with
-# "Version of this client is incompatible with robot", while the v1.9 Python
-# wheel drives these arms in production. See README.md for the measurements.
+# Pinned to v1.9.3: robot software v3.11.2 CE rejects a v1.9.4.1 client with
+# "Version of this client is incompatible with robot". See README.md.
 #
 # Exists as a script because the steps are order-sensitive in two ways that are
 # silent when wrong -- ROS 2 must be sourced before the dependency script, and
@@ -47,7 +46,7 @@ fi
 # Resolve defaults only after parsing, so --standalone can pick different ones.
 # The two variants must not share a prefix: one needs Fast-DDS inside it and the
 # other needs Fast-DDS absent from it.
-RDK_TAG="${RDK_TAG:-v1.9}"
+RDK_TAG="${RDK_TAG:-v1.9.3}"
 ROS_SETUP="${ROS_SETUP:-/opt/ros/jazzy/setup.bash}"
 JOBS="${JOBS:-$(nproc)}"
 if [[ $STANDALONE -eq 1 ]]; then
