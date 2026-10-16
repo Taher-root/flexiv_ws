@@ -1,21 +1,23 @@
 """VR teleoperation for the AICO2 dual-arm system.
 
 Composes arm drivers, robot state publisher, MoveIt move_group, trajectory
-adapters, and the moveit-teleop IK pipeline into a single launch.
+adapters, the moveit-teleop IK pipeline, and a joystick relay into a single
+launch.
 
-The left arm config uses the left_arm_waist group (9-DOF: 2 waist + 7 arm),
-so the CasADi/IPOPT IK solver optimises the waist axes together with the arm.
-The right arm config uses right_arm (7-DOF) since the waist is shared and only
-the left driver owns it (control_waist:=true on the driver).
+Both arms use symmetric 7-DOF IK chains (left_arm / right_arm).  The waist
+(AGV_Joint1/2) and AMR chassis are controlled independently via the Quest
+thumbsticks: right stick -> waist velocity, left stick -> AMR /cmd_vel.
+The left arm driver still owns the waist axes (control_waist:=true) so the
+joystick relay can override them through the waist_override topic.
 
 Usage:
-    # Mock hardware, left arm with waist (9-DOF, default):
+    # Mock hardware, left arm (default):
     ros2 launch aico2_teleop vr.launch.py
 
     # Real hardware, left arm:
     ros2 launch aico2_teleop vr.launch.py hardware:=true
 
-    # Mock hardware, right arm only (7-DOF, no waist):
+    # Mock hardware, right arm only:
     ros2 launch aico2_teleop vr.launch.py arm:=right
 
     # Both arms — bimanual VR.  Left Quest controller drives the left arm,
@@ -38,11 +40,8 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from moveit_configs_utils import MoveItConfigsBuilder
 
-WAIST_JOINTS = ['AGV_Joint1', 'AGV_Joint2']
 LEFT_JOINTS = [f'Left_joint{i}' for i in range(1, 8)]
 RIGHT_JOINTS = [f'Right_joint{i}' for i in range(1, 8)]
-
-LEFT_WAIST_JOINTS = WAIST_JOINTS + LEFT_JOINTS
 
 _MOVEIT_PKG = 'aico2_moveit_config'
 _URDF = os.path.join(
@@ -117,8 +116,7 @@ def _build(context):
     arms_to_launch = ['left', 'right'] if bimanual else [arm]
 
     for a in arms_to_launch:
-        joints = LEFT_WAIST_JOINTS if (a == 'left' and use_waist) else (
-            LEFT_JOINTS if a == 'left' else RIGHT_JOINTS)
+        joints = LEFT_JOINTS if a == 'left' else RIGHT_JOINTS
         adapter_params = {'joint_names': joints}
         if bimanual:
             adapter_params['input_topic'] = f'/{a}_teleop/xr_device/input'
@@ -153,6 +151,15 @@ def _build(context):
             _teleop_pipeline(arm, hardware, rate_limit_scale, home))
 
     actions.append(TimerAction(period=3.0, actions=teleop_actions))
+
+    # 6. Joystick relay: right stick -> waist, left stick -> AMR
+    joy_topic = (f'/left_teleop/xr_device/thumbsticks' if bimanual
+                 else '/xr_device/thumbsticks')
+    actions.append(Node(
+        package='aico2_teleop', executable='vr_joystick_relay.py',
+        name='vr_joystick_relay', output='screen',
+        parameters=[{'joy_topic': joy_topic}],
+    ))
 
     return actions
 

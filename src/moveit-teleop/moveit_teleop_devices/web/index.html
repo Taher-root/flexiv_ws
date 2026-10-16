@@ -171,6 +171,8 @@ function readController(src, frame, refSpace) {
     a: btn(BTN_A),
     b: btn(BTN_B),
     stick: btn(BTN_STICK),
+    sx: gp.axes.length > 2 ? gp.axes[2] : 0,
+    sy: gp.axes.length > 3 ? -gp.axes[3] : 0,
   };
 }
 
@@ -262,7 +264,7 @@ async function start() {
       lastReport = t;
       const lines = Object.entries(controllers).map(([h, c]) =>
         `${h}: clutch=${c.squeeze.toFixed(2)} grip=${c.trigger.toFixed(2)} ` +
-        `${c.valid ? 'tracked' : 'LOST'}`);
+        `stick=${c.sx.toFixed(2)},${c.sy.toFixed(2)} ${c.valid ? 'tracked' : 'LOST'}`);
       show(`${mode} / ${spaceName}\nframes sent: ${sent}\n${lines.join('\n')}`, 'ok');
     }
   });

@@ -20,7 +20,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Bool, Float32, String
+from std_msgs.msg import Bool, Float32, Float64MultiArray, String
 from std_srvs.srv import SetBool, Trigger
 from trajectory_msgs.msg import JointTrajectory
 
@@ -197,6 +197,9 @@ class ArmDriverNode(LifecycleNode):
         self._servo_prev_q: Optional[List[float]] = None
         self._servo_prev_time: Optional[float] = None
         self._servo_mode_retry_t: float = 0.0
+        self._waist_override_q: Optional[List[float]] = None
+        self._waist_override_t: float = -math.inf
+        self._waist_override_sub = None
 
         self._cartesian_pose: Optional[List[float]] = None
         self._cartesian_prev_t: Optional[float] = None
@@ -766,7 +769,20 @@ class ArmDriverNode(LifecycleNode):
             if src < len(q_arm) and i < start:
                 q_full[i] = q_arm[src]
                 dq_full[i] = dq_arm[src] if src < len(dq_arm) else 0.0
+        if (self._teleop_active
+                and self._waist_override_q is not None
+                and time.monotonic() - self._waist_override_t < 0.3):
+            n_w = min(len(self._waist_override_q), start)
+            for i in range(n_w):
+                q_full[i] = self._waist_override_q[i]
+                dq_full[i] = 0.0
         return q_full, dq_full
+
+    def _waist_override_cb(self, msg: Float64MultiArray) -> None:
+        n = len(self._waist_joint_names)
+        if len(msg.data) >= n:
+            self._waist_override_q = [float(msg.data[i]) for i in range(n)]
+            self._waist_override_t = time.monotonic()
 
     def _reset_servo_stream_state(self) -> None:
         self._servo_prev_q = None
@@ -989,6 +1005,12 @@ class ArmDriverNode(LifecycleNode):
                 10,
                 callback_group=self._cb_group,
             )
+        if self._waist_joint_names:
+            self._waist_override_sub = self.create_subscription(
+                Float64MultiArray, "waist_override",
+                self._waist_override_cb, 10,
+                callback_group=self._cb_group,
+            )
         return TransitionCallbackReturn.SUCCESS
 
     def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:
@@ -1095,6 +1117,11 @@ class ArmDriverNode(LifecycleNode):
         if self._cartesian_sub is not None:
             self.destroy_subscription(self._cartesian_sub)
             self._cartesian_sub = None
+        if self._waist_override_sub is not None:
+            self.destroy_subscription(self._waist_override_sub)
+            self._waist_override_sub = None
+        self._waist_override_q = None
+        self._waist_override_t = -math.inf
         if self._gripper_sub is not None:
             self.destroy_subscription(self._gripper_sub)
             self._gripper_sub = None

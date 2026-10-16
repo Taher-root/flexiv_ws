@@ -34,6 +34,7 @@ from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
 
 from moveit_teleop_msgs.msg import TeleopEvent
+from sensor_msgs.msg import Joy
 
 from .device_base import (
     EVENT_QOS, DeviceSample, TeleopDevice, spin_device,
@@ -344,6 +345,8 @@ class XRDevice(TeleopDevice):
                 'If this is "address already in use", another xr_device is '
                 'still running: pkill -f xr_device') from exc
 
+        self._joy_pub = self.create_publisher(Joy, 'thumbsticks', 10)
+
         self._last_headset_t = None
         self._prev = {}          # button edge detection
         self._recording = False
@@ -387,7 +390,20 @@ class XRDevice(TeleopDevice):
             return None
         self._last_headset_t = headset_t
 
-        controller = (frame.get('controllers') or {}).get(self.hand)
+        all_controllers = frame.get('controllers') or {}
+        left_c = all_controllers.get('left')
+        right_c = all_controllers.get('right')
+        joy_msg = Joy()
+        joy_msg.header.stamp = self.get_clock().now().to_msg()
+        joy_msg.axes = [
+            float(left_c.get('sx', 0.0)) if left_c else 0.0,
+            float(left_c.get('sy', 0.0)) if left_c else 0.0,
+            float(right_c.get('sx', 0.0)) if right_c else 0.0,
+            float(right_c.get('sy', 0.0)) if right_c else 0.0,
+        ]
+        self._joy_pub.publish(joy_msg)
+
+        controller = all_controllers.get(self.hand)
         if controller is None:
             if not self._warned_missing:
                 present = list((frame.get('controllers') or {}).keys())

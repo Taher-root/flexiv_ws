@@ -1,5 +1,5 @@
 moveit_teleop:
-  move_group: left_arm_waist
+  move_group: left_arm
   ready_state: ready
   nominal_state: ready
   device:
