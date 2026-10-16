@@ -36,7 +36,7 @@ def generate_launch_description():
         DeclareLaunchArgument("use_rviz", default_value="true",
                               description="Launch RViz2"),
 
-        _include("flexiv_amr_bringup", "arms.launch.py", {
+        _include("flexiv_amr_bringup_ce", "arms.launch.py", {
             "mock_hardware": LaunchConfiguration("mock_arms"),
             "enable_waist_driver": LaunchConfiguration("enable_waist_driver"),
         }),

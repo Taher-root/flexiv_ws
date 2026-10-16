@@ -58,7 +58,7 @@ def generate_launch_description():
                               description="Launch RViz2"),
 
         # Hardware layer: URDF/TF + chassis + sensors
-        _include("flexiv_amr_bringup", "hardware_test.launch.py",
+        _include("flexiv_amr_bringup_ce", "hardware_test.launch.py",
                  {"use_robokit": LaunchConfiguration("use_robokit")}),
 
         # Sensor fusion (publishes odom -> base_link)

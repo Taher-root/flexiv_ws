@@ -206,7 +206,7 @@ def generate_launch_description():
         # Hardware: URDF/TF + chassis (Robokit) + chassis sensors +
         # both cameras + depth-to-laserscan + scan merger
         # ============================================================
-        _include("flexiv_amr_bringup", "hardware_test.launch.py", {
+        _include("flexiv_amr_bringup_ce", "hardware_test.launch.py", {
             "use_robokit": LaunchConfiguration("use_robokit"),
             "use_camera": use_camera,
             # Was welded to use_camera, which turned the head camera on for
