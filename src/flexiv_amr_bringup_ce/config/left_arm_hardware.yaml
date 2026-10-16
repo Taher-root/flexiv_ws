@@ -1,7 +1,7 @@
 left_arm_driver:
   ros__parameters:
     robot_ip: "192.168.2.100"
-    robot_sn: "REPLACE_WITH_CE_LEFT_SERIAL"
+    robot_sn: "Rizon4-063823"
     mock_hardware: false
     auto_enable: true
     operational_timeout_sec: 30.0

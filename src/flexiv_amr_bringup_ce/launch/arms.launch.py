@@ -46,8 +46,8 @@ from lifecycle_msgs.msg import Transition
 LEFT_JOINTS = [f"Left_joint{i}" for i in range(1, 8)]
 RIGHT_JOINTS = [f"Right_joint{i}" for i in range(1, 8)]
 
-LEFT_SN = "REPLACE_WITH_CE_LEFT_SERIAL"
-RIGHT_SN = "REPLACE_WITH_CE_RIGHT_SERIAL"
+LEFT_SN = "Rizon4-063823"
+RIGHT_SN = "Rizon4R-062102"
 
 _SERVICE_GRACE_SEC = 2.0
 
