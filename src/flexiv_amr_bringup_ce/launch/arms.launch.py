@@ -14,6 +14,7 @@ Usage:
   ros2 launch flexiv_amr_bringup_ce arms.launch.py
   ros2 launch flexiv_amr_bringup_ce arms.launch.py mock_hardware:=true
   ros2 launch flexiv_amr_bringup_ce arms.launch.py enable_waist_driver:=true
+  ros2 launch flexiv_amr_bringup_ce arms.launch.py teleop_backend:=servo
   ros2 launch flexiv_amr_bringup_ce arms.launch.py \
       joint_control_mode:=impedance joint_stiffness_ratio:=0.15 \
       max_contact_torque:=10.0
@@ -23,6 +24,7 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     EmitEvent,
+    OpaqueFunction,
     RegisterEventHandler,
     TimerAction,
 )
@@ -44,7 +46,6 @@ from lifecycle_msgs.msg import Transition
 LEFT_JOINTS = [f"Left_joint{i}" for i in range(1, 8)]
 RIGHT_JOINTS = [f"Right_joint{i}" for i in range(1, 8)]
 
-# TODO: replace with actual AICO 2-4CE serial numbers
 LEFT_SN = "REPLACE_WITH_CE_LEFT_SERIAL"
 RIGHT_SN = "REPLACE_WITH_CE_RIGHT_SERIAL"
 
@@ -92,7 +93,7 @@ def _lifecycle_startup(driver, connect_delay_sec: float = 0.0):
     ]
 
 
-def generate_launch_description():
+def _build_nodes(context):
     ce_pkg = FindPackageShare("flexiv_amr_bringup_ce")
     waist_pkg = FindPackageShare("aico2_waist_driver")
 
@@ -106,6 +107,9 @@ def generate_launch_description():
         LaunchConfiguration("max_contact_torque"), value_type=float)
     control_waist = ParameterValue(
         LaunchConfiguration("control_waist"), value_type=bool)
+
+    teleop_backend = LaunchConfiguration("teleop_backend").perform(context)
+    backend_override = {"teleop_backend": teleop_backend} if teleop_backend else {}
 
     joint_states_remap = [("joint_states", "joint_states")]
 
@@ -128,6 +132,7 @@ def generate_launch_description():
                 "joint_stiffness_ratio": joint_stiffness_ratio,
                 "max_contact_torque": max_contact_torque,
                 "control_waist": control_waist,
+                **backend_override,
             },
         ],
     )
@@ -150,6 +155,7 @@ def generate_launch_description():
                 "joint_control_mode": joint_control_mode,
                 "joint_stiffness_ratio": joint_stiffness_ratio,
                 "max_contact_torque": max_contact_torque,
+                **backend_override,
             },
         ],
     )
@@ -167,6 +173,30 @@ def generate_launch_description():
         ],
     )
 
+    return [
+        left_driver,
+        right_driver,
+        waist_driver,
+        *_lifecycle_startup(left_driver),
+        *_lifecycle_startup(right_driver, connect_delay_sec=1.5),
+        *_lifecycle_startup(waist_driver, connect_delay_sec=3.0),
+        Node(
+            package="flexiv_amr_driver",
+            executable="joint_state_merger",
+            name="joint_state_merger",
+            output="screen",
+            parameters=[
+                {
+                    "left_arm_topic": "/left_arm/joint_states",
+                    "right_arm_topic": "/right_arm/joint_states",
+                    "rate_hz": 50.0,
+                }
+            ],
+        ),
+    ]
+
+
+def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -202,24 +232,14 @@ def generate_launch_description():
                 description="Nm ceiling on torque per axis in impedance mode; "
                             "0 leaves unbounded",
             ),
-            left_driver,
-            right_driver,
-            waist_driver,
-            *_lifecycle_startup(left_driver),
-            *_lifecycle_startup(right_driver, connect_delay_sec=1.5),
-            *_lifecycle_startup(waist_driver, connect_delay_sec=3.0),
-            Node(
-                package="flexiv_amr_driver",
-                executable="joint_state_merger",
-                name="joint_state_merger",
-                output="screen",
-                parameters=[
-                    {
-                        "left_arm_topic": "/left_arm/joint_states",
-                        "right_arm_topic": "/right_arm/joint_states",
-                        "rate_hz": 50.0,
-                    }
-                ],
+            DeclareLaunchArgument(
+                "teleop_backend",
+                default_value="",
+                description="Override teleop_backend for both arm drivers. "
+                            "Empty uses each driver's config file value. "
+                            "'servo' for IK-based VR teleop, 'cartesian' for "
+                            "twist-based control.",
             ),
+            OpaqueFunction(function=_build_nodes),
         ]
     )

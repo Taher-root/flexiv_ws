@@ -18,7 +18,7 @@ from pathlib import Path
 
 _PKG = Path(__file__).resolve().parents[1]
 _SRC = _PKG / "scripts" / "moveit_goal.py"
-_DESCRIPTION = _PKG.parent / "flexiv_amr_description"
+_DESCRIPTION = _PKG.parent / "flexiv_amr_description_ce"
 
 JOINTS = [f"Left_joint{i}" for i in range(1, 8)]
 MARGIN_DEG = 5.0

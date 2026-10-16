@@ -194,7 +194,7 @@ def generate_launch_description():
         # ============================================================
         # Arms: both Rizon lifecycle drivers, optional waist, merger
         # ============================================================
-        _include("flexiv_amr_bringup", "arms.launch.py", {
+        _include("flexiv_amr_bringup_ce", "arms.launch.py", {
             "mock_hardware": mock_arms,
             "enable_waist_driver": LaunchConfiguration("enable_waist_driver"),
             "joint_control_mode": LaunchConfiguration("joint_control_mode"),

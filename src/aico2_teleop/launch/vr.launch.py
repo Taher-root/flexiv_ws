@@ -46,8 +46,8 @@ LEFT_WAIST_JOINTS = WAIST_JOINTS + LEFT_JOINTS
 
 _MOVEIT_PKG = 'aico2_moveit_config'
 _URDF = os.path.join(
-    get_package_share_directory('flexiv_amr_description'),
-    'urdf', 'AICO2-Rizon4.urdf',
+    get_package_share_directory('flexiv_amr_description_ce'),
+    'urdf', 'AICO2-4CE-Rizon4.urdf',
 )
 
 _XR_PORT = {'left': 8443, 'right': 8444}
@@ -93,14 +93,14 @@ def _build(context):
 
     # 1. Arm drivers + joint state merger.
     use_waist = arm in ('left', 'both')
-    actions.append(_include('flexiv_amr_bringup', 'arms.launch.py', {
+    actions.append(_include('flexiv_amr_bringup_ce', 'arms.launch.py', {
         'mock_hardware': 'true' if mock else 'false',
         'teleop_backend': 'servo',
         'control_waist': 'true' if use_waist else 'false',
     }))
 
     # 2. Robot state publisher.
-    actions.append(_include('flexiv_amr_description', 'display.launch.py', {
+    actions.append(_include('flexiv_amr_description_ce', 'display.launch.py', {
         'use_gui': 'false',
     }))
 

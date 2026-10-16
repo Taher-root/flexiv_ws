@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Regenerate config/aico2.srdf from the URDF's kinematic tree.
 
-Run this after changing AICO2-Rizon4.urdf so the collision matrix keeps up:
+Run this after changing the URDF so the collision matrix keeps up:
 
     python3 scripts/generate_srdf.py \
-        ../flexiv_amr_description/urdf/AICO2-Rizon4.urdf > config/aico2.srdf
+        ../flexiv_amr_description_ce/urdf/AICO2-4CE-Rizon4.urdf > config/aico2.srdf
 
 What it derives:
 
@@ -145,7 +145,7 @@ def emit(joints, robot_name, out=sys.stdout):
     w('<!--\n')
     w(f'  Semantic description for {robot_name} '
       '(two Rizon 4 arms on a 2-DoF waist).\n\n')
-    w('  GENERATED from flexiv_amr_description/urdf/AICO2-Rizon4.urdf by\n')
+    w('  GENERATED from flexiv_amr_description_ce/urdf/AICO2-4CE-Rizon4.urdf by\n')
     w('  scripts/generate_srdf.py. The disable_collisions entries below cover\n')
     w('  only the pairs derivable from the kinematic tree, after collapsing\n')
     w('  fixed joints into rigid bodies:\n')
@@ -209,7 +209,7 @@ def emit(joints, robot_name, out=sys.stdout):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("urdf", help="path to AICO2-Rizon4.urdf")
+    ap.add_argument("urdf", help="path to AICO2-4CE-Rizon4.urdf")
     args = ap.parse_args()
     urdf_text = open(args.urdf, encoding="utf-8").read()
     robot_name = parse_robot_name(urdf_text)

@@ -1,6 +1,6 @@
 /**:
   ros__parameters:
-    amr_ip: "192.168.192.5"
+    amr_ip: "192.168.2.110"
 
     control_rate: 10.0
     max_linear_speed: 0.5

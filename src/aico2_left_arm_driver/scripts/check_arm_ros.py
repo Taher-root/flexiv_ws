@@ -249,7 +249,7 @@ class ArmChecker(Node):
                 _WARN, "target is within joint limits",
                 "no URDF on /robot_description, so limits were not checked — "
                 "start robot_state_publisher "
-                "(ros2 launch flexiv_amr_description display.launch.py)")
+                "(ros2 launch flexiv_amr_description_ce display.launch.py)")
         elif name in limits:
             lower, upper = limits[name]
             if not lower <= target[index] <= upper:

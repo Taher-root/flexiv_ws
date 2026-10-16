@@ -43,7 +43,7 @@ def generate_launch_description():
                               description="Seconds to wait before starting the scan merger"),
 
         # URDF -> TF (robot_state_publisher)
-        _include("flexiv_amr_description", "display.launch.py", {"use_gui": "false"}),
+        _include("flexiv_amr_description_ce", "display.launch.py", {"use_gui": "false"}),
 
         # Chassis: velocity control + wheel odometry + status
         _include("flexiv_amr_driver", "amr_driver.launch.py",

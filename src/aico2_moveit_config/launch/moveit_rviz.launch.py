@@ -14,9 +14,9 @@ from moveit_configs_utils import MoveItConfigsBuilder
 
 _PKG = "aico2_moveit_config"
 _URDF = os.path.join(
-    get_package_share_directory("flexiv_amr_description"),
+    get_package_share_directory("flexiv_amr_description_ce"),
     "urdf",
-    "AICO2-Rizon4.urdf",
+    "AICO2-4CE-Rizon4.urdf",
 )
 
 

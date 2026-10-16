@@ -66,8 +66,8 @@ step "3. every mesh the URDF references exists"
 python3 - <<'PY'
 import os, sys, xml.etree.ElementTree as ET
 from ament_index_python.packages import get_package_share_directory
-share = get_package_share_directory("flexiv_amr_description")
-urdf = os.path.join(share, "urdf", "AICO2-Rizon4.urdf")
+share = get_package_share_directory("flexiv_amr_description_ce")
+urdf = os.path.join(share, "urdf", "AICO2-4CE-Rizon4.urdf")
 bad = []
 for link in ET.parse(urdf).getroot().findall("link"):
     for kind in ("visual", "collision"):

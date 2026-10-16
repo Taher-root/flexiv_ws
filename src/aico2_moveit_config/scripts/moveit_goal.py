@@ -138,8 +138,8 @@ def load_joint_limits(joint_names):
     Read by path rather than off /robot_description so this works with only
     move_group up: move_group.launch.py loads this exact file.
     """
-    urdf = os.path.join(get_package_share_directory("flexiv_amr_description"),
-                        "urdf", "AICO2-Rizon4.urdf")
+    urdf = os.path.join(get_package_share_directory("flexiv_amr_description_ce"),
+                        "urdf", "AICO2-4CE-Rizon4.urdf")
     root = ET.parse(urdf).getroot()
     limits = {}
     for joint in root.findall("joint"):

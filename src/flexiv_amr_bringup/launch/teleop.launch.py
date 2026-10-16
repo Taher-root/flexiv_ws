@@ -181,8 +181,8 @@ def _build_nodes(context):
     use_vr = LaunchConfiguration("use_vr")
 
     urdf_path = os.path.join(
-        get_package_share_directory("flexiv_amr_description"),
-        "urdf", "AICO2-Rizon4.urdf",
+        get_package_share_directory("flexiv_amr_description_ce"),
+        "urdf", "AICO2-4CE-Rizon4.urdf",
     )
     with open(urdf_path, "r") as f:
         robot_description = f.read()

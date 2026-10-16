@@ -2,7 +2,7 @@
 <!--
   Semantic description for AICO2-Rizon4 (two Rizon 4 arms on a 2-DoF waist).
 
-  GENERATED from flexiv_amr_description/urdf/AICO2-Rizon4.urdf by
+  GENERATED from flexiv_amr_description_ce/urdf/AICO2-4CE-Rizon4.urdf by
   scripts/generate_srdf.py. The disable_collisions entries below cover
   only the pairs derivable from the kinematic tree, after collapsing
   fixed joints into rigid bodies:

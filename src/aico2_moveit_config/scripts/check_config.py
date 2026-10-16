@@ -62,7 +62,7 @@ def main():
     cfg = f"{src}/aico2_moveit_config/config"
     c = Checker()
 
-    urdf = open(f"{src}/flexiv_amr_description/urdf/AICO2-Rizon4.urdf",
+    urdf = open(f"{src}/flexiv_amr_description_ce/urdf/AICO2-4CE-Rizon4.urdf",
                 encoding="utf-8").read()
     urdf_links = set(re.findall(r'<link name="([^"]+)"', urdf))
     urdf_joints = {m.group(1): m.group(2) for m in

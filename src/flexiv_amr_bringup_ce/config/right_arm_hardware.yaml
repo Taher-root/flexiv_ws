@@ -1,6 +1,6 @@
 right_arm_driver:
   ros__parameters:
-    robot_ip: "192.168.192.101"
+    robot_ip: "192.168.2.101"
     robot_sn: "REPLACE_WITH_CE_RIGHT_SERIAL"
     mock_hardware: false
     auto_enable: true

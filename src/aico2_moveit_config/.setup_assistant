@@ -12,7 +12,7 @@
 # nav2 and MoveIt.
 moveit_setup_assistant_config:
   urdf:
-    package: flexiv_amr_description
-    relative_path: urdf/AICO2-Rizon4.urdf
+    package: flexiv_amr_description_ce
+    relative_path: urdf/AICO2-4CE-Rizon4.urdf
   srdf:
     relative_path: config/aico2.srdf
