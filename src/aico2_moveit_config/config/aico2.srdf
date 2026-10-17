@@ -36,6 +36,16 @@
     <chain base_link="base_link" tip_link="Left_flange"/>
   </group>
 
+  <!-- Gripper groups (Flexiv GN01).  Only the control joint; mimic joints
+       are driven by it.  Names are lowercase: the xacro prefix is "left_"/
+       "right_" and _URDF_RENAMES does not match gripper elements. -->
+  <group name="left_gripper">
+    <joint name="left_finger_width_joint"/>
+  </group>
+  <group name="right_gripper">
+    <joint name="right_finger_width_joint"/>
+  </group>
+
   <!-- home matches mock_idle_joint_positions in left_arm.yaml. joint6=0
        there is a wrist singularity where MoveIt Servo halts, so `ready`
        moves joint6 to +pi/2: plan to `ready` before engaging teleop. -->
@@ -99,6 +109,22 @@
     <joint name="Left_joint7" value="0.0000"/>
   </group_state>
 
+  <group_state name="open" group="left_gripper">
+    <joint name="left_finger_width_joint" value="0.100"/>
+  </group_state>
+  <group_state name="close" group="left_gripper">
+    <joint name="left_finger_width_joint" value="0.0"/>
+  </group_state>
+  <group_state name="open" group="right_gripper">
+    <joint name="right_finger_width_joint" value="0.100"/>
+  </group_state>
+  <group_state name="close" group="right_gripper">
+    <joint name="right_finger_width_joint" value="0.0"/>
+  </group_state>
+
+  <end_effector name="left_hand" parent_link="Left_flange" group="left_gripper" parent_group="left_arm"/>
+  <end_effector name="right_hand" parent_link="Right_flange" group="right_gripper" parent_group="right_arm"/>
+
   <!-- AGV_Joint1/2 were <passive_joint> here, which tells MoveIt they
        cannot be commanded. They can now: the left arm driver owns them
        with control_waist:=true and accepts them in a
@@ -136,4 +162,34 @@
   <disable_collisions link1="Right_link4" link2="Right_link5" reason="Adjacent"/>
   <disable_collisions link1="Right_link5" link2="Right_link6" reason="Adjacent"/>
   <disable_collisions link1="Right_link6" link2="Right_link7" reason="Adjacent"/>
+
+  <!-- Left gripper (GN01) -->
+  <disable_collisions link1="Left_flange" link2="left_grav_base_link" reason="Welded"/>
+  <disable_collisions link1="Left_link7" link2="left_grav_base_link" reason="Welded"/>
+  <disable_collisions link1="Left_link6" link2="left_grav_base_link" reason="Adjacent"/>
+  <disable_collisions link1="left_grav_base_link" link2="left_left_outer_bar" reason="Adjacent"/>
+  <disable_collisions link1="left_grav_base_link" link2="left_left_inner_bar" reason="Adjacent"/>
+  <disable_collisions link1="left_grav_base_link" link2="left_right_outer_bar" reason="Adjacent"/>
+  <disable_collisions link1="left_grav_base_link" link2="left_right_inner_bar" reason="Adjacent"/>
+  <disable_collisions link1="left_left_outer_bar" link2="left_left_inner_bar" reason="Adjacent"/>
+  <disable_collisions link1="left_left_outer_bar" link2="left_left_finger_tip" reason="Adjacent"/>
+  <disable_collisions link1="left_left_inner_bar" link2="left_left_finger_tip" reason="Adjacent"/>
+  <disable_collisions link1="left_right_outer_bar" link2="left_right_inner_bar" reason="Adjacent"/>
+  <disable_collisions link1="left_right_outer_bar" link2="left_right_finger_tip" reason="Adjacent"/>
+  <disable_collisions link1="left_right_inner_bar" link2="left_right_finger_tip" reason="Adjacent"/>
+
+  <!-- Right gripper (GN01) -->
+  <disable_collisions link1="Right_flange" link2="right_grav_base_link" reason="Welded"/>
+  <disable_collisions link1="Right_link7" link2="right_grav_base_link" reason="Welded"/>
+  <disable_collisions link1="Right_link6" link2="right_grav_base_link" reason="Adjacent"/>
+  <disable_collisions link1="right_grav_base_link" link2="right_left_outer_bar" reason="Adjacent"/>
+  <disable_collisions link1="right_grav_base_link" link2="right_left_inner_bar" reason="Adjacent"/>
+  <disable_collisions link1="right_grav_base_link" link2="right_right_outer_bar" reason="Adjacent"/>
+  <disable_collisions link1="right_grav_base_link" link2="right_right_inner_bar" reason="Adjacent"/>
+  <disable_collisions link1="right_left_outer_bar" link2="right_left_inner_bar" reason="Adjacent"/>
+  <disable_collisions link1="right_left_outer_bar" link2="right_left_finger_tip" reason="Adjacent"/>
+  <disable_collisions link1="right_left_inner_bar" link2="right_left_finger_tip" reason="Adjacent"/>
+  <disable_collisions link1="right_right_outer_bar" link2="right_right_inner_bar" reason="Adjacent"/>
+  <disable_collisions link1="right_right_outer_bar" link2="right_right_finger_tip" reason="Adjacent"/>
+  <disable_collisions link1="right_right_inner_bar" link2="right_right_finger_tip" reason="Adjacent"/>
 </robot>

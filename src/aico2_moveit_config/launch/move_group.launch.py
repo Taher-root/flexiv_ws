@@ -47,7 +47,11 @@ def _generate_urdf():
     xacro_file = os.path.join(
         get_package_share_directory('flexiv_description'),
         'urdf', 'flexiv.urdf.xacro')
-    doc = xacro.process_file(xacro_file, mappings={'robot_type': 'AICO2-4E-D1'})
+    doc = xacro.process_file(xacro_file, mappings={
+        'robot_type': 'AICO2-4E-D1',
+        'load_gripper_left': 'true',
+        'load_gripper_right': 'true',
+    })
     urdf = doc.toxml()
     for old, new in _URDF_RENAMES:
         urdf = urdf.replace(old, new)
