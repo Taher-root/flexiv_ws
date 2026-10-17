@@ -187,6 +187,9 @@ public:
                 break;
         }
 
+        if (shm_->control_waist == 0u) {
+            FollowExternalAxes();
+        }
         Clamp();
         robot_->Stream(cmd_.q, cmd_.dq, cmd_.ddq);
         PublishStatus(now);
@@ -400,6 +403,26 @@ private:
      * one also covers a trajectory that was valid when accepted but is being
      * sampled after a limit change.
      */
+    /**
+     * External axes this server does not command (another server owns the
+     * shared waist): stream them where they measurably are, at rest. Holding
+     * the startup angle instead leaves this controller commanding a stale
+     * position once the owner moves them. Skipped until the first
+     * measurement has been written, so a zeroed mapping is never streamed.
+     */
+    void FollowExternalAxes()
+    {
+        Measured m{};
+        if (!ReadMeasured(*shm_, m) || m.stamp_mono <= 0.0) {
+            return;
+        }
+        for (std::uint32_t j = 0; j < n_external_ && j < dof_; ++j) {
+            cmd_.q[j] = m.q[j];
+            cmd_.dq[j] = 0.0;
+            cmd_.ddq[j] = 0.0;
+        }
+    }
+
     void Clamp()
     {
         for (std::uint32_t j = 0; j < dof_; ++j) {

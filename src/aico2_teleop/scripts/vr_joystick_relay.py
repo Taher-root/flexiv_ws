@@ -42,12 +42,20 @@ class VRJoystickRelay(Node):
         # driving forever: this republishes at `rate`, so the chassis's own
         # cmd_vel timeout would never trip.
         self.declare_parameter('stick_timeout', 0.2)
+        # How far the waist target may lead the measured waist. The waist only
+        # moves while the left arm is in teleop, so without this a stick held
+        # while disengaged winds the target up, and the next clutch either
+        # lurches the waist or trips the RT jump guard (which then refuses the
+        # arm's command too).
+        self.declare_parameter('waist_max_lead', 0.2)
 
         self.waist_speed = float(self.get_parameter('waist_speed').value)
         self.amr_lin = float(self.get_parameter('amr_linear_speed').value)
         self.amr_ang = float(self.get_parameter('amr_angular_speed').value)
         self.deadzone = float(self.get_parameter('deadzone').value)
         self.stick_timeout = float(self.get_parameter('stick_timeout').value)
+        self.waist_max_lead = float(self.get_parameter('waist_max_lead').value)
+        self.waist_meas = None
         self.stick_at = -math.inf
         rate = float(self.get_parameter('rate').value)
 
@@ -84,15 +92,15 @@ class VRJoystickRelay(Node):
             self.stick_at = time.monotonic()
 
     def _joint_state_cb(self, msg):
-        if self.waist_initialized:
-            return
         names = list(msg.name)
-        positions = list(msg.position)
-        if 'AGV_Joint1' in names and 'AGV_Joint2' in names:
-            self.waist_q = [
-                float(positions[names.index('AGV_Joint1')]),
-                float(positions[names.index('AGV_Joint2')]),
-            ]
+        if 'AGV_Joint1' not in names or 'AGV_Joint2' not in names:
+            return
+        self.waist_meas = [
+            float(msg.position[names.index('AGV_Joint1')]),
+            float(msg.position[names.index('AGV_Joint2')]),
+        ]
+        if not self.waist_initialized:
+            self.waist_q = list(self.waist_meas)
             self.waist_initialized = True
             self.get_logger().info(
                 f'Waist seeded from feedback: '
@@ -111,8 +119,15 @@ class VRJoystickRelay(Node):
         left_y = self._dz(self.stick[1])
 
         if self.waist_initialized:
+            if right_x == 0.0 and right_y == 0.0:
+                # Stick released: the waist stops where it actually is.
+                self.waist_q = list(self.waist_meas)
             self.waist_q[0] += right_x * self.waist_speed * dt
             self.waist_q[1] += right_y * self.waist_speed * dt
+            for i in range(2):
+                lead = self.waist_max_lead
+                self.waist_q[i] = max(self.waist_meas[i] - lead,
+                                      min(self.waist_meas[i] + lead, self.waist_q[i]))
             lo1, hi1 = WAIST_LIMITS['AGV_Joint1']
             lo2, hi2 = WAIST_LIMITS['AGV_Joint2']
             self.waist_q[0] = max(lo1, min(hi1, self.waist_q[0]))

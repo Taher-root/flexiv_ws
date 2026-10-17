@@ -60,7 +60,8 @@ not seen</div>
       <td>Drive the base: forward/back, left/right to turn. Release to stop.<br>
           <span class="warn">Only with <code>drive_base:=true</code> in the launch command.</span></td>
       <td>Waist: left/right = yaw, up/down = pitch.<br>
-          <span class="warn">NRT backend only: in RT mode the waist does not move.</span></td></tr>
+          <span class="warn">Moves only while the LEFT grip is held</span> (left server started
+          with <code>--control-waist</code>). Release the stick and the waist stops.</td></tr>
 </table>
 
 <h2>How the clutch works</h2>
@@ -78,9 +79,10 @@ not seen</div>
 <ol>
   <li>Both arms powered, released from E-stop, and in the Flexiv app's remote mode.</li>
   <li>On the robot PC, one terminal per arm (outside ROS, in <code>noros.sh</code>):<br>
-      <code>sudo ~/flexiv_ws/src/aico2_rt_control/standalone/build/rt_server Rizon4-063823 --shm /aico2_rt_left --gripper Flexiv-GN01 --rt-cpu 2</code><br>
+      <code>sudo ~/flexiv_ws/src/aico2_rt_control/standalone/build/rt_server Rizon4-063823 --shm /aico2_rt_left --gripper Flexiv-GN01 --rt-cpu 2 --control-waist</code><br>
       <code>sudo ~/flexiv_ws/src/aico2_rt_control/standalone/build/rt_server Rizon4R-062102 --shm /aico2_rt_right --gripper Flexiv-GN01 --rt-cpu 3</code><br>
-      Do not wrap these in <code>taskset</code>: <code>--rt-cpu</code> pins only the control loop.</li>
+      Do not wrap these in <code>taskset</code>: <code>--rt-cpu</code> pins only the control loop.
+      Only the LEFT server gets <code>--control-waist</code>; the right one follows the waist.</li>
   <li>In a sourced ROS terminal (kept off the RT cores):<br>
       <code>taskset -c 0,1,4-7 ros2 launch aico2_teleop vr.launch.py arm:=both hardware:=true hardware_backend:=rt drive_base:=true</code></li>
   <li>Wait for <code>solver warmed up</code> twice (once per arm) in the launch terminal.</li>

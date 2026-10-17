@@ -307,6 +307,41 @@ void TestServoCannotMoveThePinnedWaist()
     Close(ex.command().q[5], 0.2, 2e-4, "the arm joint in the same target still moved");
 }
 
+/** The other server moves the shared waist: this one streams where it is. */
+void TestUnownedWaistFollowsTheMeasurement()
+{
+    std::printf("a waist this server does not command follows the measurement\n");
+    auto shm = FreshShm();
+    shm->n_external = 2;
+    shm->control_waist = 0u;
+    FakeRobot robot;
+    RtExecutor<FakeRobot> ex;
+    double hold[kMaxDof] = {};
+    hold[0] = 0.15;
+    hold[1] = -0.25;
+    ex.Init(shm.get(), &robot, kDof, WideLimits(), hold);
+    shm->servo_enable.store(1u);
+
+    double now = 0.0;
+    double tgt[kMaxDof] = {};
+    tgt[0] = 1.0;    // a stream asking for the waist is still ignored
+    tgt[5] = 0.2;
+    for (int i = 0; i < 3000; ++i) {
+        now += kLoopPeriodSec;
+        BeginMeasuredWrite(*shm);
+        shm->measured.stamp_mono = now;
+        shm->measured.q[0] = 0.15 + 0.4 * (i / 3000.0);   // owner turning it
+        shm->measured.q[1] = -0.25;
+        EndMeasuredWrite(*shm);
+        PublishServoTarget(*shm, tgt, now);
+        ex.Cycle(now);
+    }
+    Close(ex.command().q[0], 0.15 + 0.4 * (2999 / 3000.0), 1e-12,
+        "waist axis 0 is the measured angle, not the target or the startup hold");
+    Close(ex.command().dq[0], 0.0, 0.0, "and it is commanded at rest");
+    Close(ex.command().q[5], 0.2, 2e-4, "the arm still tracks its target");
+}
+
 /** A target that jumps further than max_jump_rad is a glitch, and refusing it
  *  has to be visible or it presents as the arm mysteriously not following. */
 void TestServoRejectsAJumpAndCountsIt()
@@ -618,6 +653,7 @@ int main()
     TestStaleServoTargetBrakes();
     TestChannelsAreMutuallyExclusive();
     TestServoCannotMoveThePinnedWaist();
+    TestUnownedWaistFollowsTheMeasurement();
     TestServoRejectsAJumpAndCountsIt();
     std::printf("%s (%d failures)\n", g_failures == 0 ? "PASS" : "FAIL", g_failures);
     return g_failures == 0 ? 0 : 1;

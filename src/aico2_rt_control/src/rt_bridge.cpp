@@ -38,6 +38,7 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/float32.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 
@@ -153,6 +154,24 @@ public:
                 HandleServoCommand(*msg);
             },
             servo_opts);
+        // Waist targets (the VR right thumbstick), only on the server that
+        // owns the waist. Same callback group as the servo stream, so the
+        // stored target is never read and written at once. They ride along
+        // in the arm's servo stream: the waist moves while teleop is on.
+        if (shm_->control_waist != 0u) {
+            waist_sub_ = create_subscription<std_msgs::msg::Float64MultiArray>(
+                "waist_override", 10,
+                [this](std_msgs::msg::Float64MultiArray::ConstSharedPtr msg) {
+                    const std::size_t n = std::min<std::size_t>(msg->data.size(),
+                        std::min<std::size_t>(shm_->n_external, aico2_rt::kMaxDof));
+                    for (std::size_t j = 0; j < n; ++j) {
+                        waist_q_[j] = msg->data[j];
+                    }
+                    waist_n_ = n;
+                    waist_at_ = aico2_rt::MonotonicSeconds();
+                },
+                servo_opts);
+        }
         // Likewise its own group: this handler blocks for as long as the brake
         // takes, and it must not hold up the servo subscription or the timer
         // while it does.
@@ -260,17 +279,15 @@ private:
     aico2_rt::RejectReason Convert(const trajectory_msgs::msg::JointTrajectory& jt,
         std::vector<aico2_rt::Point>& out, const aico2_rt::Measured& meas)
     {
-        // A pinned waist may be left out of a goal: the right arm's MoveIt
-        // controller lists only its own seven joints, because the left one
-        // owns the shared waist. Omitted axes are held where they are.
-        std::uint32_t pinned = 0u;
-        if (shm_->control_waist == 0u) {
-            for (std::uint32_t j = 0; j < shm_->n_external && j < 32u; ++j) {
-                pinned |= 1u << j;
-            }
+        // The waist may be left out of a goal and is then held where it is.
+        // MoveIt sends only the planned group's joints -- seven for left_arm
+        // or right_arm -- whatever the controller lists.
+        std::uint32_t waist = 0u;
+        for (std::uint32_t j = 0; j < shm_->n_external && j < 32u; ++j) {
+            waist |= 1u << j;
         }
         std::vector<int> map;
-        const auto why = aico2_rt::BuildJointMap(jt.joint_names, joint_names_, map, pinned);
+        const auto why = aico2_rt::BuildJointMap(jt.joint_names, joint_names_, map, waist);
         if (why != aico2_rt::RejectReason::kNone) {
             return why;
         }
@@ -368,6 +385,15 @@ private:
                 dq[j] = pt.velocities[k];
             }
             mask |= 1u << j;
+        }
+        // A fresh waist target joins the arm's. A stale one is dropped, so the
+        // tracker holds the waist where it is rather than chasing it.
+        if (waist_n_ > 0 && aico2_rt::MonotonicSeconds() - waist_at_ < kWaistFreshSec) {
+            for (std::size_t j = 0; j < waist_n_; ++j) {
+                q[j] = waist_q_[j];
+                dq[j] = 0.0;
+                mask |= 1u << static_cast<std::uint32_t>(j);
+            }
         }
 
         // Stamped on receipt, not from msg.header: the age is used to notice
@@ -711,6 +737,11 @@ private:
     rclcpp::CallbackGroup::SharedPtr js_cb_group_;
     rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr servo_sub_;
     rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr gripper_cmd_sub_;
+    rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr waist_sub_;
+    static constexpr double kWaistFreshSec = 0.3;
+    double waist_q_[aico2_rt::kMaxDof] = {};
+    std::size_t waist_n_ = 0;
+    double waist_at_ = -1e9;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr gripper_state_pub_;
     rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr teleop_srv_;
     rclcpp::TimerBase::SharedPtr timer_;
