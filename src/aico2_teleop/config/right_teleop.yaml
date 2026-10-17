@@ -31,6 +31,7 @@ moveit_teleop:
     collision_policy: stop
   gripper:
     enabled: true
+    group: right_gripper
   controllers:
     arm: right_arm
   safety:
@@ -42,3 +43,5 @@ moveit_teleop:
       open_for_planning: false
   dataset:
     robot_type: flexiv_aico2
+  files:
+    scene: teleop_scene.yaml

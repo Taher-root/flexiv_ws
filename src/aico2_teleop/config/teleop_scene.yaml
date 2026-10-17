@@ -1,0 +1,4 @@
+planning_scene:
+  default_frame: base_link
+  boxes: []
+  planes: []
