@@ -55,7 +55,8 @@ _URDF = os.path.join(
 
 _XR_PORT = {'left': 8443, 'right': 8444}
 
-_RT_SHM = {
+_RT_SHM_DEFAULT = '/aico2_rt_control'
+_RT_SHM_BIMANUAL = {
     'left':  '/aico2_rt_left',
     'right': '/aico2_rt_right',
 }
@@ -101,9 +102,15 @@ def _teleop_pipeline(arm, hardware, rate_limit_scale, goto_ready,
 
 
 def _rt_bridge_nodes(arms_to_launch):
-    """Launch rt_bridge nodes (one per arm) + joint_state_merger."""
+    """Launch rt_bridge nodes (one per arm) + joint_state_merger.
+
+    Single-arm uses the default shm name (/aico2_rt_control) so rt_server
+    needs no --shm flag.  Bimanual uses /aico2_rt_left and /aico2_rt_right.
+    """
+    bimanual = len(arms_to_launch) > 1
     nodes = []
     for arm in arms_to_launch:
+        shm = _RT_SHM_BIMANUAL[arm] if bimanual else _RT_SHM_DEFAULT
         nodes.append(Node(
             package='aico2_rt_control',
             executable='rt_bridge',
@@ -113,7 +120,7 @@ def _rt_bridge_nodes(arms_to_launch):
             on_exit=Shutdown(),
             remappings=[('joint_states', 'joint_states')],
             parameters=[{
-                'shm_name':           _RT_SHM[arm],
+                'shm_name':           shm,
                 'joint_names':        _RT_JOINT_NAMES[arm],
                 'servo_joint_names':  _RT_SERVO_JOINT_NAMES[arm],
                 'joint_state_rate_hz': 200.0,
