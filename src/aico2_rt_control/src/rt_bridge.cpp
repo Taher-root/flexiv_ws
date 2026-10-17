@@ -258,13 +258,23 @@ private:
      * no velocity, which is a quietly wrong trajectory.
      */
     aico2_rt::RejectReason Convert(const trajectory_msgs::msg::JointTrajectory& jt,
-        std::vector<aico2_rt::Point>& out)
+        std::vector<aico2_rt::Point>& out, const aico2_rt::Measured& meas)
     {
+        // A pinned waist may be left out of a goal: the right arm's MoveIt
+        // controller lists only its own seven joints, because the left one
+        // owns the shared waist. Omitted axes are held where they are.
+        std::uint32_t pinned = 0u;
+        if (shm_->control_waist == 0u) {
+            for (std::uint32_t j = 0; j < shm_->n_external && j < 32u; ++j) {
+                pinned |= 1u << j;
+            }
+        }
         std::vector<int> map;
-        const auto why = aico2_rt::BuildJointMap(jt.joint_names, joint_names_, map);
+        const auto why = aico2_rt::BuildJointMap(jt.joint_names, joint_names_, map, pinned);
         if (why != aico2_rt::RejectReason::kNone) {
             return why;
         }
+        const std::uint32_t held = aico2_rt::OmittedJoints(map, joint_names_.size());
         if (jt.points.empty() || jt.points.size() > aico2_rt::kMaxPoints) {
             return aico2_rt::RejectReason::kTooManyPoints;
         }
@@ -282,6 +292,11 @@ private:
                 out[i].q[j] = p.positions[k];
                 out[i].dq[j] = p.velocities[k];
                 out[i].ddq[j] = p.accelerations[k];
+            }
+            for (std::size_t j = 0; j < joint_names_.size(); ++j) {
+                if (held & (1u << j)) {
+                    out[i].q[j] = meas.q[j];  // dq, ddq stay zero: at rest
+                }
             }
         }
         return aico2_rt::RejectReason::kNone;
@@ -499,7 +514,7 @@ private:
     std::string Validate(const trajectory_msgs::msg::JointTrajectory& jt,
         std::vector<aico2_rt::Point>& pts, const aico2_rt::Measured& meas)
     {
-        const auto convert_why = Convert(jt, pts);
+        const auto convert_why = Convert(jt, pts, meas);
         if (convert_why != aico2_rt::RejectReason::kNone) {
             return aico2_rt::RejectReasonName(convert_why);
         }

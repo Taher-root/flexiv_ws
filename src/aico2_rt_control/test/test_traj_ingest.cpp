@@ -112,6 +112,35 @@ void TestJointMapReordersAndCatchesBadNames()
         "a goal covering only some joints");
 }
 
+void TestPinnedWaistMayBeOmitted()
+{
+    std::printf("joint map: a pinned waist may be omitted, arm joints may not\n");
+    const auto rdk = RdkNames();
+    const std::uint32_t waist = 0x3u;
+    std::vector<int> map;
+
+    // The right arm's MoveIt controller names only its seven joints.
+    const std::vector<std::string> arm = {"Left_joint1", "Left_joint2", "Left_joint3",
+        "Left_joint4", "Left_joint5", "Left_joint6", "Left_joint7"};
+    Expect(BuildJointMap(arm, rdk, map), RejectReason::kMissingJoint,
+        "arm-only goal when the waist is commanded");
+    Expect(BuildJointMap(arm, rdk, map, waist), RejectReason::kNone,
+        "arm-only goal when the waist is pinned");
+    Check(OmittedJoints(map, rdk.size()) == waist, "the omitted joints are exactly the waist");
+
+    const std::vector<std::string> six = {"Left_joint1", "Left_joint2", "Left_joint3",
+        "Left_joint4", "Left_joint5", "Left_joint6"};
+    Expect(BuildJointMap(six, rdk, map, waist), RejectReason::kMissingJoint,
+        "an omitted ARM joint is still refused");
+
+    std::vector<std::string> full = arm;
+    full.push_back("AGV_Joint1");
+    full.push_back("AGV_Joint2");
+    Expect(BuildJointMap(full, rdk, map, waist), RejectReason::kNone,
+        "a goal may still name the pinned waist");
+    Check(OmittedJoints(map, rdk.size()) == 0u, "nothing omitted from a full goal");
+}
+
 void TestAcceptsAValidTrajectory()
 {
     std::printf("a valid trajectory is accepted\n");
@@ -290,6 +319,7 @@ int main()
 {
     std::printf("=== traj_ingest ===\n");
     TestJointMapReordersAndCatchesBadNames();
+    TestPinnedWaistMayBeOmitted();
     TestAcceptsAValidTrajectory();
     TestRejectsStartPositionMismatch();
     TestRejectsMotionNotAtRest();

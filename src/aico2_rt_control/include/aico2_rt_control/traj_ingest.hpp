@@ -59,7 +59,8 @@ struct IngestConfig {
  * @return kNone, or why the mapping is unusable
  */
 inline RejectReason BuildJointMap(const std::vector<std::string>& goal_names,
-    const std::vector<std::string>& rdk_names, std::vector<int>& out_map)
+    const std::vector<std::string>& rdk_names, std::vector<int>& out_map,
+    std::uint32_t may_omit = 0u)
 {
     out_map.assign(goal_names.size(), -1);
     for (std::size_t i = 0; i < goal_names.size(); ++i) {
@@ -75,17 +76,31 @@ inline RejectReason BuildJointMap(const std::vector<std::string>& goal_names,
     }
     // Every robot joint must be covered: a partial goal would leave the rest
     // of the vector at whatever the previous trajectory left behind, which is
-    // not something to guess at.
+    // not something to guess at. The exception is `may_omit`: joints this
+    // server pins (the waist, when another server owns it), which the caller
+    // holds at their measured position -- so an arm group's goal need not
+    // name axes it has no business moving.
     std::vector<bool> seen(rdk_names.size(), false);
     for (const int m : out_map) {
         seen[static_cast<std::size_t>(m)] = true;
     }
-    for (const bool s : seen) {
-        if (!s) {
+    for (std::size_t j = 0; j < seen.size(); ++j) {
+        if (!seen[j] && (j >= 32 || (may_omit & (1u << j)) == 0u)) {
             return RejectReason::kMissingJoint;
         }
     }
     return RejectReason::kNone;
+}
+
+/** Bit j set for each robot joint the map does not cover. */
+inline std::uint32_t OmittedJoints(const std::vector<int>& map, std::size_t dof)
+{
+    std::uint32_t covered = 0u;
+    for (const int m : map) {
+        covered |= 1u << static_cast<std::uint32_t>(m);
+    }
+    const std::uint32_t all = dof >= 32 ? 0xffffffffu : ((1u << dof) - 1u);
+    return all & ~covered;
 }
 
 /**
