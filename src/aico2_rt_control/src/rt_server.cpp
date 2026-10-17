@@ -94,6 +94,7 @@ struct Options {
     std::string shm_name = aico2_rt::kDefaultShmName;
     std::string gripper_name;  // empty = no gripper
     bool control_waist = false;
+    bool skip_lock = false;
     double max_acc = 3.0;   // rad/s^2; matches the Python driver's constant
     /** Servo-stream settings. Zero means "take the documented default", which
      *  rt_executor substitutes; see kDefaultServoTimeoutSec and friends. The
@@ -120,6 +121,9 @@ bool ParseArgs(int argc, char** argv, Options& opt)
             "                      default: with it off they are pinned at\n"
             "                      their current position, so a 9-joint\n"
             "                      trajectory cannot move the torso.\n"
+            "  --skip-lock         skip the LockExternalAxes call. Debug flag:\n"
+            "                      test whether locking the waist is what\n"
+            "                      prevents SwitchMode on the CE firmware.\n"
             "  --max-acc A         acceleration clamp, rad/s^2 (default 3.0).\n"
             "                      RobotInfo carries no acceleration limit, so\n"
             "                      this cannot be read from the robot.\n"
@@ -164,6 +168,8 @@ bool ParseArgs(int argc, char** argv, Options& opt)
         const bool has_next = (i + 1 < argc);
         if (a == "--control-waist") {
             opt.control_waist = true;
+        } else if (a == "--skip-lock") {
+            opt.skip_lock = true;
         } else if (a == "--shm" && has_next) {
             opt.shm_name = argv[++i];
         } else if (a == "--max-acc" && has_next) {
@@ -333,9 +339,32 @@ int main(int argc, char** argv)
             std::printf("waist WILL be commanded (--control-waist)\n");
         }
 
+        // Diagnostic: print robot state before LockExternalAxes
+        {
+            auto os = robot.operational_status();
+            std::printf("[diag] before LockExternalAxes: operational=%d reduced=%d recovery=%d"
+                        " fault=%d status=%s\n",
+                robot.operational(), robot.reduced(), robot.recovery(), robot.fault(),
+                flexiv::rdk::kOpStatusNames[static_cast<int>(os)].c_str());
+        }
+
         // LockExternalAxes requires IDLE, so it must precede SwitchMode.
-        if (ext > 0) {
+        if (ext > 0 && !opt.skip_lock) {
+            std::printf("calling LockExternalAxes(%s)\n",
+                !opt.control_waist ? "true (lock)" : "false (unlock)");
             robot.LockExternalAxes(!opt.control_waist);
+            std::printf("LockExternalAxes returned\n");
+        } else if (ext > 0 && opt.skip_lock) {
+            std::printf("--skip-lock: skipping LockExternalAxes (ext=%u)\n", ext);
+        }
+
+        // Diagnostic: print robot state after LockExternalAxes, before SwitchMode
+        {
+            auto os = robot.operational_status();
+            std::printf("[diag] before SwitchMode: operational=%d reduced=%d recovery=%d"
+                        " fault=%d status=%s\n",
+                robot.operational(), robot.reduced(), robot.recovery(), robot.fault(),
+                flexiv::rdk::kOpStatusNames[static_cast<int>(os)].c_str());
         }
 
         std::printf("holding at %s\n", flexiv::rdk::utility::Vec2Str(q_now).c_str());
