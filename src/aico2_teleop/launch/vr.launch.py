@@ -28,6 +28,10 @@ Usage:
     # each hand to its own TeleopInput topic.
     ros2 launch aico2_teleop vr.launch.py arm:=both
 
+    # Also drive the chassis from the left thumbstick:
+    ros2 launch aico2_teleop vr.launch.py arm:=both hardware:=true \
+        hardware_backend:=rt drive_base:=true
+
     # Slow rate limit for initial hardware testing:
     ros2 launch aico2_teleop vr.launch.py hardware:=true rate_limit_scale:=0.1
 """
@@ -317,6 +321,22 @@ def _build(context):
         parameters=[{'joy_topic': joy_topic}],
     ))
 
+    # 7. Chassis: /cmd_vel -> Seer AMR over Robokit TCP (no vendor SDK).
+    # Only the velocity controller: amr_driver.launch.py's odometry node
+    # would add a second TF parent for base_link.
+    if LaunchConfiguration('drive_base').perform(context) == 'true':
+        actions.append(Node(
+            package='flexiv_amr_driver',
+            executable='robokit_velocity_controller',
+            name='robokit_velocity_controller',
+            output='screen',
+            parameters=[
+                os.path.join(get_package_share_directory('flexiv_amr_driver'),
+                             'config', 'amr_params_robokit.yaml'),
+                {'amr_ip': LaunchConfiguration('amr_ip').perform(context)},
+            ],
+        ))
+
     return actions
 
 
@@ -334,5 +354,12 @@ def generate_launch_description():
         DeclareLaunchArgument('rate_limit_scale', default_value='0.5'),
         DeclareLaunchArgument('goto_ready', default_value='',
                               choices=['', 'true', 'false']),
+        DeclareLaunchArgument('drive_base', default_value='false',
+                              choices=['true', 'false'],
+                              description='Drive the AMR chassis from the left '
+                                          'thumbstick. Moves the whole robot, '
+                                          'so it is opt-in.'),
+        DeclareLaunchArgument('amr_ip', default_value='192.168.2.110',
+                              description='Seer chassis address (CE subnet).'),
         OpaqueFunction(function=_build),
     ])

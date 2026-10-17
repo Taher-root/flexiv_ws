@@ -37,11 +37,18 @@ class VRJoystickRelay(Node):
         self.declare_parameter('amr_angular_speed', 0.5)
         self.declare_parameter('deadzone', 0.15)
         self.declare_parameter('rate', 50.0)
+        # The bridge publishes only on fresh headset frames, so silence means
+        # the headset is gone. Holding the last deflection would keep the base
+        # driving forever: this republishes at `rate`, so the chassis's own
+        # cmd_vel timeout would never trip.
+        self.declare_parameter('stick_timeout', 0.2)
 
         self.waist_speed = float(self.get_parameter('waist_speed').value)
         self.amr_lin = float(self.get_parameter('amr_linear_speed').value)
         self.amr_ang = float(self.get_parameter('amr_angular_speed').value)
         self.deadzone = float(self.get_parameter('deadzone').value)
+        self.stick_timeout = float(self.get_parameter('stick_timeout').value)
+        self.stick_at = -math.inf
         rate = float(self.get_parameter('rate').value)
 
         self.waist_q = [0.0, 0.0]
@@ -74,6 +81,7 @@ class VRJoystickRelay(Node):
     def _joy_cb(self, msg):
         if len(msg.axes) >= 4:
             self.stick = [float(msg.axes[i]) for i in range(4)]
+            self.stick_at = time.monotonic()
 
     def _joint_state_cb(self, msg):
         if self.waist_initialized:
@@ -94,6 +102,8 @@ class VRJoystickRelay(Node):
         now = time.monotonic()
         dt = min(now - self.last_tick, 0.1)
         self.last_tick = now
+        if now - self.stick_at > self.stick_timeout:
+            self.stick = [0.0, 0.0, 0.0, 0.0]
 
         right_x = self._dz(self.stick[2])
         right_y = self._dz(self.stick[3])
