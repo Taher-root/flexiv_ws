@@ -40,6 +40,7 @@
 #include <iostream>
 #include <memory>
 #include <new>
+#include <sched.h>
 #include <string>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -106,6 +107,8 @@ struct Options {
     double servo_max_jump = 0.0;
     double servo_settle = 0.0;
     double duration = 0.0;  // 0 = until signalled
+    /** Core for the 1 kHz task only; -1 = unbound. */
+    int rt_cpu = -1;
     /** 0 = stiff position control. >0 selects impedance at this fraction of
      *  the robot's nominal joint stiffness. */
     double stiffness_ratio = 0.0;
@@ -128,6 +131,12 @@ bool ParseArgs(int argc, char** argv, Options& opt)
             "                      RobotInfo carries no acceleration limit, so\n"
             "                      this cannot be read from the robot.\n"
             "  --duration S        stop after S seconds (default: until Ctrl-C)\n"
+            "  --rt-cpu N          bind ONLY the 1 kHz control task to core N\n"
+            "                      (2..cores-1). Use this instead of running the\n"
+            "                      whole process under taskset: that confines the\n"
+            "                      RDK's network threads to the same core as the\n"
+            "                      max-priority loop, and commands then miss their\n"
+            "                      real-time deadline (\"Timeliness failure\").\n"
             "  --gripper NAME      enable a gripper (e.g. Flexiv_Grav). The gripper\n"
             "                      runs on its own device channel, independent of\n"
             "                      the arm control mode. Commands arrive via shm\n"
@@ -188,6 +197,8 @@ bool ParseArgs(int argc, char** argv, Options& opt)
             opt.stiffness_ratio = std::atof(argv[++i]);
         } else if (a == "--gripper" && has_next) {
             opt.gripper_name = argv[++i];
+        } else if (a == "--rt-cpu" && has_next) {
+            opt.rt_cpu = std::atoi(argv[++i]);
         } else {
             std::fprintf(stderr, "unrecognised argument: %s\n", a.c_str());
             return false;
@@ -196,6 +207,12 @@ bool ParseArgs(int argc, char** argv, Options& opt)
     if (opt.servo_max_jerk < 0.0 || opt.servo_timeout < 0.0 || opt.servo_max_jump < 0.0
         || opt.servo_settle < 0.0) {
         std::fprintf(stderr, "the --servo-* values cannot be negative\n");
+        return false;
+    }
+    const int cores = static_cast<int>(std::thread::hardware_concurrency());
+    if (opt.rt_cpu != -1 && (opt.rt_cpu < 2 || opt.rt_cpu >= cores)) {
+        std::fprintf(stderr, "--rt-cpu must be in 2..%d (the RDK reserves cores 0 and 1)\n",
+            cores - 1);
         return false;
     }
     if (opt.max_acc <= 0.0) {
@@ -245,6 +262,15 @@ int main(int argc, char** argv)
         return 1;
     }
     std::cout.setf(std::ios::unitbuf);
+    {
+        cpu_set_t allowed;
+        if (sched_getaffinity(0, sizeof(allowed), &allowed) == 0 && CPU_COUNT(&allowed) == 1) {
+            std::fprintf(stderr,
+                "WARNING: this process may only run on ONE core (taskset?). The RDK's\n"
+                "network threads share it with the 1 kHz loop and commands will miss\n"
+                "their deadline. Drop taskset and pass --rt-cpu N instead.\n");
+        }
+    }
     std::signal(SIGINT, OnSignal);
     std::signal(SIGTERM, OnSignal);
 
@@ -485,9 +511,10 @@ int main(int argc, char** argv)
                         task_error.store(true, std::memory_order_release);
                     }
                 },
-                "rt_control", 1, scheduler.max_priority());
+                "rt_control", 1, scheduler.max_priority(), opt.rt_cpu);
 
-            std::printf("scheduler started at 1 kHz; shm '%s'. Ctrl-C to stop.\n",
+            std::printf("scheduler started at 1 kHz on %s; shm '%s'. Ctrl-C to stop.\n",
+                opt.rt_cpu >= 0 ? ("core " + std::to_string(opt.rt_cpu)).c_str() : "any core",
                 opt.shm_name.c_str());
             scheduler.Start();
 
