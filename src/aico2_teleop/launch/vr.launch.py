@@ -32,6 +32,7 @@ Usage:
     ros2 launch aico2_teleop vr.launch.py hardware:=true rate_limit_scale:=0.1
 """
 import os
+import tempfile
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -40,18 +41,15 @@ from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.event_handlers import OnStateTransition
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from moveit_configs_utils import MoveItConfigsBuilder
+import xacro
 
 LEFT_JOINTS = [f'Left_joint{i}' for i in range(1, 8)]
 RIGHT_JOINTS = [f'Right_joint{i}' for i in range(1, 8)]
 
 _MOVEIT_PKG = 'aico2_moveit_config'
-_URDF = os.path.join(
-    get_package_share_directory('flexiv_amr_description_ce'),
-    'urdf', 'AICO2-4CE-Rizon4.urdf',
-)
 
 _XR_PORT = {'left': 8443, 'right': 8444}
 
@@ -71,6 +69,47 @@ _RT_SERVO_JOINT_NAMES = {
     'right': [f'Right_joint{i}' for i in range(1, 8)],
 }
 
+# flexiv_description xacro produces lowercase prefixes (left_, right_) and its
+# own waist names (aico2_4e_d1_*).  The MoveIt config, SRDF, arm drivers and
+# teleop configs all use the capitalised convention (Left_, Right_, AGV_*).
+# Renaming in the generated XML keeps everything compatible.
+_URDF_RENAMES = [
+    ('name="AICO2-4E-D1"', 'name="AICO2-Rizon4"'),
+    ('"aico2_4e_d1_base_link"', '"base_link"'),
+    ('"aico2_4e_d1_joint1"',    '"AGV_Joint1"'),
+    ('"aico2_4e_d1_joint2"',    '"AGV_Joint2"'),
+    ('"aico2_4e_d1_link1"',     '"AGV_Yaw"'),
+    ('"aico2_4e_d1_link2"',     '"AGV_Pitch"'),
+    ('"left_base_link"',        '"Left_link0"'),
+    ('"right_base_link"',       '"Right_link0"'),
+    ('"left_flange"',           '"Left_flange"'),
+    ('"right_flange"',          '"Right_flange"'),
+    ('"left_joint',             '"Left_joint'),
+    ('"left_link',              '"Left_link'),
+    ('"right_joint',            '"Right_joint'),
+    ('"right_link',             '"Right_link'),
+]
+
+
+def _generate_urdf():
+    """Generate AICO2-4E-D1 URDF from flexiv_description xacro.
+
+    Returns (urdf_path, urdf_content).  The temp file is for
+    MoveItConfigsBuilder which requires a file_path.
+    """
+    xacro_file = os.path.join(
+        get_package_share_directory('flexiv_description'),
+        'urdf', 'flexiv.urdf.xacro')
+    doc = xacro.process_file(xacro_file, mappings={'robot_type': 'AICO2-4E-D1'})
+    urdf = doc.toxml()
+    for old, new in _URDF_RENAMES:
+        urdf = urdf.replace(old, new)
+    tmp = tempfile.NamedTemporaryFile(
+        mode='w', suffix='.urdf', prefix='aico2_', delete=False)
+    tmp.write(urdf)
+    tmp.close()
+    return tmp.name, urdf
+
 
 def _include(package, filename, arguments=None):
     return IncludeLaunchDescription(
@@ -79,7 +118,8 @@ def _include(package, filename, arguments=None):
 
 
 def _teleop_pipeline(arm, hardware, rate_limit_scale, goto_ready,
-                     *, input_topic=None, device='xr', hand=None):
+                     *, input_topic=None, device='xr', hand=None,
+                     use_rviz='true'):
     """Include the moveit-teleop pipeline for one arm."""
     config_name = 'teleop.yaml' if arm == 'left' else 'right_teleop.yaml'
     config_path = os.path.join(
@@ -92,6 +132,7 @@ def _teleop_pipeline(arm, hardware, rate_limit_scale, goto_ready,
         'hardware_gate_enabled': str(hardware).lower(),
         'hand': hand or ('left' if arm == 'left' else 'right'),
         'device': device,
+        'use_rviz': use_rviz,
     }
     if input_topic:
         args['input_topic'] = input_topic
@@ -150,6 +191,8 @@ def _build(context):
     bimanual = arm == 'both'
     rt = (backend == 'rt') and hardware
 
+    urdf_path, urdf_content = _generate_urdf()
+
     actions = []
 
     # 1. Arm drivers + joint state merger.
@@ -164,10 +207,17 @@ def _build(context):
             'control_waist': 'true' if use_waist else 'false',
         }))
 
-    # 2. Robot state publisher.
-    actions.append(_include('flexiv_amr_description_ce', 'display.launch.py', {
-        'use_gui': 'false',
-    }))
+    # 2. Robot state publisher (flexiv_description xacro).
+    actions.append(Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        name='robot_state_publisher',
+        output='screen',
+        parameters=[{
+            'robot_description': ParameterValue(urdf_content, value_type=str),
+            'publish_frequency': 50.0,
+        }],
+    ))
 
     # 3. MoveIt move_group.
     actions.append(_include('aico2_moveit_config', 'move_group.launch.py'))
@@ -175,7 +225,7 @@ def _build(context):
     # 4. Trajectory adapters.
     moveit_config = (
         MoveItConfigsBuilder('AICO2', package_name=_MOVEIT_PKG)
-        .robot_description(file_path=_URDF)
+        .robot_description(file_path=urdf_path)
         .to_moveit_configs()
     )
 
@@ -199,6 +249,7 @@ def _build(context):
         home = requested if requested else ('false' if hardware else 'true')
 
     teleop_delay = 5.0 if rt else 3.0
+    rviz_per_arm = 'false' if bimanual else 'true'
 
     teleop_actions = []
     if bimanual:
@@ -213,12 +264,20 @@ def _build(context):
                 a, hardware, rate_limit_scale, home,
                 device='fake',
                 input_topic=f'/{xr_ns}/xr_device/input',
-                hand=a))
+                hand=a,
+                use_rviz=rviz_per_arm))
     else:
         teleop_actions.append(
-            _teleop_pipeline(arm, hardware, rate_limit_scale, home))
+            _teleop_pipeline(arm, hardware, rate_limit_scale, home,
+                             use_rviz=rviz_per_arm))
 
     actions.append(TimerAction(period=teleop_delay, actions=teleop_actions))
+
+    # 5b. Single shared RViz in bimanual mode showing the full robot.
+    if bimanual:
+        actions.append(TimerAction(period=teleop_delay, actions=[
+            _include('aico2_moveit_config', 'moveit_rviz.launch.py'),
+        ]))
 
     # 6. Joystick relay: right stick -> waist, left stick -> AMR
     joy_topic = (f'/left_teleop/xr_device/thumbsticks' if bimanual

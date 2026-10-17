@@ -2,7 +2,7 @@
 <!--
   Semantic description for AICO2-Rizon4 (two Rizon 4 arms on a 2-DoF waist).
 
-  GENERATED from flexiv_amr_description_ce/urdf/AICO2-4CE-Rizon4.urdf by
+  GENERATED from flexiv_description xacro (robot_type=AICO2-4E-D1) by
   scripts/generate_srdf.py. The disable_collisions entries below cover
   only the pairs derivable from the kinematic tree, after collapsing
   fixed joints into rigid bodies:
@@ -115,15 +115,6 @@
   <disable_collisions link1="AGV_Yaw" link2="Left_link0" reason="Adjacent"/>
   <disable_collisions link1="AGV_Yaw" link2="Right_link0" reason="Adjacent"/>
   <disable_collisions link1="AGV_Yaw" link2="base_link" reason="Adjacent"/>
-  <disable_collisions link1="AGV_Yaw" link2="camera_color_frame" reason="Adjacent"/>
-  <disable_collisions link1="AGV_Yaw" link2="camera_depth_frame" reason="Adjacent"/>
-  <disable_collisions link1="AGV_Yaw" link2="camera_link" reason="Adjacent"/>
-  <disable_collisions link1="AGV_Yaw" link2="camera_top_color_optical_frame" reason="Adjacent"/>
-  <disable_collisions link1="AGV_Yaw" link2="camera_top_depth_optical_frame" reason="Adjacent"/>
-  <disable_collisions link1="AGV_Yaw" link2="camera_top_link" reason="Adjacent"/>
-  <disable_collisions link1="AGV_Yaw" link2="imu_link" reason="Adjacent"/>
-  <disable_collisions link1="AGV_Yaw" link2="lidar_avoid_link" reason="Adjacent"/>
-  <disable_collisions link1="AGV_Yaw" link2="lidar_nav_link" reason="Adjacent"/>
   <disable_collisions link1="Left_flange" link2="Left_link6" reason="Adjacent"/>
   <disable_collisions link1="Left_flange" link2="Left_link7" reason="Welded"/>
   <disable_collisions link1="Left_link0" link2="Left_link1" reason="Adjacent"/>
@@ -145,49 +136,4 @@
   <disable_collisions link1="Right_link4" link2="Right_link5" reason="Adjacent"/>
   <disable_collisions link1="Right_link5" link2="Right_link6" reason="Adjacent"/>
   <disable_collisions link1="Right_link6" link2="Right_link7" reason="Adjacent"/>
-  <disable_collisions link1="base_link" link2="camera_color_frame" reason="Welded"/>
-  <disable_collisions link1="base_link" link2="camera_depth_frame" reason="Welded"/>
-  <disable_collisions link1="base_link" link2="camera_link" reason="Welded"/>
-  <disable_collisions link1="base_link" link2="camera_top_color_optical_frame" reason="Welded"/>
-  <disable_collisions link1="base_link" link2="camera_top_depth_optical_frame" reason="Welded"/>
-  <disable_collisions link1="base_link" link2="camera_top_link" reason="Welded"/>
-  <disable_collisions link1="base_link" link2="imu_link" reason="Welded"/>
-  <disable_collisions link1="base_link" link2="lidar_avoid_link" reason="Welded"/>
-  <disable_collisions link1="base_link" link2="lidar_nav_link" reason="Welded"/>
-  <disable_collisions link1="camera_color_frame" link2="camera_depth_frame" reason="Welded"/>
-  <disable_collisions link1="camera_color_frame" link2="camera_link" reason="Welded"/>
-  <disable_collisions link1="camera_color_frame" link2="camera_top_color_optical_frame" reason="Welded"/>
-  <disable_collisions link1="camera_color_frame" link2="camera_top_depth_optical_frame" reason="Welded"/>
-  <disable_collisions link1="camera_color_frame" link2="camera_top_link" reason="Welded"/>
-  <disable_collisions link1="camera_color_frame" link2="imu_link" reason="Welded"/>
-  <disable_collisions link1="camera_color_frame" link2="lidar_avoid_link" reason="Welded"/>
-  <disable_collisions link1="camera_color_frame" link2="lidar_nav_link" reason="Welded"/>
-  <disable_collisions link1="camera_depth_frame" link2="camera_link" reason="Welded"/>
-  <disable_collisions link1="camera_depth_frame" link2="camera_top_color_optical_frame" reason="Welded"/>
-  <disable_collisions link1="camera_depth_frame" link2="camera_top_depth_optical_frame" reason="Welded"/>
-  <disable_collisions link1="camera_depth_frame" link2="camera_top_link" reason="Welded"/>
-  <disable_collisions link1="camera_depth_frame" link2="imu_link" reason="Welded"/>
-  <disable_collisions link1="camera_depth_frame" link2="lidar_avoid_link" reason="Welded"/>
-  <disable_collisions link1="camera_depth_frame" link2="lidar_nav_link" reason="Welded"/>
-  <disable_collisions link1="camera_link" link2="camera_top_color_optical_frame" reason="Welded"/>
-  <disable_collisions link1="camera_link" link2="camera_top_depth_optical_frame" reason="Welded"/>
-  <disable_collisions link1="camera_link" link2="camera_top_link" reason="Welded"/>
-  <disable_collisions link1="camera_link" link2="imu_link" reason="Welded"/>
-  <disable_collisions link1="camera_link" link2="lidar_avoid_link" reason="Welded"/>
-  <disable_collisions link1="camera_link" link2="lidar_nav_link" reason="Welded"/>
-  <disable_collisions link1="camera_top_color_optical_frame" link2="camera_top_depth_optical_frame" reason="Welded"/>
-  <disable_collisions link1="camera_top_color_optical_frame" link2="camera_top_link" reason="Welded"/>
-  <disable_collisions link1="camera_top_color_optical_frame" link2="imu_link" reason="Welded"/>
-  <disable_collisions link1="camera_top_color_optical_frame" link2="lidar_avoid_link" reason="Welded"/>
-  <disable_collisions link1="camera_top_color_optical_frame" link2="lidar_nav_link" reason="Welded"/>
-  <disable_collisions link1="camera_top_depth_optical_frame" link2="camera_top_link" reason="Welded"/>
-  <disable_collisions link1="camera_top_depth_optical_frame" link2="imu_link" reason="Welded"/>
-  <disable_collisions link1="camera_top_depth_optical_frame" link2="lidar_avoid_link" reason="Welded"/>
-  <disable_collisions link1="camera_top_depth_optical_frame" link2="lidar_nav_link" reason="Welded"/>
-  <disable_collisions link1="camera_top_link" link2="imu_link" reason="Welded"/>
-  <disable_collisions link1="camera_top_link" link2="lidar_avoid_link" reason="Welded"/>
-  <disable_collisions link1="camera_top_link" link2="lidar_nav_link" reason="Welded"/>
-  <disable_collisions link1="imu_link" link2="lidar_avoid_link" reason="Welded"/>
-  <disable_collisions link1="imu_link" link2="lidar_nav_link" reason="Welded"/>
-  <disable_collisions link1="lidar_avoid_link" link2="lidar_nav_link" reason="Welded"/>
 </robot>

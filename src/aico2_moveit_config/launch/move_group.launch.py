@@ -4,27 +4,16 @@ Composes with the existing bringup rather than replacing it: this launch starts
 move_group only. The arm drivers, which serve the FollowJointTrajectory actions
 move_group executes on, come from flexiv_amr_bringup/arms.launch.py.
 
-robot_state_publisher does NOT: arms.launch.py starts the drivers and the joint
-state merger, nothing else. RSP is what turns /joint_states into link
-transforms, so without it move_group has no TF and the planning scene monitor
-complains. It comes from flexiv_amr_description/display.launch.py (or
-flexiv_amr_bringup/hardware_test.launch.py, which starts a great deal more).
-So the usual order is
+robot_state_publisher is NOT started here: vr.launch.py launches RSP directly
+from the generated URDF. RSP turns /joint_states into link transforms; without
+it move_group has no TF and the planning scene monitor complains.
 
-    ros2 launch flexiv_amr_bringup arms.launch.py
-    ros2 launch flexiv_amr_description display.launch.py
-    ros2 launch aico2_moveit_config move_group.launch.py
-
-Do not pass use_gui:=true to display.launch.py against a real robot: it starts
-joint_state_publisher_gui, which publishes its own /joint_states and fights the
-drivers for the topic.
-
-The URDF lives in flexiv_amr_description, not here, so robot_description is
-loaded by absolute path from that package's share directory. That keeps one
-URDF for the whole system -- description, nav2 and MoveIt all read the same
-file.
+The URDF is generated at launch time from flexiv_description xacro with
+post-processing renames to match the existing naming convention (Left_*, Right_*,
+AGV_*).
 """
 import os
+import tempfile
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -32,13 +21,44 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
+import xacro
 
 _PKG = "aico2_moveit_config"
-_URDF = os.path.join(
-    get_package_share_directory("flexiv_amr_description_ce"),
-    "urdf",
-    "AICO2-4CE-Rizon4.urdf",
-)
+
+_URDF_RENAMES = [
+    ('name="AICO2-4E-D1"', 'name="AICO2-Rizon4"'),
+    ('"aico2_4e_d1_base_link"', '"base_link"'),
+    ('"aico2_4e_d1_joint1"',    '"AGV_Joint1"'),
+    ('"aico2_4e_d1_joint2"',    '"AGV_Joint2"'),
+    ('"aico2_4e_d1_link1"',     '"AGV_Yaw"'),
+    ('"aico2_4e_d1_link2"',     '"AGV_Pitch"'),
+    ('"left_base_link"',        '"Left_link0"'),
+    ('"right_base_link"',       '"Right_link0"'),
+    ('"left_flange"',           '"Left_flange"'),
+    ('"right_flange"',          '"Right_flange"'),
+    ('"left_joint',             '"Left_joint'),
+    ('"left_link',              '"Left_link'),
+    ('"right_joint',            '"Right_joint'),
+    ('"right_link',             '"Right_link'),
+]
+
+
+def _generate_urdf():
+    xacro_file = os.path.join(
+        get_package_share_directory('flexiv_description'),
+        'urdf', 'flexiv.urdf.xacro')
+    doc = xacro.process_file(xacro_file, mappings={'robot_type': 'AICO2-4E-D1'})
+    urdf = doc.toxml()
+    for old, new in _URDF_RENAMES:
+        urdf = urdf.replace(old, new)
+    tmp = tempfile.NamedTemporaryFile(
+        mode='w', suffix='.urdf', prefix='aico2_', delete=False)
+    tmp.write(urdf)
+    tmp.close()
+    return tmp.name
+
+
+_URDF = _generate_urdf()
 
 
 def generate_launch_description():

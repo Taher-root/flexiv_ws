@@ -9,9 +9,8 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <!-- The URDF lives in flexiv_amr_description; this package loads it by
-       absolute path from that package's share directory. -->
-  <exec_depend>flexiv_amr_description</exec_depend>
+  <exec_depend>flexiv_description</exec_depend>
+  <exec_depend>xacro</exec_depend>
   <exec_depend>moveit_configs_utils</exec_depend>
   <exec_depend>moveit_ros_move_group</exec_depend>
   <exec_depend>moveit_planners_ompl</exec_depend>

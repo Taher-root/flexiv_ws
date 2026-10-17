@@ -13,7 +13,8 @@
   <exec_depend>aico2_left_arm_driver</exec_depend>
   <exec_depend>aico2_right_arm_driver</exec_depend>
   <exec_depend>flexiv_amr_bringup</exec_depend>
-  <exec_depend>flexiv_amr_description</exec_depend>
+  <exec_depend>flexiv_description</exec_depend>
+  <exec_depend>xacro</exec_depend>
   <exec_depend>moveit_teleop_bringup</exec_depend>
   <exec_depend>moveit_teleop_core</exec_depend>
   <exec_depend>moveit_teleop_devices</exec_depend>
