@@ -1,11 +1,16 @@
 moveit_teleop:
-  move_group: right_arm
+  move_group: left_arm
   ready_state: ready
   nominal_state: ready
+
+  files:
+    scene: teleop_scene.yaml
+
   device:
     pattern: circle
     period: 6.0
     radius: 0.08
+
   retargeting:
     rotation_scale: 0.5
     translation_ref: device
@@ -16,9 +21,10 @@ moveit_teleop:
     max_command_step: 0.03
     per_solver:
       ik:
-        translation_scale: 1.0
-        max_target_lead: 0.20
-        external_motion_threshold: 0.35
+        translation_scale: 1.5
+        max_target_lead: 0.30
+        external_motion_threshold: 0.50
+
   ik:
     solve_rate: 90.0
     weight_position: 50.0
@@ -29,19 +35,21 @@ moveit_teleop:
     max_joint_jump: 0.35
     jump_retry_smoothness: 50.0
     collision_policy: stop
+
   gripper:
     enabled: true
-    group: right_gripper
+    group: left_gripper
+
   controllers:
-    arm: right_arm
+    arm: left_arm
+
   safety:
     input_timeout: 0.15
     home_via_moveit: true
     hardware_gate:
-      service: /right_arm/control_enable
+      service: /left_arm/control_enable
       enabled: false
       open_for_planning: false
+
   dataset:
     robot_type: flexiv_aico2
-  files:
-    scene: teleop_scene.yaml

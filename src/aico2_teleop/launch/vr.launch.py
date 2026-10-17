@@ -125,7 +125,7 @@ def _teleop_pipeline(arm, hardware, rate_limit_scale, goto_ready,
     """Include the moveit-teleop pipeline for one arm."""
     config_name = 'teleop.yaml' if arm == 'left' else 'right_teleop.yaml'
     config_path = os.path.join(
-        get_package_share_directory('aico2_teleop'), 'config', config_name)
+        get_package_share_directory('aico2_moveit_config'), 'config', config_name)
     args = {
         'robot_config': config_path,
         'joint_states_topic': '/joint_states',
