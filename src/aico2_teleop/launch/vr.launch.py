@@ -23,9 +23,9 @@ Usage:
     # Mock hardware, right arm only:
     ros2 launch aico2_teleop vr.launch.py arm:=right
 
-    # Both arms — bimanual VR.  Left Quest controller drives the left arm,
-    # right controller drives the right.  Two XR bridge tabs required on the
-    # headset: https://<ip>:8443 (left) and https://<ip>:8444 (right).
+    # Both arms — bimanual VR from a SINGLE browser tab.  The Quest headset
+    # sends both controllers in every frame; xr_bimanual_bridge publishes
+    # each hand to its own TeleopInput topic.
     ros2 launch aico2_teleop vr.launch.py arm:=both
 
     # Slow rate limit for initial hardware testing:
@@ -50,8 +50,6 @@ LEFT_JOINTS = [f'Left_joint{i}' for i in range(1, 8)]
 RIGHT_JOINTS = [f'Right_joint{i}' for i in range(1, 8)]
 
 _MOVEIT_PKG = 'aico2_moveit_config'
-
-_XR_PORT = {'left': 8443, 'right': 8444}
 
 _RT_SHM_DEFAULT = '/aico2_rt_control'
 _RT_SHM_BIMANUAL = {
@@ -235,7 +233,7 @@ def _build(context):
         joints = LEFT_JOINTS if a == 'left' else RIGHT_JOINTS
         adapter_params = {'joint_names': joints}
         if bimanual:
-            adapter_params['input_topic'] = f'/{a}_teleop/xr_device/input'
+            adapter_params['input_topic'] = f'/xr_bimanual/{a}/input'
         actions.append(Node(
             package='aico2_teleop', executable='trajectory_adapter.py',
             name='trajectory_adapter', namespace=f'{a}_arm', output='screen',
@@ -253,17 +251,25 @@ def _build(context):
 
     teleop_actions = []
     if bimanual:
+        actions.append(Node(
+            package='aico2_teleop',
+            executable='xr_bimanual_bridge.py',
+            name='xr_bimanual_bridge',
+            namespace='xr_bimanual',
+            output='screen',
+            parameters=[{
+                'port': 8443,
+                'certfile': os.path.expanduser(
+                    '~/.config/moveit_teleop/xr_cert.pem'),
+                'keyfile': os.path.expanduser(
+                    '~/.config/moveit_teleop/xr_key.pem'),
+            }],
+        ))
         for a in ('left', 'right'):
-            xr_ns = f'{a}_teleop'
-            actions.append(_include('moveit_teleop_bringup', 'xr_device.launch.py', {
-                'hand': a,
-                'port': str(_XR_PORT[a]),
-                'namespace': xr_ns,
-            }))
             teleop_actions.append(_teleop_pipeline(
                 a, hardware, rate_limit_scale, home,
                 device='fake',
-                input_topic=f'/{xr_ns}/xr_device/input',
+                input_topic=f'/xr_bimanual/{a}/input',
                 hand=a,
                 use_rviz=rviz_per_arm))
     else:
@@ -280,7 +286,7 @@ def _build(context):
         ]))
 
     # 6. Joystick relay: right stick -> waist, left stick -> AMR
-    joy_topic = (f'/left_teleop/xr_device/thumbsticks' if bimanual
+    joy_topic = ('/xr_bimanual/thumbsticks' if bimanual
                  else '/xr_device/thumbsticks')
     actions.append(Node(
         package='aico2_teleop', executable='vr_joystick_relay.py',
