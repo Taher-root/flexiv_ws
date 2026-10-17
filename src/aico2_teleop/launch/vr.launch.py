@@ -36,11 +36,12 @@ import tempfile
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
-                            OpaqueFunction, Shutdown, TimerAction)
+from launch.actions import (DeclareLaunchArgument, GroupAction,
+                            IncludeLaunchDescription, OpaqueFunction,
+                            Shutdown, TimerAction)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import Node, PushRosNamespace, SetRemap
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from moveit_configs_utils import MoveItConfigsBuilder
@@ -120,8 +121,8 @@ def _include(package, filename, arguments=None):
 
 
 def _teleop_pipeline(arm, hardware, rate_limit_scale, goto_ready,
-                     *, input_topic=None, device='xr', hand=None,
-                     use_rviz='true'):
+                     *, input_topic=None, event_topic=None, device='xr',
+                     hand=None, use_rviz='true'):
     """Include the moveit-teleop pipeline for one arm."""
     config_name = 'teleop.yaml' if arm == 'left' else 'right_teleop.yaml'
     config_path = os.path.join(
@@ -138,6 +139,11 @@ def _teleop_pipeline(arm, hardware, rate_limit_scale, goto_ready,
     }
     if input_topic:
         args['input_topic'] = input_topic
+    if event_topic:
+        args['event_topic'] = event_topic
+    if device == 'external':
+        # xr_bimanual_bridge publishes raw WebXR poses, like xr_device does.
+        args['device_convention'] = 'webxr'
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource([FindPackageShare('moveit_teleop_bringup'),
                                        '/launch/teleop.launch.py']),
@@ -269,13 +275,24 @@ def _build(context):
                     '~/.config/moveit_teleop/xr_key.pem'),
             }],
         ))
+        # Each pipeline gets its own namespace (its nodes and topics would
+        # otherwise collide) and its own launch-config scope (otherwise the
+        # right include inherits the left's resolved move_group etc.).
+        # The solver publishes to the relative <controller>/joint_trajectory;
+        # the remap sends it back to the arm's absolute topic.
         for a in ('left', 'right'):
-            teleop_actions.append(_teleop_pipeline(
-                a, hardware, rate_limit_scale, home,
-                device='fake',
-                input_topic=f'/xr_bimanual/{a}/input',
-                hand=a,
-                use_rviz=rviz_per_arm))
+            teleop_actions.append(GroupAction([
+                PushRosNamespace(f'{a}_teleop'),
+                SetRemap(f'{a}_arm/joint_trajectory',
+                         f'/{a}_arm/joint_trajectory'),
+                _teleop_pipeline(
+                    a, hardware, rate_limit_scale, home,
+                    device='external',
+                    input_topic=f'/xr_bimanual/{a}/input',
+                    event_topic=f'/xr_bimanual/{a}/event',
+                    hand=a,
+                    use_rviz=rviz_per_arm),
+            ]))
     else:
         teleop_actions.append(
             _teleop_pipeline(arm, hardware, rate_limit_scale, home,

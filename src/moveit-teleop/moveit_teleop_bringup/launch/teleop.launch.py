@@ -78,13 +78,14 @@ SERVO_POSE_TOPIC = '/servo_node/pose_target_cmds'
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
-            'device', default_value='xr', choices=['fake', 'xr'],
+            'device', default_value='xr', choices=['fake', 'xr', 'external'],
             description="'xr' runs the Quest WebXR bridge and is the default: "
                         'this stack exists to be driven by a headset. '
                         "'fake' runs the scripted device instead, for tuning "
-                        'and for testing without hardware. Everything '
-                        'downstream is identical -- that is the point of the '
-                        'device seam.'),
+                        "and for testing without hardware. 'external' starts "
+                        'no device: the caller publishes on input_topic and '
+                        'sets device_convention. Everything downstream is '
+                        'identical -- that is the point of the device seam.'),
         DeclareLaunchArgument(
             'hand', default_value='right', choices=['left', 'right'],
             description='Which Quest controller drives the arm (device:=xr).'),
@@ -487,7 +488,7 @@ def generate_launch_description():
                 'ready_state': LaunchConfiguration('ready_state'),
                 'description_source': LaunchConfiguration('description_source'),
                 'servo_node': PythonExpression([
-                    "'/ik_node' if '", LaunchConfiguration('solver'),
+                    "'ik_node' if '", LaunchConfiguration('solver'),
                     "' == 'ik' else '", LaunchConfiguration('servo_node'), "'"]),
                 'command_source': LaunchConfiguration('solver'),
                 'joint_states_topic': LaunchConfiguration('joint_states_topic'),
@@ -511,7 +512,7 @@ def generate_launch_description():
                 # collision-aware against an empty world, which looks safe and
                 # is not; with no scene configured there is nothing to wait for.
                 'scene_ready_topic': PythonExpression([
-                    "'/scene_objects/applied' if '",
+                    "'scene_objects/applied' if '",
                     LaunchConfiguration('scene_config'), "' else ''"]),
             }],
         ),
@@ -528,7 +529,7 @@ def generate_launch_description():
                 'description_source': LaunchConfiguration('description_source'),
                 'input_topic': 'servo/joint_trajectory_raw',
                 'output_topic': PythonExpression([
-                    "'", LaunchConfiguration('arm_controller'),
+                    "'/", LaunchConfiguration('arm_controller'),
                     "' + '/joint_trajectory'"]),
             }],
         ),
@@ -569,13 +570,13 @@ def generate_launch_description():
             name='retarget_node',
             output='screen',
             remappings=[('~/target_pose', PythonExpression([
-                "'/ik_node/pose_target_cmds' if '", LaunchConfiguration('solver'),
+                "'ik_node/pose_target_cmds' if '", LaunchConfiguration('solver'),
                 "' == 'ik' else '", SERVO_POSE_TOPIC, "'"]))],
             parameters=[{
                 'move_group': LaunchConfiguration('move_group'),
                 'description_source': LaunchConfiguration('description_source'),
                 'input_topic': LaunchConfiguration('input_topic'),
-                'status_topic': '/mode_manager/status',
+                'status_topic': 'mode_manager/status',
                 'translation_scale': LaunchConfiguration('translation_scale'),
                 'rotation_scale': LaunchConfiguration('rotation_scale'),
                 'translation_ref': LaunchConfiguration('translation_ref'),
@@ -609,7 +610,7 @@ def generate_launch_description():
                 'gripper_group': LaunchConfiguration('gripper_group'),
                 'description_source': LaunchConfiguration('description_source'),
                 'input_topic': LaunchConfiguration('input_topic'),
-                'status_topic': '/mode_manager/status',
+                'status_topic': 'mode_manager/status',
                 'joint_states_topic': LaunchConfiguration('joint_states_topic'),
             }],
         ),
@@ -625,7 +626,7 @@ def generate_launch_description():
                 'output_dir': LaunchConfiguration('record_dir'),
                 'task': LaunchConfiguration('task'),
                 'event_topic': LaunchConfiguration('event_topic'),
-                'status_topic': '/mode_manager/status',
+                'status_topic': 'mode_manager/status',
                 # Which topics carry the action, the device input and the
                 # solver status depends on HOW THIS STACK WAS LAUNCHED, not on
                 # the robot, so _teleop_config computes them and recording.yaml

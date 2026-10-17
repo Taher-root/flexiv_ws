@@ -445,10 +445,10 @@ def _topic_substitutions(configurations):
     """
     ik = configurations['solver'] == 'ik'
     pairs = {
-        'target_topic': ('/ik_node/pose_target_cmds' if ik
+        'target_topic': ('ik_node/pose_target_cmds' if ik
                          else '/servo_node/pose_target_cmds'),
         'input_topic': configurations['input_topic'],
-        'solver_status_topic': '/ik_node/status' if ik else '/servo_node/status',
+        'solver_status_topic': 'ik_node/status' if ik else '/servo_node/status',
         # What this launch treats as the robot's MEASURED state -- the
         # driver's feedback on hardware, the command echo on mock hardware.
         # The recorder's observation stream follows it, so a hardware episode
