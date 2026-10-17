@@ -63,7 +63,7 @@ _RT_SHM_BIMANUAL = {
 
 _RT_JOINT_NAMES = {
     'left':  ['AGV_Joint1', 'AGV_Joint2'] + [f'Left_joint{i}' for i in range(1, 8)],
-    'right': [f'Right_joint{i}' for i in range(1, 8)],
+    'right': ['AGV_Joint1', 'AGV_Joint2'] + [f'Right_joint{i}' for i in range(1, 8)],
 }
 
 _RT_SERVO_JOINT_NAMES = {
