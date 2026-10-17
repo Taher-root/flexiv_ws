@@ -1,0 +1,347 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AICO2 VR Teleop</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font:17px/1.55 system-ui,sans-serif; background:#111; color:#eee;
+         padding:24px; max-width:980px; }
+  h1 { font-size:24px; margin:0 0 4px; }
+  h2 { font-size:19px; margin:28px 0 8px; color:#9cf; }
+  .sub { color:#aaa; font-size:15px; margin-bottom:18px; }
+  button { font-size:22px; padding:18px 32px; border:0; border-radius:12px;
+           background:#2d7; color:#062; font-weight:600; cursor:pointer; }
+  button[disabled] { background:#444; color:#888; }
+  #status { margin-top:16px; padding:12px; border-radius:8px; background:#1c1c1c;
+            font-family:ui-monospace,monospace; font-size:14px; white-space:pre-wrap; }
+  .hands { display:flex; gap:12px; margin-top:12px; }
+  .hand { flex:1; padding:12px; border-radius:8px; background:#1c1c1c;
+          font-family:ui-monospace,monospace; font-size:14px; white-space:pre; }
+  .hand b { font-family:system-ui,sans-serif; font-size:16px; }
+  .ok { color:#5d5; } .bad { color:#f66; } .warn { color:#fc4; }
+  table { border-collapse:collapse; font-size:15px; width:100%; }
+  td,th { text-align:left; padding:6px 12px 6px 0; border-bottom:1px solid #262626;
+          vertical-align:top; }
+  th { color:#999; font-weight:500; }
+  ol, ul { padding-left:22px; margin:6px 0; }
+  li { margin:4px 0; }
+  code { background:#222; padding:1px 5px; border-radius:4px; font-size:14px; }
+  .note { background:#1d1a10; border-left:3px solid #fc4; padding:8px 12px;
+          border-radius:4px; margin:8px 0; }
+  .stop { background:#201214; border-left:3px solid #f66; padding:8px 12px;
+          border-radius:4px; margin:8px 0; }
+</style>
+
+<h1>AICO2 VR Teleop</h1>
+<div class="sub">Left controller drives the left arm, right controller drives the right arm.
+Keep this tab focused while in VR.</div>
+
+<button id="go">Enter VR</button>
+<div id="status">idle</div>
+<div class="hands">
+  <div class="hand" id="hand-left"><b>Left</b>
+not seen</div>
+  <div class="hand" id="hand-right"><b>Right</b>
+not seen</div>
+</div>
+
+<h2>Controls</h2>
+<table>
+  <tr><th>Input</th><th>Left controller</th><th>Right controller</th></tr>
+  <tr><td>Grip (middle finger)</td>
+      <td colspan="2"><b>Clutch.</b> Hold to drive that arm; release and the arm holds where it is.</td></tr>
+  <tr><td>Index trigger</td>
+      <td colspan="2">Gripper on that arm. Pull to close, release to open.</td></tr>
+  <tr><td>Thumbstick click</td>
+      <td colspan="2">Return that arm to its ready pose. Ignored while the grip is held.</td></tr>
+  <tr><td>X / A</td><td colspan="2">Toggle recording (start, then stop and save).</td></tr>
+  <tr><td>Y / B</td><td colspan="2">Discard the last episode (also stops a recording in progress).</td></tr>
+  <tr><td>Thumbstick</td>
+      <td>Drive the base: forward/back, left/right to turn.</td>
+      <td>Waist: left/right = yaw, up/down = pitch.<br>
+          <span class="warn">NRT backend only: in RT mode the waist does not move.</span></td></tr>
+</table>
+
+<h2>How the clutch works</h2>
+<ul>
+  <li>Motion is <b>relative</b>. When you squeeze the grip, your hand's pose at that moment
+      is matched to the gripper's current pose, so nothing moves until your hand does.</li>
+  <li>Hand translation is amplified <b>1.5&times;</b>; wrist rotation is damped to <b>0.5&times;</b>.</li>
+  <li>To reach further than your arm comfortably goes, <b>ratchet</b>: release the grip,
+      bring your hand back, squeeze again, continue.</li>
+  <li>"Forward" is away from you, measured from the way you were facing when you squeezed.</li>
+  <li>Each arm's clutch is independent: you can hold one arm still while moving the other.</li>
+</ul>
+
+<h2>Start-up checklist</h2>
+<ol>
+  <li>Both arms powered, released from E-stop, and in the Flexiv app's remote mode.</li>
+  <li>On the robot PC, one terminal per arm (outside ROS, in <code>noros.sh</code>):<br>
+      <code>sudo taskset -c 2 ~/flexiv_ws/src/aico2_rt_control/standalone/build/rt_server Rizon4-063823 --shm /aico2_rt_left --gripper Flexiv-GN01</code><br>
+      <code>sudo taskset -c 3 ~/flexiv_ws/src/aico2_rt_control/standalone/build/rt_server Rizon4R-062102 --shm /aico2_rt_right --gripper Flexiv-GN01</code></li>
+  <li>In a sourced ROS terminal:<br>
+      <code>ros2 launch aico2_teleop vr.launch.py arm:=both hardware:=true hardware_backend:=rt</code></li>
+  <li>Wait for <code>solver warmed up</code> twice (once per arm) in the launch terminal.</li>
+  <li>In the headset browser open <code>https://&lt;robot-pc-ip&gt;:8443</code> (accept the
+      certificate warning the first time).</li>
+  <li>Press <b>Enter VR</b>, then press any button on each controller to wake it.
+      This page is hidden while in VR; exit VR at any time and the boxes above show the
+      last state of each hand (both should read <span class="ok">tracked</span>).</li>
+  <li>Stand facing the robot, squeeze one grip, and move slowly to confirm direction
+      before working at speed.</li>
+</ol>
+
+<h2>Safety</h2>
+<div class="stop"><b>Releasing the grip stops that arm.</b> Keep a hand near the physical
+E-stop for every session.</div>
+<ul>
+  <li>If input stops for more than 0.15 s (tracking lost, socket dropped, headset removed),
+      the arm halts on its own.</li>
+  <li>The arm refuses commands that would hit itself, the other arm, or a joint limit,
+      and refuses sudden IK branch flips. It holds instead.</li>
+  <li>Don't take the headset off with a grip held.</li>
+</ul>
+
+<h2>Troubleshooting</h2>
+<table>
+  <tr><th>Symptom</th><th>Cause / fix</th></tr>
+  <tr><td>"NO controllers reported"</td><td>Controllers asleep: press any button on each.</td></tr>
+  <tr><td>One box stays "not seen"</td><td>That controller is off or not paired. Check its battery.</td></tr>
+  <tr><td>"socket closed, retrying"</td><td>The launch on the robot PC is not running, or the network
+      dropped. The page reconnects by itself.</td></tr>
+  <tr><td>Page won't load</td><td>Wrong IP, or the PC firewall blocks port 8443. The launch terminal
+      prints the exact URL and the <code>ufw</code> command to allow it.</td></tr>
+  <tr><td>Arm doesn't move with grip held</td><td>Check the launch terminal: <code>teleop mode is off</code>
+      means the arm's RT server isn't in teleop; <code>holding: in collision</code> or
+      <code>refusing a jump</code> mean the pose was refused. Release, move back, re-squeeze.</td></tr>
+  <tr><td>Arm lags or feels slow</td><td>It is speed-limited for safety
+      (<code>rate_limit_scale</code> in the launch command).</td></tr>
+</table>
+
+<script>
+// Quest controllers report through the WebXR "xr-standard" gamepad mapping.
+// These indices are fixed by that profile.
+const BTN_TRIGGER = 0;   // index finger
+const BTN_SQUEEZE = 1;   // middle finger / grip
+const BTN_STICK   = 3;
+const BTN_A       = 4;   // A on right, X on left
+const BTN_B       = 5;   // B on right, Y on left
+
+const statusEl = document.getElementById('status');
+const handEls = { left: document.getElementById('hand-left'),
+                  right: document.getElementById('hand-right') };
+const goEl = document.getElementById('go');
+let ws = null, sent = 0, lastReport = 0;
+
+function show(msg, cls) {
+  statusEl.innerHTML = `<span class="${cls || ''}">${msg}</span>`;
+}
+
+function showHand(hand, c) {
+  const el = handEls[hand];
+  const title = `<b>${hand[0].toUpperCase() + hand.slice(1)}</b>\n`;
+  if (!c) { el.innerHTML = title + '<span class="warn">not seen</span>'; return; }
+  const state = c.valid ? '<span class="ok">tracked</span>' : '<span class="bad">LOST</span>';
+  const clutch = c.squeeze >= 0.5 ? '<span class="ok">ENGAGED</span>' : 'released';
+  el.innerHTML = title +
+    `${state}\nclutch  ${clutch} (${c.squeeze.toFixed(2)})\n` +
+    `gripper ${c.trigger.toFixed(2)}\nstick   ${c.sx.toFixed(2)}, ${c.sy.toFixed(2)}`;
+}
+
+function connect() {
+  // Same host that served this page, so there is only ever one address to get
+  // right; wss because a secure page cannot open an insecure socket.
+  ws = new WebSocket(`wss://${location.host}/ws`);
+  ws.onopen = () => { show('socket connected', 'ok'); };
+  ws.onclose = () => {
+    show('socket closed, retrying', 'warn');
+    // A dropped socket must not end the session. The robot side halts on its
+    // own via the watchdog, so reconnecting is always safe.
+    setTimeout(connect, 1000);
+  };
+  ws.onerror = () => { show('socket error', 'bad'); };
+  ws.onmessage = (ev) => {
+    let m;
+    try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (m && m.type === 'haptic') setContact(m);
+  };
+}
+
+// ---- contact feedback -----------------------------------------------------
+// The message is a LEVEL, not a pulse, so the effect is held for as long as
+// contact lasts and re-armed on a timer (WebXR pulses are capped). A dropped
+// message stops the buzz rather than leaving it running.
+let xrSession = null;
+let contact = { active: false, intensity: 0 };
+let hapticTimer = null;
+let audioCtx = null;
+let beepOsc = null;
+
+function actuators() {
+  const out = [];
+  if (!xrSession) return out;
+  for (const src of xrSession.inputSources) {
+    const gp = src.gamepad;
+    if (!gp) continue;
+    const list = gp.hapticActuators || [];
+    if (list.length) out.push(list[0]);
+  }
+  return out;
+}
+
+function pulse() {
+  if (!contact.active) return;
+  for (const a of actuators()) {
+    try { a.pulse(contact.intensity, 250); } catch (e) { /* no haptics */ }
+  }
+}
+
+function beep(on) {
+  try {
+    if (on) {
+      if (!audioCtx) audioCtx = new (window.AudioContext ||
+                                     window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      if (beepOsc) return;
+      beepOsc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0.05;
+      beepOsc.frequency.value = 440;
+      beepOsc.connect(gain).connect(audioCtx.destination);
+      beepOsc.start();
+    } else if (beepOsc) {
+      beepOsc.stop();
+      beepOsc.disconnect();
+      beepOsc = null;
+    }
+  } catch (e) { /* audio unavailable */ }
+}
+
+function setContact(m) {
+  const wasActive = contact.active;
+  contact = { active: !!m.active, intensity: Math.max(0, Math.min(1, m.intensity || 0)) };
+  if (contact.active && !wasActive) {
+    pulse();
+    hapticTimer = setInterval(pulse, 200);
+    beep(true);
+  } else if (!contact.active && wasActive) {
+    clearInterval(hapticTimer);
+    hapticTimer = null;
+    beep(false);
+  }
+}
+
+function readController(src, frame, refSpace) {
+  if (!src.gripSpace || !src.gamepad) return null;
+  const pose = frame.getPose(src.gripSpace, refSpace);
+  const gp = src.gamepad;
+  const btn = i => (gp.buttons[i] ? gp.buttons[i].pressed : false);
+  const val = i => (gp.buttons[i] ? gp.buttons[i].value : 0);
+  return {
+    // A null pose means tracking is lost. Reported honestly rather than held
+    // at the last value, so the robot side can tell "unknown" from "still".
+    valid: !!pose,
+    p: pose ? [pose.transform.position.x, pose.transform.position.y,
+               pose.transform.position.z] : [0, 0, 0],
+    q: pose ? [pose.transform.orientation.x, pose.transform.orientation.y,
+               pose.transform.orientation.z, pose.transform.orientation.w]
+            : [0, 0, 0, 1],
+    trigger: val(BTN_TRIGGER),
+    squeeze: val(BTN_SQUEEZE),
+    squeezed: btn(BTN_SQUEEZE),
+    a: btn(BTN_A),
+    b: btn(BTN_B),
+    stick: btn(BTN_STICK),
+    sx: gp.axes.length > 2 ? gp.axes[2] : 0,
+    sy: gp.axes.length > 3 ? -gp.axes[3] : 0,
+  };
+}
+
+async function start() {
+  if (!navigator.xr) { show('WebXR unavailable. Use the Quest browser over HTTPS.', 'bad'); return; }
+
+  // Passthrough (immersive-ar) so the operator sees the real robot; fall back
+  // to immersive-vr on headsets without passthrough.
+  let mode = 'immersive-ar';
+  if (!(await navigator.xr.isSessionSupported('immersive-ar'))) {
+    mode = 'immersive-vr';
+    if (!(await navigator.xr.isSessionSupported('immersive-vr'))) {
+      show('no immersive session supported here', 'bad');
+      return;
+    }
+  }
+
+  goEl.disabled = true;
+  connect();
+
+  // An immersive session MUST have a baseLayer or the headset shows black and
+  // produces no usable frames, even though nothing is drawn.
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl2', { xrCompatible: true, alpha: true })
+          || canvas.getContext('webgl',  { xrCompatible: true, alpha: true });
+  if (!gl) { show('could not create a WebGL context', 'bad'); goEl.disabled = false; return; }
+
+  const session = await navigator.xr.requestSession(mode, {
+    optionalFeatures: ['local-floor'],
+  });
+  xrSession = session;
+  await gl.makeXRCompatible();
+  session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+
+  let refSpace, spaceName = 'local-floor';
+  try { refSpace = await session.requestReferenceSpace('local-floor'); }
+  catch (e) { spaceName = 'local'; refSpace = await session.requestReferenceSpace('local'); }
+
+  session.addEventListener('end', () => {
+    xrSession = null;
+    setContact({ active: false });
+    goEl.disabled = false;
+    show('session ended', 'warn');
+    showHand('left', null); showHand('right', null);
+    if (ws) { ws.onclose = null; ws.close(); }
+  });
+
+  session.requestAnimationFrame(function onFrame(t, frame) {
+    session.requestAnimationFrame(onFrame);
+
+    // Clear to transparent so passthrough shows through.
+    const layer = session.renderState.baseLayer;
+    if (layer) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    }
+
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    const controllers = {};
+    for (const src of frame.session.inputSources) {
+      if (src.handedness !== 'left' && src.handedness !== 'right') continue;
+      const c = readController(src, frame, refSpace);
+      if (c) controllers[src.handedness] = c;
+    }
+    if (!Object.keys(controllers).length) {
+      if (t - lastReport > 1000) {
+        lastReport = t;
+        show(`${mode} running, but NO controllers reported.\n` +
+             'Wake them with a button press.', 'warn');
+      }
+      return;
+    }
+
+    // t is the headset's own monotonic clock: used only to detect a frozen
+    // source, never compared against ROS time.
+    ws.send(JSON.stringify({ t, controllers }));
+    sent++;
+
+    if (t - lastReport > 250) {
+      lastReport = t;
+      show(`${mode} / ${spaceName}   frames sent: ${sent}`, 'ok');
+      showHand('left', controllers.left);
+      showHand('right', controllers.right);
+    }
+  });
+}
+
+goEl.addEventListener('click', () => start().catch(e => show(String(e), 'bad')));
+</script>

@@ -269,6 +269,8 @@ def _build(context):
             output='screen',
             parameters=[{
                 'port': 8443,
+                'web_dir': os.path.join(
+                    get_package_share_directory('aico2_teleop'), 'web'),
                 'certfile': os.path.expanduser(
                     '~/.config/moveit_teleop/xr_cert.pem'),
                 'keyfile': os.path.expanduser(
