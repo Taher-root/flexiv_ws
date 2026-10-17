@@ -14,8 +14,11 @@ Usage:
     # Mock hardware, left arm (default):
     ros2 launch aico2_teleop vr.launch.py
 
-    # Real hardware, left arm:
+    # Real hardware, left arm (NRT Python driver):
     ros2 launch aico2_teleop vr.launch.py hardware:=true
+
+    # Real hardware, RT backend (needs rt_server running in a noros.sh shell):
+    ros2 launch aico2_teleop vr.launch.py hardware:=true hardware_backend:=rt
 
     # Mock hardware, right arm only:
     ros2 launch aico2_teleop vr.launch.py arm:=right
@@ -33,10 +36,11 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
-                            OpaqueFunction, TimerAction)
+                            OpaqueFunction, Shutdown, TimerAction)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.event_handlers import OnStateTransition
 from launch_ros.substitutions import FindPackageShare
 from moveit_configs_utils import MoveItConfigsBuilder
 
@@ -50,6 +54,21 @@ _URDF = os.path.join(
 )
 
 _XR_PORT = {'left': 8443, 'right': 8444}
+
+_RT_SHM = {
+    'left':  '/aico2_rt_left',
+    'right': '/aico2_rt_right',
+}
+
+_RT_JOINT_NAMES = {
+    'left':  ['AGV_Joint1', 'AGV_Joint2'] + [f'Left_joint{i}' for i in range(1, 8)],
+    'right': [f'Right_joint{i}' for i in range(1, 8)],
+}
+
+_RT_SERVO_JOINT_NAMES = {
+    'left':  [f'Left_joint{i}' for i in range(1, 8)],
+    'right': [f'Right_joint{i}' for i in range(1, 8)],
+}
 
 
 def _include(package, filename, arguments=None):
@@ -81,22 +100,62 @@ def _teleop_pipeline(arm, hardware, rate_limit_scale, goto_ready,
         launch_arguments=args.items())
 
 
+def _rt_bridge_nodes(arms_to_launch):
+    """Launch rt_bridge nodes (one per arm) + joint_state_merger."""
+    nodes = []
+    for arm in arms_to_launch:
+        nodes.append(Node(
+            package='aico2_rt_control',
+            executable='rt_bridge',
+            name='rt_bridge',
+            namespace=f'{arm}_arm',
+            output='screen',
+            on_exit=Shutdown(),
+            remappings=[('joint_states', 'joint_states')],
+            parameters=[{
+                'shm_name':           _RT_SHM[arm],
+                'joint_names':        _RT_JOINT_NAMES[arm],
+                'servo_joint_names':  _RT_SERVO_JOINT_NAMES[arm],
+                'joint_state_rate_hz': 200.0,
+            }],
+        ))
+
+    nodes.append(Node(
+        package='flexiv_amr_driver',
+        executable='joint_state_merger',
+        name='joint_state_merger',
+        output='screen',
+        parameters=[{
+            'left_arm_topic':  '/left_arm/joint_states',
+            'right_arm_topic': '/right_arm/joint_states',
+            'rate_hz': 50.0,
+        }],
+    ))
+    return nodes
+
+
 def _build(context):
     arm = LaunchConfiguration('arm').perform(context)
     hardware = LaunchConfiguration('hardware').perform(context) == 'true'
     mock = not hardware
     rate_limit_scale = LaunchConfiguration('rate_limit_scale').perform(context)
+    backend = LaunchConfiguration('hardware_backend').perform(context)
     bimanual = arm == 'both'
+    rt = (backend == 'rt') and hardware
 
     actions = []
 
     # 1. Arm drivers + joint state merger.
-    use_waist = arm in ('left', 'both')
-    actions.append(_include('flexiv_amr_bringup_ce', 'arms.launch.py', {
-        'mock_hardware': 'true' if mock else 'false',
-        'teleop_backend': 'servo',
-        'control_waist': 'true' if use_waist else 'false',
-    }))
+    if rt:
+        arms_to_launch = ['left', 'right'] if bimanual else [arm]
+        actions.extend(_rt_bridge_nodes(arms_to_launch))
+    else:
+        use_waist = arm in ('left', 'both')
+        actions.append(_include('flexiv_amr_bringup_ce', 'arms.launch.py', {
+            'mock_hardware': 'true' if mock else 'false',
+            'teleop_backend': 'servo',
+            'control_waist': 'true' if use_waist else 'false',
+        }))
 
     # 2. Robot state publisher.
     actions.append(_include('flexiv_amr_description_ce', 'display.launch.py', {
@@ -113,9 +172,9 @@ def _build(context):
         .to_moveit_configs()
     )
 
-    arms_to_launch = ['left', 'right'] if bimanual else [arm]
+    arms_for_teleop = ['left', 'right'] if bimanual else [arm]
 
-    for a in arms_to_launch:
+    for a in arms_for_teleop:
         joints = LEFT_JOINTS if a == 'left' else RIGHT_JOINTS
         adapter_params = {'joint_names': joints}
         if bimanual:
@@ -127,13 +186,15 @@ def _build(context):
 
     # 5. Teleop pipelines.
     requested = LaunchConfiguration('goto_ready').perform(context)
-    home = requested if requested else ('false' if hardware else 'true')
+    if rt:
+        home = 'false'
+    else:
+        home = requested if requested else ('false' if hardware else 'true')
+
+    teleop_delay = 5.0 if rt else 3.0
 
     teleop_actions = []
     if bimanual:
-        # Bimanual: launch XR bridges ourselves (different ports per arm) and
-        # tell the pipelines to use device:=fake so they skip launching their
-        # own XR device; override input_topic to point at our bridges.
         for a in ('left', 'right'):
             xr_ns = f'{a}_teleop'
             actions.append(_include('moveit_teleop_bringup', 'xr_device.launch.py', {
@@ -150,7 +211,7 @@ def _build(context):
         teleop_actions.append(
             _teleop_pipeline(arm, hardware, rate_limit_scale, home))
 
-    actions.append(TimerAction(period=3.0, actions=teleop_actions))
+    actions.append(TimerAction(period=teleop_delay, actions=teleop_actions))
 
     # 6. Joystick relay: right stick -> waist, left stick -> AMR
     joy_topic = (f'/left_teleop/xr_device/thumbsticks' if bimanual
@@ -170,6 +231,11 @@ def generate_launch_description():
                               choices=['left', 'right', 'both']),
         DeclareLaunchArgument('hardware', default_value='false',
                               choices=['true', 'false']),
+        DeclareLaunchArgument('hardware_backend', default_value='nrt',
+                              choices=['nrt', 'rt'],
+                              description='nrt: Python arm drivers. '
+                                          'rt: rt_bridge over shared memory '
+                                          '(needs rt_server in a noros.sh shell).'),
         DeclareLaunchArgument('rate_limit_scale', default_value='0.5'),
         DeclareLaunchArgument('goto_ready', default_value='',
                               choices=['', 'true', 'false']),
