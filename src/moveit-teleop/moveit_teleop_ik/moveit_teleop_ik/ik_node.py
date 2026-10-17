@@ -36,7 +36,7 @@ from moveit_teleop_core.robot_info import RobotInfo, fetch_descriptions
 from moveit_teleop_core.scene_config import resolve_planes
 from moveit_teleop_msgs.msg import IKStatus
 
-from .chain import SerialChain
+from .chain import Mount, SerialChain
 from .collision import POLICIES, StateValidityMonitor
 from .ik_solver import IKSolver, IKWeights
 from .smoothing import DEFAULT_WEIGHTS, JointRateLimiter, WeightedMovingAverage
@@ -122,6 +122,10 @@ class IKNode(Node):
         base_link, tip_link = robot.group_chain(group)
         self.planning_frame = robot.model_frame
         self.chain = SerialChain(urdf, base_link, tip_link)
+        # Targets are in the planning frame, the chain's FK starts at
+        # base_link. Ignoring the difference solves for a pose displaced by
+        # the whole mount -- the arm reaches for it and straightens out.
+        self.mount = Mount(urdf, self.planning_frame, base_link)
 
         controller = self.get_parameter('controller').value
         if not controller:
@@ -184,6 +188,10 @@ class IKNode(Node):
             f'({self.chain.nq} joints) controller=\'{controller}\' '
             f"planning_frame='{self.planning_frame}' "
             '(all resolved from the robot model)')
+        if self.mount.joint_names:
+            self.get_logger().info(
+                f"'{base_link}' is mounted on '{self.planning_frame}' through "
+                f'{self.mount.joint_names}; tracked live from joint states')
 
         # ---- warm up -----------------------------------------------------
         # The first CasADi/IPOPT solve costs ~124 ms against a steady state of
@@ -393,6 +401,13 @@ class IKNode(Node):
             return
         if self._measured() is None:
             return
+        missing = [j for j in self.mount.joint_names if j not in self._joint_state]
+        if missing:
+            self.get_logger().warn(
+                f'no joint state for mount joints {missing}; not solving',
+                throttle_duration_sec=5.0)
+            return
+        self.solver.set_mount(self.mount.transform(self._joint_state))
 
         position, rotation = self._target
         # A bounded wall applies only while the TARGET is over its

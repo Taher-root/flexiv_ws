@@ -71,6 +71,101 @@ def _rodrigues(axis: np.ndarray, angle):
     return ca.SX.eye(3) + ca.sin(angle) * K + (1.0 - ca.cos(angle)) * ca.mtimes(K, K)
 
 
+def _parse_joints(urdf_xml: str) -> dict:
+    """Every URDF joint, keyed by its CHILD link."""
+    by_child = {}
+    for element in ET.fromstring(urdf_xml).findall('joint'):
+        child = element.find('child')
+        parent = element.find('parent')
+        if child is None or parent is None:
+            continue
+        origin = element.find('origin')
+        xyz = np.zeros(3)
+        rpy = np.zeros(3)
+        if origin is not None:
+            xyz = np.array([float(v) for v in (origin.get('xyz') or '0 0 0').split()])
+            rpy = np.array([float(v) for v in (origin.get('rpy') or '0 0 0').split()])
+
+        axis_element = element.find('axis')
+        axis = np.array([float(v) for v in axis_element.get('xyz').split()]) \
+            if axis_element is not None else np.array([0.0, 0.0, 1.0])
+        norm = np.linalg.norm(axis)
+        if norm > 0:
+            axis = axis / norm
+
+        jtype = element.get('type')
+        limit = element.find('limit')
+        if jtype == 'continuous':
+            lower, upper = -CONTINUOUS_LIMIT, CONTINUOUS_LIMIT
+        elif limit is not None:
+            lower = float(limit.get('lower', -CONTINUOUS_LIMIT))
+            upper = float(limit.get('upper', CONTINUOUS_LIMIT))
+        else:
+            lower, upper = -CONTINUOUS_LIMIT, CONTINUOUS_LIMIT
+        velocity = float(limit.get('velocity')) \
+            if limit is not None and limit.get('velocity') else float('inf')
+
+        by_child[child.get('link')] = _Joint(
+            name=element.get('name'), type=jtype,
+            origin_R=_rpy_to_matrix(rpy), origin_p=xyz, axis=axis,
+            lower=lower, upper=upper, velocity=velocity,
+            parent=parent.get('link'), child=child.get('link'))
+    return by_child
+
+
+def _walk(by_child: dict, base_link: str, tip_link: str) -> list:
+    """Joints from ``base_link`` to ``tip_link``, base first. Empty if equal."""
+    chain, link, seen = [], tip_link, set()
+    while link != base_link:
+        if link in seen:
+            raise ChainError(f'cycle in the URDF at {link!r}')
+        seen.add(link)
+        if link not in by_child:
+            raise ChainError(
+                f'no path from {tip_link!r} back to {base_link!r}: '
+                f'{link!r} has no parent joint')
+        joint = by_child[link]
+        chain.append(joint)
+        link = joint.parent
+    chain.reverse()
+    return chain
+
+
+class Mount:
+    """Pose of a chain's base link in the planning frame.
+
+    The solver's chain starts at the group's base link, but targets arrive in
+    the planning frame (the URDF root). They differ whenever the arm is
+    mounted on something -- and when that something is actuated but outside
+    the group (a waist, a torso, a rail), the transform MOVES, so it is
+    evaluated from the measured joint positions rather than frozen.
+    """
+
+    def __init__(self, urdf_xml: str, root_link: str, base_link: str):
+        self.root_link = root_link
+        self.base_link = base_link
+        self._joints = _walk(_parse_joints(urdf_xml), root_link, base_link)
+        self.joint_names = [j.name for j in self._joints if j.actuated]
+
+    def transform(self, positions: dict) -> np.ndarray:
+        """4x4 root->base for the given joint positions (name -> value)."""
+        T = np.eye(4)
+        for joint in self._joints:
+            step = np.eye(4)
+            step[:3, :3] = joint.origin_R
+            step[:3, 3] = joint.origin_p
+            if joint.actuated:
+                value = float(positions[joint.name])
+                motion = np.eye(4)
+                if joint.type == 'prismatic':
+                    motion[:3, 3] = joint.axis * value
+                else:
+                    motion[:3, :3] = Rotation.from_rotvec(joint.axis * value).as_matrix()
+                step = step @ motion
+            T = T @ step
+        return T
+
+
 class SerialChain:
     """Forward kinematics from ``base_link`` to ``tip_link``.
 
@@ -85,62 +180,9 @@ class SerialChain:
     """
 
     def __init__(self, urdf_xml: str, base_link: str, tip_link: str):
-        root = ET.fromstring(urdf_xml)
         self.base_link = base_link
         self.tip_link = tip_link
-
-        by_child = {}
-        for element in root.findall('joint'):
-            child = element.find('child')
-            parent = element.find('parent')
-            if child is None or parent is None:
-                continue
-            origin = element.find('origin')
-            xyz = np.zeros(3)
-            rpy = np.zeros(3)
-            if origin is not None:
-                xyz = np.array([float(v) for v in (origin.get('xyz') or '0 0 0').split()])
-                rpy = np.array([float(v) for v in (origin.get('rpy') or '0 0 0').split()])
-
-            axis_element = element.find('axis')
-            axis = np.array([float(v) for v in axis_element.get('xyz').split()]) \
-                if axis_element is not None else np.array([0.0, 0.0, 1.0])
-            norm = np.linalg.norm(axis)
-            if norm > 0:
-                axis = axis / norm
-
-            jtype = element.get('type')
-            limit = element.find('limit')
-            if jtype == 'continuous':
-                lower, upper = -CONTINUOUS_LIMIT, CONTINUOUS_LIMIT
-            elif limit is not None:
-                lower = float(limit.get('lower', -CONTINUOUS_LIMIT))
-                upper = float(limit.get('upper', CONTINUOUS_LIMIT))
-            else:
-                lower, upper = -CONTINUOUS_LIMIT, CONTINUOUS_LIMIT
-            velocity = float(limit.get('velocity')) \
-                if limit is not None and limit.get('velocity') else float('inf')
-
-            by_child[child.get('link')] = _Joint(
-                name=element.get('name'), type=jtype,
-                origin_R=_rpy_to_matrix(rpy), origin_p=xyz, axis=axis,
-                lower=lower, upper=upper, velocity=velocity,
-                parent=parent.get('link'), child=child.get('link'))
-
-        # Walk from the tip back to the base, then reverse.
-        chain, link, seen = [], tip_link, set()
-        while link != base_link:
-            if link in seen:
-                raise ChainError(f'cycle in the URDF at {link!r}')
-            seen.add(link)
-            if link not in by_child:
-                raise ChainError(
-                    f'no path from {tip_link!r} back to {base_link!r}: '
-                    f'{link!r} has no parent joint')
-            joint = by_child[link]
-            chain.append(joint)
-            link = joint.parent
-        chain.reverse()
+        chain = _walk(_parse_joints(urdf_xml), base_link, tip_link)
 
         self._chain = chain
         self._actuated = [j for j in chain if j.actuated]

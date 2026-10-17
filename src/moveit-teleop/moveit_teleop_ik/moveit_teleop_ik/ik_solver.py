@@ -174,8 +174,14 @@ class IKSolver:
         R_target = opti.parameter(3, 3)
         q_last = opti.parameter(nq)
         q_nominal = opti.parameter(nq)
+        # Planning frame -> chain base. A parameter, because a waist the
+        # arm is mounted on moves it; see set_mount.
+        mount_R = opti.parameter(3, 3)
+        mount_p = opti.parameter(3)
 
-        p, R = chain.fk(q)
+        p_chain, R_chain = chain.fk(q)
+        p = mount_p + ca.mtimes(mount_R, p_chain)
+        R = ca.mtimes(mount_R, R_chain)
         position_error = p - p_target
 
         w = self.weights
@@ -239,11 +245,25 @@ class IKSolver:
         self._R_target = R_target
         self._q_last = q_last
         self._q_nominal = q_nominal
+        self._mount_R = mount_R
+        self._mount_p = mount_p
         self._position_error_fn = ca.Function(
-            'perr', [q, p_target], [ca.norm_2(position_error)])
-        self._rotation_fn = ca.Function('rot', [q], [R])
+            'perr', [q, p_target, mount_R, mount_p], [ca.norm_2(position_error)])
+        self._rotation_fn = ca.Function('rot', [q, mount_R], [R])
+        self._position_fn = ca.Function('pos', [q, mount_R, mount_p], [p])
 
         self._last_solution = self.nominal.copy()
+        self.mount = np.eye(4)
+
+    def set_mount(self, transform) -> None:
+        """Pose (4x4) of the chain's base in the planning frame.
+
+        Targets and walls are in the planning frame; the chain's FK starts at
+        its base link. Identity -- the default -- is right only when the two
+        coincide. An arm on a waist must call this every frame with the
+        transform at the waist's MEASURED position.
+        """
+        self.mount = np.asarray(transform, float).reshape(4, 4)
 
     # ---- solving ----------------------------------------------------------
 
@@ -286,6 +306,9 @@ class IKSolver:
         opti.set_value(self._R_target, np.asarray(target_rotation, float).reshape(3, 3))
         opti.set_value(self._q_last, seed)
         opti.set_value(self._q_nominal, self.nominal)
+        mount_R, mount_p = self.mount[:3, :3], self.mount[:3, 3]
+        opti.set_value(self._mount_R, mount_R)
+        opti.set_value(self._mount_p, mount_p)
         opti.set_initial(self._q, seed)
 
         started = time.perf_counter()
@@ -312,9 +335,9 @@ class IKSolver:
             self._last_solution = q.copy()
 
         position_error = self._position_error_fn(
-            q, np.asarray(target_position, float).reshape(3))
+            q, np.asarray(target_position, float).reshape(3), mount_R, mount_p)
         orientation_error = rotation_angle(
-            np.array(self._rotation_fn(q)),
+            np.array(self._rotation_fn(q, mount_R)),
             np.asarray(target_rotation, float).reshape(3, 3))
 
         return IKResult(
@@ -329,7 +352,8 @@ class IKSolver:
         they are constraints -- so anything here means an infeasible solve."""
         if not self.planes:
             return []
-        position = self.chain.forward(q)[:3, 3]
+        position = np.array(self._position_fn(
+            q, self.mount[:3, :3], self.mount[:3, 3])).reshape(3)
         return [i for i, (normal, offset) in enumerate(self.planes)
                 if float(np.dot(normal, position)) < offset - tolerance]
 
